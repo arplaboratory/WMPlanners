@@ -1,5 +1,3 @@
 # Code of Conduct
 
-This project adopts the Contributor Covenant code of conduct.
-
-Use this file as a placeholder and replace with your organization's preferred policy.
+This project adopts the NYU [Code of Ethical Conduct](https://www.nyu.edu/about/policies-guidelines-compliance/policies-and-guidelines/code-of-ethical-conduct.html), [Acceptable Use of NYU Computers and Data](https://www.nyu.edu/about/policies-guidelines-compliance/policies-and-guidelines/responsible-use-of-nyu-computers-and-data-policy-on.html), and [Code of Conduct](https://www.nyu.edu/about/policies-guidelines-compliance/policies-and-guidelines/code-of-conduct-it-nyu.html).

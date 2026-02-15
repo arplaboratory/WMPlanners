@@ -15,6 +15,9 @@ project_proposal
 
 getting_started
 notebooks/getting_started
+world_model_training
+rl_training
+logging
 ```
 
 ```{toctree}
