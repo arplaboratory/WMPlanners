@@ -1,4 +1,5 @@
-# python_package
+# DS_GA_3001
+This repo supports the DS_GA_3001 - Embodied Learning and Vision Course Project
 
 ## Features
 
@@ -30,8 +31,27 @@ Execute the tests:
 pytest
 ```
 
+## Project Solution
+| Authors              | Email                |
+|-------------------|----------------------|
+| **Long Quang**    | lq2146@nyu.edu       |
+| **Akash Guna** | ar9799@nyu.edu     |
+| **Deepanshu Mody** | dm6262@nyu.edu      |
+
+<sup>
+Authors are with New York University.
+</sup>
+
+[![Tests](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml)
+![Pylint](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/lquan9/d09cfb9f249c9995b9fa1943d90a1d71/raw/ds3001-pylint.json)
+[![Docs](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml)
+[![Python Version](https://img.shields.io/badge/python-%203.10-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+[Code](#) | [Paper](#)
+
 ## License
 
 This project is licensed under the terms of the MIT license.  See
 [LICENSE](LICENSE).
-# writing_test
+
