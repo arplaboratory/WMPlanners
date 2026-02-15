@@ -1,4 +1,4 @@
-"""Sphinx configuration for cjepa documentation."""
+"""Sphinx configuration for python_package documentation."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ if SRC_ROOT not in sys.path:
     sys.path.insert(0, SRC_ROOT)
 
 project = "cjepa"
-author = "Your Name"
+author = "Long Quang"
 copyright = f"{datetime.now():%Y}, {author}"
 release = "0.1.0"
 
@@ -32,7 +32,7 @@ html_title = project
 
 source_suffix = {
     ".rst": "restructuredtext",
-    ".md": "markdown",
+    ".md": "myst-nb",
 }
 
 templates_path = ["_templates"]

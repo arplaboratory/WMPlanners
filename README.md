@@ -30,6 +30,36 @@ The `rloclab` package builds on and cites the following repositories as upstream
 1.  **Project Webpage:** [https://machines-in-motion.github.io/RL_class_go2_project/](https://machines-in-motion.github.io/RL_class_go2_project/)
 2.  **Project Tutorial:** [https://github.com/machines-in-motion/rob6323_go2_project/blob/master/tutorial/tutorial.md](https://github.com/machines-in-motion/rob6323_go2_project/blob/master/tutorial/tutorial.md)
 
+## Features
+
+- **Modern packaging** – PEP 517/518/621 ``pyproject.toml`` using Hatchling.
+- **Editable installs** – ``pip install -e .[dev,docs]`` for iterative notebook
+  development.
+- **Documentation-first** – Sphinx configured with MyST-NB and a notebooks
+  gallery ready for Read the Docs or local builds.
+- **Testing** – Pytest suite to validate core functionality.
+
+## Getting started
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev,docs]
+```
+
+Run the example notebook by launching Jupyter Lab and opening
+``docs/notebooks/getting_started.md``.  Build the documentation locally with:
+
+```bash
+sphinx-build -b html docs docs/_build/html
+```
+
+Execute the tests:
+
+```bash
+pytest
+```
+
 ## Environment setup
 
 > The bundled V-JEPA 2 project in `src/vjepa2` targets Linux environments like
@@ -159,11 +189,11 @@ The suggested way to inspect these logs is via the Open OnDemand web interface:
 Authors are with New York University.
 </sup>
 
-[![Tests](https://github.com/<ORG_NAME>/<REPO_NAME>/actions/workflows/tests.yml/badge.svg)](https://github.com/<ORG_NAME>/<REPO_NAME>/actions/workflows/tests.yml)
-[![Lint](https://github.com/<ORG_NAME>/<REPO_NAME>/actions/workflows/lint.yml/badge.svg)](https://github.com/<ORG_NAME>/<REPO_NAME>/actions/workflows/lint.yml)
-[![Docs](https://github.com/<ORG_NAME>/<REPO_NAME>/actions/workflows/docs.yml/badge.svg)](https://github.com/<ORG_NAME>/<REPO_NAME>/actions/workflows/docs.yml)
-![Python](https://img.shields.io/badge/python-<PYTHON_VERSION>-blue)
-![License](https://img.shields.io/badge/license-<LICENSE>-informational)
+[![Tests](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml)
+![Pylint](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/lquan9/d09cfb9f249c9995b9fa1943d90a1d71/raw/ds3001-pylint.json)
+[![Docs](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml)
+[![Python Version](https://img.shields.io/badge/python-%203.10-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 [Code](#) | [Paper](#)
 
