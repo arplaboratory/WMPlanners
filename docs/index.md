@@ -7,6 +7,7 @@ Welcome to the cjepa documentation.  This site covers the package API,
 :caption: Contents
 
 notebooks/getting_started
+getting_started
 api
 ```
 
