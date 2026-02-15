@@ -11,6 +11,10 @@ jobs:
     steps:
       - name: Checkout main repository
         uses: actions/checkout@v4
+      - name: Force HTTPS for submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "org-16943930@github.com:"
       - name: Initialize specific submodules
         run: |
           git submodule update --init external/vjepa2
