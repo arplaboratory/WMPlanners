@@ -34,6 +34,7 @@ jobs:
           PYTHONPATH: .:${{ github.workspace }}/external/vjepa2
         run: |
           mkdir -p reports
+          export PYTHONPATH=$PYTHONPATH:$(pwd)/src
           pytest --junitxml=reports/pytest-junit.xml
       - name: Upload test report artifact
         uses: actions/upload-artifact@v4

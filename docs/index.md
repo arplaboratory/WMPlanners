@@ -4,14 +4,27 @@ Welcome to the cjepa documentation.  This site covers the package API,
 
 ```{toctree}
 :maxdepth: 2
+:caption: DS_GA_3001
+
+project_proposal
+```
+
+```{toctree}
+:maxdepth: 2
 :caption: User Guides
 
 getting_started
 notebooks/getting_started
+```
 
-technical_reference/cjepa/index
-technical_reference/rloclab/index
-technical_reference/mdp/index
+```{toctree}
+:maxdepth: 2
+:caption: Technical Reference
+
+technical_reference/src/cjepa/index
+technical_reference/src/rloclab/index
+technical_reference/src/rloclab/wheeled/envs/mdp/index
+technical_reference/src/rloclab/quadruped/index
 ```
 
 # References
