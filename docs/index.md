@@ -8,5 +8,11 @@ Welcome to the cjepa documentation.  This site covers the package API,
 
 notebooks/getting_started
 api
-getting_started
 ```
+
+# References
+
+Our work builds on established baselines in Go2 locomotion {cite}`rob6323_go2` and 
+wheeled drifting tasks {cite}`wheeledlab`.
+
+```{bibliography}

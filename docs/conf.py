@@ -1,4 +1,4 @@
-"""Sphinx configuration for python_package documentation."""
+"""Sphinx configuration for cjepa documentation."""
 
 from __future__ import annotations
 
@@ -7,9 +7,8 @@ import sys
 from datetime import datetime
 
 PROJECT_ROOT = os.path.abspath(os.path.join(__file__, "../.."))
-SRC_ROOT = os.path.join(PROJECT_ROOT, "src")
-if SRC_ROOT not in sys.path:
-    sys.path.insert(0, SRC_ROOT)
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "external"))
 
 project = "cjepa"
 author = "Long Quang"
@@ -21,8 +20,11 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.autosummary",
+    "sphinx.ext.viewcode",
+    "sphinxcontrib.bibtex",
 ]
 
+bibtex_bibfiles = ["refs.bib"]
 autosummary_generate = True
 
 nb_execution_mode = "off"
