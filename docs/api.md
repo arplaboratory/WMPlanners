@@ -5,5 +5,5 @@
    :toctree: _autosummary
    :recursive:
 
-   python_package
+   cjepa
 ```
