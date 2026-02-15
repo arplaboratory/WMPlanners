@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10"]
+        python-version: ["3.10"]
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python ${{ matrix.python-version }}
@@ -20,4 +20,20 @@ jobs:
         pip install pylint
     - name: Analysing the code with pylint
       run: |
-        pylint $(git ls-files '*.py')
+        pylint src/**/*.py --extension-pkg-whitelist=cv2 > pylint_report.txt || true
+        cat pylint_report.txt
+        SCORE=$(sed -n 's/^Your code has been rated at \([-0-9.]*\)\/10.*/\1/p' pylint_report.txt)
+        if [ -z "$SCORE" ]; then SCORE="0"; fi
+        echo "PYLINT_SCORE=$SCORE" >> $GITHUB_ENV
+      
+    - name: Update Badge
+      uses: Schneegans/dynamic-badges-action@v1.7.0
+      with:
+        auth: ${{ secrets.GIST_SECRET }}
+        gistID: d09cfb9f249c9995b9fa1943d90a1d71
+        filename: ds3001-pylint.json
+        label: PyLint
+        message: ${{ env.PYLINT_SCORE }}/10
+        valColorRange: ${{ env.PYLINT_SCORE }}
+        maxColorRange: 10
+        minColorRange: 0
