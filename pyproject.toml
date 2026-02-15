@@ -3,9 +3,9 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "python-project"
+name = "cjepa"
 version = "0.1.0"
-description = "Placeholder"
+description = "Learning World Models Continuously from Embodied Experience"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -21,6 +21,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8",
+  "pytest-cov>=5",
+  "pylint>=3.2",
   "ruff>=0.5",
   "mypy>=1.8",
   "ipykernel>=6.29"
@@ -30,15 +32,21 @@ docs = [
   "myst-nb>=1.1",
   "sphinx-book-theme>=1.1",
   "nbsphinx>=0.9",
-  "jupytext>=1.15"
+  "jupytext>=1.15",
+  "sphinxcontrib-bibtex",
+  "sphinx-autoapi"
 ]
 
+[project.scripts]
+cjepa = "cjepa.cli:main"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/python_project"]
+packages = ["src/cjepa"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 addopts = "-ra"
+testpaths = ["tests"]
 
 [tool.ruff]
 select = ["E", "F", "I", "UP", "B"]
@@ -47,4 +55,4 @@ line-length = 88
 [tool.mypy]
 python_version = "3.9"
 strict = true
-packages = ["python_project"]
+packages = ["cjepa"]
