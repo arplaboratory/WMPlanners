@@ -1,6 +1,6 @@
-# python_package documentation
+# cjepa documentation
 
-Welcome to the python_package documentation.  This site covers the package API,
+Welcome to the cjepa documentation.  This site covers the package API,
 
 ```{toctree}
 :maxdepth: 2
