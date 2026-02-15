@@ -1,19 +1,41 @@
 # DS_GA_3001
 This repo supports the DS_GA_3001 - Embodied Learning and Vision Course Project
 
+| Authors              | Email                |
+|-------------------|----------------------|
+| **Long Quang**    | lq2146@nyu.edu       |
+| **Akash Guna** | ar9799@nyu.edu     |
+| **Deepanshu Mody** | dm6262@nyu.edu      |
+
+<sup>
+Authors are with New York University.
+</sup>
+
+[![Tests](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml)
+![Pylint](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/lquan9/d09cfb9f249c9995b9fa1943d90a1d71/raw/ds3001-pylint.json)
+[![Docs](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml)
+[![Python Version](https://img.shields.io/badge/python-%203.10-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+[Code](#) | [Paper](#)
+
 `src/cjepa` is a lightweight integration layer for adapting continual learning to JEPA.
-`external/vjepa2` official [VJEPA2](https://github.com/facebookresearch/vjepa2) repository.
-`src/rloclab` package provides an Isaac Lab reinforcement learning workflow for Unitree Go2 locomotion and wheeled drifting tasks. It packages training, evaluation, and cluster automation scripts with robust reward shaping and domain-randomization defaults.
+<br>
+`external/vjepa2` official [V-JEPA 2](https://github.com/facebookresearch/vjepa2) repository.
+<br>
+`src/rloclab` package provides an Isaac Lab reinforcement learning workflow for Unitree Go2 locomotion and wheeled robots.
 
 - V-JEPA 2 experiments scaffolding for two-phase continual learning:
   - **Task 1**: self-supervised representation learning on broad video data.
   - **Task 2**: post-training/action-conditioned adaptation on robot data.
 
-- Utilities to build V-JEPA 2 CSV datasets (`/path/to/video.mp4 label`).
+- Utilities to build V-JEPA 2 CSV datasets (`data/0001.mp4 label`).
 - A small CLI (`cjepa`) to generate a reproducible local training
-  command for `src/vjepa2/app/main.py`.
+  command for `external/vjepa2/app/main.py`.
 
-## Inspiration and preliminary works (citations)
+
+
+## Inspiration and preliminary works
 
 The `rloclab` package builds on and cites the following repositories as upstream references and preliminary implementations:
 
@@ -39,14 +61,54 @@ The `rloclab` package builds on and cites the following repositories as upstream
   gallery ready for Read the Docs or local builds.
 - **Testing** – Pytest suite to validate core functionality.
 
-## Getting started
+# Quick Start
+## Pre-requisites
+1. [Git LFS](https://git-lfs.github.com/)
+2. [Python Virtual Env](https://docs.python.org/3/tutorial/venv.html)
+3. [IsaacLab](https://isaac-sim.github.io/IsaacLab/main/index.html)
+
+<details>
+<summary><strong>Click for instructions on installing prerequisites</strong></summary>
+
+---
+**1. Git-LFS**
+
+We rely on GIT Large File Storage for handling binary files that are required for building and using Phoenix. E.g., pre-compiled system dependencies that aren't available from public servers and trained neural network weights.
+
+```bash
+#To install Git-LFS
+sudo apt install git-lfs
+git lfs install
+```
+
+**2. Python3 Virtual Environment**
+```bash
+sudo apt update
+sudo apt install python3.12-venv
+```
+---
+</details>
+
+### Setup Python workspace
+> The bundled V-JEPA 2 project in `external/vjepa2` targets Linux environments like
+> Ubuntu 24.04 and commonly requires CUDA + multi-GPU for full-scale training.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+```
+### Install dependencies
+```bash
 pip install -e .[dev,docs]
+
+# V-JEPA2 runtime dependencies
+pip install -r external/vjepa2/requirements.txt
 ```
 
+### Run
+```bash
+TBD
+```
 Run the example notebook by launching Jupyter Lab and opening
 ``docs/notebooks/getting_started.md``.  Build the documentation locally with:
 
@@ -60,18 +122,9 @@ Execute the tests:
 pytest
 ```
 
-## Environment setup
-
-> The bundled V-JEPA 2 project in `src/vjepa2` targets Linux environments like
-> Ubuntu 24.04 and commonly requires CUDA + multi-GPU for full-scale training.
-
+#### Headless
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .[dev,docs]
-
-# V-JEPA2 runtime dependencies (decord can be platform-sensitive)
-pip install -r external/vjepa2/requirements.txt
+TBD
 ```
 
 ## Data preparation (CSV format)
@@ -131,6 +184,46 @@ For a task-2 adaptation pass, reuse the same command pattern with robot-specific
 CSVs and a new `--tag`, then incorporate your CL method in the trainer/loss path
 inside `src/vjepa2/app/vjepa/train.py` (or AC equivalent).
 
+### Task-specfic training
+Launch PPO training and automated evaluation from Greene. You may override `TASK_NAME` or pass extra flags to `scripts/rsl_rl/train.py` via `train.sh`.
+```bash
+cd ~/rloclab
+TASK_NAME=Template-Rloclab-Go2-Direct-v0 ./train.sh --experiment_name go2_flat_direct --logger wandb
+```
+
+For other tasks
+```bash
+cd ~/rloclab
+TASK_NAME=Template-Rloclab-Go2-<Direct|Backflip|RobustLocomotion|Bipedal>-v0 ./train.sh --experiment_name go2_<flat_direct|backflip|robust_localmotion|bipedal> --max_iterations 1000
+```
+
+### Wheeled robot RL training (WheeledLab-style drifting)
+
+This repo now includes a wheeled stack ported from WheeledLab (Ackermann actions, wheeled asset configs, drift MDP, and PPO configs) and registers two new IsaacLab tasks:
+
+- `Template-Rloclab-Mushr-DriftRL-v0`
+- `Template-Rloclab-F1Tenth-DriftRL-v0`
+
+Run these with the same HPC workflow:
+
+```bash
+cd ~/rloclab
+TASK_NAME=Template-Rloclab-Mushr-DriftRL-v0 ./train.sh --experiment_name mushr_drift
+TASK_NAME=Template-Rloclab-F1Tenth-DriftRL-v0 ./train.sh --experiment_name f1tenth_drift
+```
+
+The wheeled environments expect WheeledLab robot USD assets (`mushr_nano(.usd)`, `mushr_nano_v2.usd`, `f1tenth.usd`).
+
+- Set `RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR` to the directory containing `Robots/` from WheeledLab assets.
+- If unset, the code defaults to `src/WheeledLab/source/wheeledlab_assets/data` inside this mono-repo layout.
+
+## Running tests
+Submit the provided automated checks to Burst:
+```bash
+cd ~/rloclab
+./tests.sh
+```
+
 ## Extra documentation
 
 See `docs/getting_started.md` for a concise step-by-step.
@@ -177,65 +270,6 @@ The suggested way to inspect these logs is via the Open OnDemand web interface:
     - [ContactSensorData (`_contact_sensor.data`)](https://isaac-sim.github.io/IsaacLab/main/source/api/lab/isaaclab.sensors.html#isaaclab.sensors.ContactSensorData) — Contains `net_forces_w` (contact forces).
 
 ---
-
-## Project Solution
-| Authors              | Email                |
-|-------------------|----------------------|
-| **Long Quang**    | lq2146@nyu.edu       |
-| **Akash Guna** | ar9799@nyu.edu     |
-| **Deepanshu Mody** | dm6262@nyu.edu      |
-
-<sup>
-Authors are with New York University.
-</sup>
-
-[![Tests](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml)
-![Pylint](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/lquan9/d09cfb9f249c9995b9fa1943d90a1d71/raw/ds3001-pylint.json)
-[![Docs](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml)
-[![Python Version](https://img.shields.io/badge/python-%203.10-blue)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-[Code](#) | [Paper](#)
-
-### Task-specfic training
-Launch PPO training and automated evaluation from Greene. You may override `TASK_NAME` or pass extra flags to `scripts/rsl_rl/train.py` via `train.sh`.
-```bash
-cd ~/rloclab
-TASK_NAME=Template-Rloclab-Go2-Direct-v0 ./train.sh --experiment_name go2_flat_direct --logger wandb
-```
-
-For other tasks
-```bash
-cd ~/rloclab
-TASK_NAME=Template-Rloclab-Go2-<Direct|Backflip|RobustLocomotion|Bipedal>-v0 ./train.sh --experiment_name go2_<flat_direct|backflip|robust_localmotion|bipedal> --max_iterations 1000
-```
-
-### Wheeled robot RL training (WheeledLab-style drifting)
-
-This repo now includes a wheeled stack ported from WheeledLab (Ackermann actions, wheeled asset configs, drift MDP, and PPO configs) and registers two new IsaacLab tasks:
-
-- `Template-Rloclab-Mushr-DriftRL-v0`
-- `Template-Rloclab-F1Tenth-DriftRL-v0`
-
-Run these with the same HPC workflow:
-
-```bash
-cd ~/rloclab
-TASK_NAME=Template-Rloclab-Mushr-DriftRL-v0 ./train.sh --experiment_name mushr_drift
-TASK_NAME=Template-Rloclab-F1Tenth-DriftRL-v0 ./train.sh --experiment_name f1tenth_drift
-```
-
-The wheeled environments expect WheeledLab robot USD assets (`mushr_nano(.usd)`, `mushr_nano_v2.usd`, `f1tenth.usd`).
-
-- Set `RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR` to the directory containing `Robots/` from WheeledLab assets.
-- If unset, the code defaults to `src/WheeledLab/source/wheeledlab_assets/data` inside this mono-repo layout.
-
-## Running tests
-Submit the provided automated checks to Burst:
-```bash
-cd ~/rloclab
-./tests.sh
-```
 
 ## License
 
