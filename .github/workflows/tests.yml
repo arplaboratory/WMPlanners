@@ -9,16 +9,33 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+      - name: Force HTTPS for submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "org-16943930@github.com:"
+      - name: Initialize specific submodules
+        run: |
+          git submodule update --init external/vjepa2
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip'
       - name: Install package
         run: |
           python -m pip install --upgrade pip
+          if [ -f external/vjepa2/requirements.txt ]; then
+            pip install -r external/vjepa2/requirements.txt
+          fi
           pip install -e .[dev]
       - name: Run pytest
-        run: pytest --junitxml=reports/pytest-junit.xml
+        env:
+          PYTHONPATH: .:${{ github.workspace }}/external/vjepa2
+        run: |
+          mkdir -p reports
+          export PYTHONPATH=$PYTHONPATH:$(pwd)/src
+          pytest --junitxml=reports/pytest-junit.xml
       - name: Upload test report artifact
         uses: actions/upload-artifact@v4
         with:
