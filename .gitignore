@@ -75,3 +75,6 @@ tex file extensions
 **/*.toc
 **/*.lot
 **/*.lof
+
+# backups
+**/*.bak
