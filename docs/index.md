@@ -4,11 +4,14 @@ Welcome to the cjepa documentation.  This site covers the package API,
 
 ```{toctree}
 :maxdepth: 2
-:caption: Contents
+:caption: User Guides
 
-notebooks/getting_started
 getting_started
-api
+notebooks/getting_started
+
+technical_reference/cjepa/index
+technical_reference/rloclab/index
+technical_reference/mdp/index
 ```
 
 # References
