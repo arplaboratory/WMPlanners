@@ -14,7 +14,7 @@ Authors are with New York University.
 [![Tests](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/tests.yml)
 ![Pylint](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/lquan9/d09cfb9f249c9995b9fa1943d90a1d71/raw/ds3001-pylint.json)
 [![Docs](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml/badge.svg)](https://github.com/lquan9/NYU_DS_GA_3001/actions/workflows/docs.yml)
-[![Python Version](https://img.shields.io/badge/python-%203.10-blue)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-%203.11-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 [Code](#) | [Paper](#)
@@ -29,18 +29,17 @@ Authors are with New York University.
 
 The `rloclab` package builds on and cites the following repositories as upstream references and preliminary implementations:
 
-- **isaac-sim/IsaacLab**: core simulator/task framework and APIs that power `rloclab`.  
-- **machines-in-motion/rob6323_go2_project**: original course starter workflow and task framing for Go2 in Isaac Lab.  
-  https://github.com/machines-in-motion/rob6323_go2_project
-  https://github.com/isaac-sim/IsaacLab
-- **wheeledlab/wheeledlab**: reference for wheeled drifting task structure and asset conventions integrated in this package.  
-  https://github.com/wheeledlab/wheeledlab
+- **isaac-sim/IsaacLab**: core simulator/task framework and APIs that power `rloclab` [Link](https://github.com/isaac-sim/IsaacLab).  
+- **machines-in-motion/rob6323_go2_project**: original course starter workflow and task framing for Go2 in Isaac Lab [Link](https://github.com/machines-in-motion/rob6323_go2_project).
+  
+- **wheeledlab/wheeledlab**: reference for wheeled drifting task structure and asset conventions integrated in this package [Link](https://github.com/wheeledlab/wheeledlab).
 
 # Quick Start
 ## Pre-requisites
 1. [Git LFS](https://git-lfs.github.com/)
 2. [Python Virtual Env](https://docs.python.org/3/tutorial/venv.html)
 3. [IsaacLab](https://isaac-sim.github.io/IsaacLab/main/index.html)
+4. [UV](https://docs.astral.sh/uv/getting-started/installation/) (optional)
 
 <details>
 <summary><strong>Click for instructions on installing prerequisites</strong></summary>
@@ -48,7 +47,7 @@ The `rloclab` package builds on and cites the following repositories as upstream
 ---
 **1. Git-LFS**
 
-We rely on GIT Large File Storage for handling binary files that are required for building and using Phoenix. E.g., pre-compiled system dependencies that aren't available from public servers and trained neural network weights.
+We rely on GIT Large File Storage for handling binary files that are required for tracking assets.
 
 ```bash
 sudo apt install git-lfs
@@ -57,8 +56,16 @@ git lfs install
 
 **2. Python3 Virtual Environment**
 ```bash
+sudo add-apt-repository ppa:deadsnakes/ppa
 sudo apt update
-sudo apt install python3.12-venv
+sudo apt install python3.11 python3.11-venv python3.11-dev
+```
+
+**3. IsaacLab** (Installed within Python environment)
+
+**4. UV**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 ---
 </details>
@@ -68,16 +75,27 @@ sudo apt install python3.12-venv
 > Ubuntu 24.04 and commonly requires CUDA + multi-GPU for full-scale training.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv .ds3001_env
+source .ds3001_env/bin/activate
 ```
+or (using **uv**)
+```bash
+uv venv .ds3001 --python 3.11
+source .ds3001/bin/activate
+```
+
 ### Install dependencies
 ```bash
-pip install -e .[dev,docs]
-
+pip install pip --upgrade
 # V-JEPA2 runtime dependencies
 pip install -r external/vjepa2/requirements.txt
+
+# Project dependencies
+pip install -e .[dev,docs]
 ```
+<sup>
+If using <b>zsh</b>, you may need to run: <code>setopt nonomatch</code> to set glob behavior properly.
+</sup>
 
 ### Run
 ```bash
