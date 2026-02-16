@@ -129,6 +129,13 @@ def ensure_exists(path: Path, description: str) -> None:
     if not path.exists():
         raise FileNotFoundError(f"{description} not found: {path}")
 
+def queue_hpc_install(extra_args: Iterable[str], dry_run: bool) -> None:
+    """Queue the HPC install job through ``scripts/install.sh``."""
+
+    install_script = PROJECT_DIR / "install.sh"
+    ensure_exists(install_script, "Install launcher script")
+    command = [str(install_script), *extra_args]
+    run_command(command, dry_run=dry_run)
 
 def install_dependencies(pip_command: str, dry_run: bool) -> None:
     """Install project dependencies as described in the spec, from the project root."""
@@ -280,7 +287,13 @@ def submit_slurm(script_path: Path, dry_run: bool) -> None:
 
 
 def handle_install(args: argparse.Namespace) -> None:
-    install_dependencies(args.pip_command, dry_run=args.dry_run)
+    command_args: List[str] = []
+    if args.host:
+        command_args.extend(["--host", args.host])
+    if args.remote_project_dir:
+        command_args.extend(["--remote-project-dir", args.remote_project_dir])
+    command_args.extend(args.extra_args)
+    queue_hpc_install(command_args, dry_run=args.dry_run)
 
 
 def handle_download(args: argparse.Namespace) -> None:
@@ -317,15 +330,27 @@ def handle_pretrain(args: argparse.Namespace) -> None:
 
 
 def handle_rloclab_train(args: argparse.Namespace) -> None:
-    command = build_rloclab_train_command(
-        task=args.task,
-        agent=args.agent,
-        max_iterations=args.max_iterations,
-        num_envs=args.num_envs,
-        headless=args.headless,
-        use_isaaclab_launcher=args.isaaclab_launcher,
-        extra_args=args.extra_args,
-    )
+    train_script = PROJECT_DIR / "train.sh"
+    ensure_exists(train_script, "Train launcher script")
+
+    command = [str(train_script)]
+    if args.host:
+        command.extend(["--host", args.host])
+    if args.remote_project_dir:
+        command.extend(["--remote-project-dir", args.remote_project_dir])
+    if args.task:
+        command.extend(["--task-name", args.task])
+
+    train_args: List[str] = ["--agent", args.agent]
+    if args.max_iterations is not None:
+        train_args.extend(["--max_iterations", str(args.max_iterations)])
+    if args.num_envs is not None:
+        train_args.extend(["--num_envs", str(args.num_envs)])
+    if args.headless:
+        train_args.append("--headless")
+    train_args.extend(args.extra_args)
+
+    command.extend(train_args)
     run_command(command, dry_run=args.dry_run)
 
     if args.slurm_path:
@@ -424,11 +449,21 @@ def build_parser() -> argparse.ArgumentParser:
     ui_parser = subparsers.add_parser("ui", parents=[common], help="Launch the dialog-based UI (default).")
     ui_parser.set_defaults(func=launch_dialog_ui)
 
-    install_parser = subparsers.add_parser("install", parents=[common], help="Install project dependencies.")
+    install_parser = subparsers.add_parser("install", parents=[common], help="Queue HPC install job via scripts/install.sh.")
+    install_parser.add_argument("--host", default="burst", help="HPC login host used for ssh (default: burst).")
     install_parser.add_argument(
         "--pip-command",
         default="pip",
         help="Pip command to run (e.g., pip or pip3).",
+    )
+    install_parser.add_argument(
+        "--remote-project-dir",
+        help="Remote project directory containing scripts/hpc/install.slurm (default: ~/REPO_NAME).",
+    )
+    install_parser.add_argument(
+        "extra_args",
+        nargs=argparse.REMAINDER,
+        help="Additional arguments forwarded to scripts/install.sh.",
     )
     install_parser.set_defaults(func=handle_install)
 
@@ -475,7 +510,12 @@ def build_parser() -> argparse.ArgumentParser:
     rloclab_train_parser = subparsers.add_parser(
         "rloclab-train",
         parents=[common],
-        help="Launch Isaac Lab rloclab RL training for wheeled/quadruped tasks.",
+        help="Queue Isaac Lab rloclab RL training on HPC via scripts/train.sh.",
+    )
+    rloclab_train_parser.add_argument("--host", default="burst", help="HPC login host used for ssh (default: burst).")
+    rloclab_train_parser.add_argument(
+        "--remote-project-dir",
+        help="Remote project directory containing scripts/hpc/train.slurm (default: ~/REPO_NAME).",
     )
     rloclab_train_parser.add_argument(
         "--task",
@@ -499,7 +539,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--extra-args",
         nargs=argparse.REMAINDER,
         default=[],
-        help="Additional arguments forwarded to the training command.",
+        help="Additional arguments forwarded to scripts/train.sh/train.slurm.",
     )
     rloclab_train_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
     rloclab_train_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
@@ -696,18 +736,12 @@ def dialog_install(ui: DialogUI) -> None:
         dry_run = prompt_dry_run(ui, config_key="last_install_dry_run")
     except DialogCancelled:
         return
-    config["last_pip_command"] = pip_command
-    save_config(config)
-    commands = [
-        [pip_command, "install", "--upgrade", "pip"],
-        [pip_command, "install", "-e", ".[dev]"],
-    ]
+
+    command = [str(PROJECT_DIR / "install.sh")]
     if dry_run:
-        msg = "[DRY-RUN] The following commands would be run:\n"
-        msg += "\n".join(["$ " + format_command(cmd) for cmd in commands])
-        ui.msgbox(msg)
+        ui.msgbox("[DRY-RUN] The following command would be run:\n$ " + format_command(command))
     else:
-        install_dependencies(pip_command, dry_run=False)
+        queue_hpc_install([], dry_run=False)
 
 
 def dialog_download(ui: DialogUI) -> None:
@@ -888,7 +922,7 @@ def dialog_slurm(ui: DialogUI) -> None:
 def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
     ui = DialogUI()
     main_menu_choices = (
-        ("install", "Install dependencies (pip install -e .[dev])"),
+        ("install", "Queue install.slurm on HPC"),
         ("download", "Download datasets"),
         ("pretrain", "Launch pretraining and optional Slurm"),
         ("slurm", "Generate/submit a Slurm script for any command"),

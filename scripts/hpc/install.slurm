@@ -12,7 +12,14 @@
 #SBATCH --output=../slurm_%j.out
 #SBATCH --error=../slurm_%j.err
 
-cp /scratch/ja5009/public/isaac-lab-base.tar /scratch/$USER/
+set -euo pipefail
 
 cd /scratch/$USER
-tar xf isaac-lab-base.tar
+
+python3.11 -m venv isaaclab-5.1.0
+source isaaclab-5.1.0/bin/activate
+python -m pip install --upgrade pip
+python -m pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
+
+rm -rf IsaacLab
+git clone https://github.com/isaac-sim/IsaacLab.git

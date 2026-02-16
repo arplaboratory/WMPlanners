@@ -15,7 +15,20 @@ chmod +x pipeline-py-client
 ./pipeline-py-client
 ```
 
-Install the command to your 
+Install the command on HPC as an executable in your `PATH`:
+
+```bash
+mkdir -p ~/.local/bin
+install -m 755 pipeline-py-client ~/.local/bin/jepa
+echo "export PATH=\"$HOME/.local/bin:$PATH\"" >> ~/.bashrc
+source ~/.bashrc
+```
+
+After that, run:
+
+```bash
+jepa
+```
 
 > The UI requires the `dialog` binary (often preinstalled on HPC login nodes).
 > If missing, install via your package manager (e.g., `apt-get install dialog`).
@@ -26,8 +39,7 @@ Install the command to your
 Running `./pipeline-py-client` (or `./pipeline-py-client ui`) opens a menu with
 the core JEPA pipeline stages:
 
-- **Install dependencies**: prompt for the pip command and execute
-  `pip install --upgrade pip` followed by `pip install -e .[dev]`.
+- **Install environment on HPC**: queue `scripts/install.sh`, which submits `scripts/hpc/install.slurm` on burst to set up Isaac Sim / IsaacLab.
 - **Download datasets**: choose datasets via checkboxes, enter the dataset root
   and splits, and build the `python -m jepa.datasets.download` commands.
 - **Launch pretraining**: choose a config, datasets, and extra arguments, then
@@ -52,15 +64,19 @@ the core JEPA pipeline stages:
 This calls `scripts/hpc/helpers/curate_jepa_dataset.py` and writes manifests in
 `/path/to/video.ext <label>` format compatible with V-JEPA style data loaders.
 
-### Install dependencies
+### Install environment on HPC
 
 ```bash
 ./pipeline-py-client install
 ```
 
-Runs the installation steps defined in the spec (`pip install --upgrade pip`
-followed by `pip install -e .[dev]`). Use `--pip-command` to switch to `pip3`
-or a virtual environment shim.
+Queues `scripts/install.sh`, which submits `scripts/hpc/install.slurm` on the selected login host.
+
+You can override host/project path when needed:
+
+```bash
+./pipeline-py-client install --host burst --remote-project-dir ~/my-repo
+```
 
 ### Download datasets
 
@@ -110,8 +126,14 @@ For wheeled tasks, set task names such as `Isaac-RLlab-F1Tenth-Drift-v0` or
 `Template-Rloclab-Go2-Direct-v0` / `Template-Rloclab-Go2-Bipedal-v0` /
 `Template-Rloclab-Go2-Backflip-v0`.
 
-Use `--isaaclab-launcher` when executing from `src/rloclab` and you want to run
-`./isaaclab.sh -p scripts/rsl_rl/train.py ...` instead of `python ...`.
+This queues `scripts/train.sh`, which submits `scripts/hpc/train.slurm` on the selected host
+with the selected task and forwarded training arguments.
+
+You can override host/project path when needed:
+
+```bash
+./pipeline-py-client rloclab-train --host burst --remote-project-dir ~/my-repo --task Template-Rloclab-Go2-Direct-v0
+```
 
 ### Generate a Slurm script for any command
 
