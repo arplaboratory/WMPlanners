@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent
 
 GLOBAL_EXP_DIR = Path(os.environ.get("JEPA_EXP") or (ROOT.parent / "experiments")).resolve()
 PROJECT_DIR = ROOT.parent
+REPO_ROOT = PROJECT_DIR.parent
 SETTINGS = PROJECT_DIR / ".jepa_config.json"
 
 CONFIGS_DIR = GLOBAL_EXP_DIR / "configs"
@@ -129,6 +130,7 @@ def ensure_exists(path: Path, description: str) -> None:
     if not path.exists():
         raise FileNotFoundError(f"{description} not found: {path}")
 
+
 def queue_hpc_install(extra_args: Iterable[str], dry_run: bool) -> None:
     """Queue the HPC install job through ``scripts/install.sh``."""
 
@@ -151,6 +153,18 @@ def install_dependencies(pip_command: str, dry_run: bool) -> None:
 
     for command in commands:
         run_command(command, dry_run=dry_run if dry_run else False) if dry_run else subprocess.run(command, cwd=str(project_root), check=True)
+
+def discover_install_slurm_scripts() -> List[str]:
+    """Discover install Slurm scripts under the repository."""
+
+    candidates: List[str] = []
+    for path in sorted(REPO_ROOT.rglob("*install*.slurm")):
+        try:
+            rel_path = path.relative_to(REPO_ROOT)
+        except ValueError:
+            continue
+        candidates.append(str(rel_path))
+    return candidates
 
 
 def build_download_command(dataset: str, dataset_root: Path, splits: Iterable[str], snapshot_download: bool) -> List[str]:
@@ -292,6 +306,8 @@ def handle_install(args: argparse.Namespace) -> None:
         command_args.extend(["--host", args.host])
     if args.remote_project_dir:
         command_args.extend(["--remote-project-dir", args.remote_project_dir])
+    if args.install_slurm:
+        command_args.extend(["--install-slurm", args.install_slurm])
     command_args.extend(args.extra_args)
     queue_hpc_install(command_args, dry_run=args.dry_run)
 
@@ -459,6 +475,11 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument(
         "--remote-project-dir",
         help="Remote project directory containing scripts/hpc/install.slurm (default: ~/REPO_NAME).",
+    )
+    install_parser.add_argument(
+        "--install-slurm",
+        default="scripts/hpc/install.slurm",
+        help="Install Slurm script path relative to repo root (default: scripts/hpc/install.slurm).",
     )
     install_parser.add_argument(
         "extra_args",
@@ -713,6 +734,33 @@ def prompt_dataset_selection(ui: DialogUI) -> List[str]:
     return ui.checklist("Select datasets", DATASET_CHOICES, preselected=["tsbpp/fall2025_deeplearning"])
 
 
+def prompt_install_slurm_selection(ui: DialogUI) -> str:
+    scripts = discover_install_slurm_scripts()
+    if not scripts:
+        raise FileNotFoundError("No install Slurm scripts found (pattern: *install*.slurm).")
+
+    default_script = config.get("last_install_slurm", "scripts/hpc/install.slurm")
+    ordered_scripts = list(scripts)
+    if default_script in ordered_scripts:
+        ordered_scripts.remove(default_script)
+        ordered_scripts.insert(0, default_script)
+
+    choices: List[Tuple[str, str]] = []
+    for script_path in ordered_scripts:
+        if script_path == default_script:
+            description = "Previously selected"
+        elif script_path == "scripts/hpc/install.slurm":
+            description = "Install script (default)"
+        else:
+            description = "Install script"
+        choices.append((script_path, description))
+
+    selected = ui.menu("Select an install Slurm script", choices)
+    config["last_install_slurm"] = selected
+    save_config(config)
+    return selected
+
+
 def prompt_dry_run(ui: DialogUI, config_key: str = None) -> bool:
     # config_key: e.g. 'last_install_dry_run', 'last_download_dry_run', etc.
     default = False
@@ -732,16 +780,19 @@ def prompt_dry_run(ui: DialogUI, config_key: str = None) -> bool:
 
 def dialog_install(ui: DialogUI) -> None:
     try:
-        pip_command = ui.inputbox("Pip command", "pip")
+        selected_install_slurm = prompt_install_slurm_selection(ui)
         dry_run = prompt_dry_run(ui, config_key="last_install_dry_run")
     except DialogCancelled:
         return
+    except Exception as exc:  # pragma: no cover - surfaced to the user
+        ui.msgbox(f"Could not load install Slurm scripts: {exc}")
+        return
 
-    command = [str(PROJECT_DIR / "install.sh")]
+    command = [str(PROJECT_DIR / "install.sh"), "--install-slurm", selected_install_slurm]
     if dry_run:
         ui.msgbox("[DRY-RUN] The following command would be run:\n$ " + format_command(command))
     else:
-        queue_hpc_install([], dry_run=False)
+        queue_hpc_install(["--install-slurm", selected_install_slurm], dry_run=False)
 
 
 def dialog_download(ui: DialogUI) -> None:

@@ -39,7 +39,7 @@ jepa
 Running `./pipeline-py-client` (or `./pipeline-py-client ui`) opens a menu with
 the core JEPA pipeline stages:
 
-- **Install environment on HPC**: queue `scripts/install.sh`, which submits `scripts/hpc/install.slurm` on burst to set up Isaac Sim / IsaacLab.
+- **Install environment on HPC**: pick from discovered `*install*.slurm` scripts, then queue `scripts/install.sh` to submit the selected installer on the login host.
 - **Download datasets**: choose datasets via checkboxes, enter the dataset root
   and splits, and build the `python -m jepa.datasets.download` commands.
 - **Launch pretraining**: choose a config, datasets, and extra arguments, then
