@@ -29,7 +29,9 @@ Currently **DS-GA 3001** is closed/private for collaborators only. We use [Linea
 
 ![Workflow](docs/assets/workflow.gif)
 
-#### Quick steps to contribute:
+---
+
+## Quick steps to contribute:
 1. Obtain a branch name for the issue you're working on in Linear.
 ![Branch copy](docs/assets/branch_copy.gif)
 2. Create a feature branch from `devel` with name from step 1 (e.g., implement-model-free-baseline-ahx-78)
