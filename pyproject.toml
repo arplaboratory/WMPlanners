@@ -25,7 +25,8 @@ dev = [
   "pylint>=3.2",
   "ruff>=0.5",
   "mypy>=1.8",
-  "ipykernel>=6.29"
+  "typeguard",
+  "ipykernel>=6.29",
 ]
 docs = [
   "sphinx>=7.2",

@@ -78,3 +78,7 @@ tex file extensions
 
 # backups
 **/*.bak
+
+# Ignore envs
+\.*_env
+\.venv
