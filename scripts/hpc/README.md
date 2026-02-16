@@ -19,8 +19,11 @@ Install the command on HPC as an executable in your `PATH`:
 
 ```bash
 mkdir -p ~/.local/bin
-install -m 755 pipeline-py-client ~/.local/bin/jepa
+install -m 755 pipeline-py-client ~/.local/bin/hpc
+
+# or zshrc
 echo "export PATH=\"$HOME/.local/bin:$PATH\"" >> ~/.bashrc
+echo "export HPC_ROOT=\"<path to scripts/hpc>\"" >> ~/.bashrc
 source ~/.bashrc
 ```
 

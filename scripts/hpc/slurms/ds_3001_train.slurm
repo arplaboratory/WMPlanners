@@ -5,11 +5,10 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=20GB
-#SBATCH --time=02:00:00
-#SBATCH --gres=gpu:1
+#SBATCH --time=01:00:00
 #SBATCH --mail-type=END
-#SBATCH --account=rob_gy6323-2025fa
-#SBATCH --partition=g2-standard-12
+#SBATCH --account=ds_ga_3001_003-2026sp
+#SBATCH --partition=n2c48m24
 #SBATCH --output=../slurm_%j.out
 #SBATCH --error=../slurm_%j.err
 
@@ -19,33 +18,60 @@ set -euo pipefail
 # Project workspace bootstrap
 # -------------------------------
 PROJECT_NAME="rloclab"
-REMOTE_HOST="greene-dtn"
+REMOTE_HOST="burst"
 LOCAL_PROJECT="${HOME}/${PROJECT_NAME}"
 REMOTE_PROJECT="${HOME}/${PROJECT_NAME}"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
 REMOTE_CONFIG="${HOME}/.config"
+SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
+RCLONE_SIF="/scratch/$USER/rclone.sif"
 LOG_CSV="${LOCAL_PROJECT}/logs/runs.csv"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-go2_flat_direct}"
 
-# Ensure local project exists and mirrors remote (first time creates it)
-mkdir -p "${LOCAL_PROJECT}"
-rsync -az --delete --mkpath -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null" \
-    "${REMOTE_HOST}:${REMOTE_PROJECT}/" \
-    "${LOCAL_PROJECT}/"
+scp -o StrictHostKeyChecking=accept-new "${REMOTE_HOST}:${RCLONE_SIF}" "${RCLONE_SIF}"
+singularity exec --bind "${LOCAL_PROJECT}" "${RCLONE_SIF}" \
+  rclone copy \
+  --sftp-host="${REMOTE_HOST}" \
+  --sftp-user="${USER}" \
+  --sftp-key-file="${HOME}/.ssh/id_rsa" \
+  --sftp-ask-password=false \
+  ":sftp:${REMOTE_PROJECT}/" \
+  "${LOCAL_PROJECT}/"
 
-mkdir -p "${ISAACLAB_DIR}"
-rsync -az --delete --mkpath -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null" \
-    "${REMOTE_HOST}:${ISAACLAB_DIR}/" \
-    "${ISAACLAB_DIR}/"
+singularity exec --bind "${ISAACLAB_DIR}" "${RCLONE_SIF}" \
+  rclone copy \
+  --sftp-host="${REMOTE_HOST}" \
+  --sftp-user="${USER}" \
+  --sftp-key-file="${HOME}/.ssh/id_rsa" \
+  --sftp-ask-password=false \
+  ":sftp:${ISAACLAB_DIR}/" \
+  "${ISAACLAB_DIR}/"
 
-rsync -az --delete --mkpath -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null" \
-    "${REMOTE_HOST}:${REMOTE_CONFIG}" \
-    "${HOME}"
+if [ ! -d "${HOME}/.config" ]; then
+  mkdir -p "${HOME}/.config"
+fi
+
+singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
+  rclone copy \
+  --sftp-host="${REMOTE_HOST}" \
+  --sftp-user="${USER}" \
+  --sftp-key-file="${HOME}/.ssh/id_rsa" \
+  --sftp-ask-password=false \
+  ":sftp:${REMOTE_CONFIG}/" \
+  "${HOME}/.config/"
+
+singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
+  rclone copy \
+  --sftp-host="${REMOTE_HOST}" \
+  --sftp-user="${USER}" \
+  --sftp-key-file="${HOME}/.ssh/id_rsa" \
+  --sftp-ask-password=false \
+  ":sftp:${SIF_IMAGE}" \
+  "${SIF_IMAGE}"
 
 # -------------------------------
 # Hardcode your cluster paths
 # -------------------------------
-SIF_IMAGE="/scratch/$USER/isaac-lab-base.sif"
 RUN_DIR="${LOCAL_PROJECT}"                       # run inside the mirrored project
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
 PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"

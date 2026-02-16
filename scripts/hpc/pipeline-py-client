@@ -16,15 +16,15 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 import os
 
-ROOT = Path(__file__).resolve().parent
 
-GLOBAL_EXP_DIR = Path(os.environ.get("JEPA_EXP") or (ROOT.parent / "experiments")).resolve()
-PROJECT_DIR = ROOT.parent
+PROJECT_DIR = Path(os.environ.get("HPC_PROJECT_ROOT") or ".").resolve()
+ROOT = PROJECT_DIR / "scripts" / "hpc"
+GLOBAL_EXP_DIR = Path(os.environ.get("HPC_EXP") or (PROJECT_DIR.parent / "experiments")).resolve()
 REPO_ROOT = PROJECT_DIR.parent
 SETTINGS = PROJECT_DIR / ".jepa_config.json"
 
 CONFIGS_DIR = GLOBAL_EXP_DIR / "configs"
-SLURMS_DIR = GLOBAL_EXP_DIR / "hpc" / "slurms"
+SLURMS_DIR = ROOT / "slurms"
 DATA_DIR = GLOBAL_EXP_DIR / "data"
 
 # Ensure directories exist
@@ -132,9 +132,9 @@ def ensure_exists(path: Path, description: str) -> None:
 
 
 def queue_hpc_install(extra_args: Iterable[str], dry_run: bool) -> None:
-    """Queue the HPC install job through ``scripts/install.sh``."""
+    """Queue the HPC install job through ``scripts/hpc/install.sh``."""
 
-    install_script = PROJECT_DIR / "install.sh"
+    install_script = PROJECT_DIR / "scripts" / "hpc" / "install.sh"
     ensure_exists(install_script, "Install launcher script")
     command = [str(install_script), *extra_args]
     run_command(command, dry_run=dry_run)
@@ -155,15 +155,12 @@ def install_dependencies(pip_command: str, dry_run: bool) -> None:
         run_command(command, dry_run=dry_run if dry_run else False) if dry_run else subprocess.run(command, cwd=str(project_root), check=True)
 
 def discover_install_slurm_scripts() -> List[str]:
-    """Discover install Slurm scripts under the repository."""
-
+    """Discover install Slurm scripts under the slurms/ directory."""
+    slurms_dir =  SLURMS_DIR
     candidates: List[str] = []
-    for path in sorted(REPO_ROOT.rglob("*install*.slurm")):
-        try:
-            rel_path = path.relative_to(REPO_ROOT)
-        except ValueError:
-            continue
-        candidates.append(str(rel_path))
+    if slurms_dir.is_dir():
+        for path in sorted(slurms_dir.glob("*install*.slurm")):
+            candidates.append(str(path.relative_to(PROJECT_DIR)))
     return candidates
 
 
@@ -475,11 +472,12 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.add_argument(
         "--remote-project-dir",
         help="Remote project directory containing scripts/hpc/install.slurm (default: ~/REPO_NAME).",
+        default=PROJECT_DIR.name
     )
     install_parser.add_argument(
         "--install-slurm",
-        default="scripts/hpc/install.slurm",
-        help="Install Slurm script path relative to repo root (default: scripts/hpc/install.slurm).",
+        default="slurms/install.slurm",
+        help="Install Slurm script path relative to project root (default: slurms/install.slurm).",
     )
     install_parser.add_argument(
         "extra_args",
@@ -570,7 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
     curate_parser = subparsers.add_parser(
         "curate-dataset",
         parents=[common],
-        help="Curate a JEPA-compatible manifest from video files.",
+        help="Curate a HPC-compatible manifest from video files.",
     )
     curate_parser.add_argument("--input-root", required=True, help="Directory to scan recursively for videos.")
     curate_parser.add_argument("--output-manifest", required=True, help="Output CSV/txt manifest path.")
