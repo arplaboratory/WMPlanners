@@ -7,6 +7,7 @@ REPO_NAME="$(basename -- "${REPO_ROOT}")"
 
 HPC_HOST="${HPC_HOST:-burst}"
 REMOTE_PROJECT_DIR="${REMOTE_PROJECT_DIR:-~/${REPO_NAME}}"
+INSTALL_SLURM="${INSTALL_SLURM:-scripts/hpc/install.slurm}"
 
 INSTALL_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -19,6 +20,10 @@ while [[ $# -gt 0 ]]; do
       REMOTE_PROJECT_DIR="$2"
       shift 2
       ;;
+    --install-slurm)
+      INSTALL_SLURM="$2"
+      shift 2
+      ;;
     *)
       INSTALL_ARGS+=("$1")
       shift
@@ -29,4 +34,4 @@ done
 mkdir -p logs
 printf -v INSTALL_ARGS_STR '%q ' "${INSTALL_ARGS[@]}"
 ssh -o StrictHostKeyChecking=accept-new "${HPC_HOST}" \
-  "cd ${REMOTE_PROJECT_DIR@Q} && sbatch --job-name='rloclab_${USER}' --mail-user='${USER}@nyu.edu' scripts/hpc/install.slurm ${INSTALL_ARGS_STR}"
+  "cd ${REMOTE_PROJECT_DIR@Q} && sbatch --job-name='rloclab_${USER}' --mail-user='${USER}@nyu.edu' ${INSTALL_SLURM@Q} ${INSTALL_ARGS_STR}"
