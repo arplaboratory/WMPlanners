@@ -17,11 +17,17 @@ set -euo pipefail
 cd /scratch/$USER
 
 if [ -d IsaacLab/.git ]; then
-  echo "[INFO] IsaacLab exists, cleaning and pulling latest changes..."
+  echo "[INFO] IsaacLab exists, updating safely..."
   cd IsaacLab
-  git reset --hard
-  git clean -fd
-  git pull --rebase --autostash
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    STASH_FILE="../isaaclab_stash_$(date +%Y%m%d_%H%M%S).patch"
+    echo "[INFO] Local changes detected, stashing and saving to $STASH_FILE"
+    git stash push -u -m "Auto-stash before update on $(date)"
+    git stash show -p > "$STASH_FILE" || echo "[WARN] No diff to save in stash."
+  fi
+  # Fetch and fast-forward only
+  git fetch origin
+  git merge --ff-only origin/$(git rev-parse --abbrev-ref HEAD)
   cd ..
 else
   echo "[INFO] Cloning IsaacLab..."
@@ -73,14 +79,14 @@ singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
   ":sftp:${REMOTE_CONFIG}/" \
   "${HOME}/.config/"
 
-singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
+singularity exec --bind "/scratch/${USER}" "${RCLONE_SIF}" \
   rclone copy \
   --sftp-host="${REMOTE_HOST}" \
   --sftp-user="${USER}" \
   --sftp-key-file="${HOME}/.ssh/id_rsa" \
   --sftp-ask-password=false \
   ":sftp:${SIF_IMAGE}" \
-  "${SIF_IMAGE}"
+  "/scratch/${USER}/"
 
 # -------------------------------
 # Hardcode your cluster paths
