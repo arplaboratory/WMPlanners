@@ -117,6 +117,10 @@ mkdir -p \
 mkdir -p "${PERSISTENT_LOGS_DIR}"
 touch "${PERSISTENT_LOGS_DIR}/.keep"
 
+# Python envs
+VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
+mkdir -p "${VENV_DIR}"
+
 # Prefer node-local tmp for apptainer/singularity scratch
 export APPTAINER_TMPDIR="${NODE_TMP}"
 export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
@@ -126,6 +130,7 @@ echo "[burst] ISAAC_ARGS=${ISAAC_ARGS}"
 
 # Execute with GPU and required binds
 CMD="--nv --containall \
+  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -147,15 +152,26 @@ echo "[burst] CMD to run: $CMD"
 singularity exec \
   $CMD \
   --env ISAAC_ARGS="$ISAAC_ARGS" \
+  --env VENV_DIR="$VENV_DIR" \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
+
+if [ ! -d "${VENV_DIR}/bin" ]; then
+    echo "[SINGULARITY] Creating venv with Python"
+    /isaac-sim/python.sh -m venv ${VENV_DIR} --system-site-packages
+fi
+source "${VENV_DIR}/bin/activate"
 
 cd /workspace/isaaclab
 export ISAACLAB_PATH=/workspace/isaaclab
 
 # Ensure the local package is installed in the container Python
 
-/isaac-sim/python.sh -m pip install -e /workspace/run[dev]
+pip install --upgrade pip
+pip install -e /workspace/run[dev]
 
+echo "Using: $(which python)"
 echo "[singularity] ISAAC_ARGS=${ISAAC_ARGS}"
+
+# Maybe run some tests?
 '
