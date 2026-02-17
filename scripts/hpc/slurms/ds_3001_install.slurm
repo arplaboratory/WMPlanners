@@ -155,7 +155,7 @@ export ISAACLAB_PATH=/workspace/isaaclab
 
 # Ensure the local package is installed in the container Python
 
-/isaac-sim/python.sh -m pip install -e /workspace/run/ds_ga_3001
+/isaac-sim/python.sh -m pip install -e /workspace/run[dev]
 
 echo "[singularity] ISAAC_ARGS=${ISAAC_ARGS}"
 '

@@ -60,14 +60,14 @@ singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
   ":sftp:${REMOTE_CONFIG}/" \
   "${HOME}/.config/"
 
-singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
+singularity exec --bind "/scratch/${USER}" "${RCLONE_SIF}" \
   rclone copy \
   --sftp-host="${REMOTE_HOST}" \
   --sftp-user="${USER}" \
   --sftp-key-file="${HOME}/.ssh/id_rsa" \
   --sftp-ask-password=false \
   ":sftp:${SIF_IMAGE}" \
-  "${SIF_IMAGE}"
+  "/scratch/${USER}/"
 
 # -------------------------------
 # Hardcode your cluster paths
@@ -157,7 +157,7 @@ export ISAACLAB_PATH=/workspace/isaaclab
 
 # Ensure the local package is installed in the container Python
 
-/isaac-sim/python.sh -m pip install -e /workspace/run/source/rob6323_go2
+/isaac-sim/python.sh -m pip install -e /workspace/run[dev]
 
 echo "[singularity] ISAAC_ARGS=${ISAAC_ARGS}"
 
