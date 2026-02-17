@@ -121,6 +121,9 @@ touch "${PERSISTENT_LOGS_DIR}/.keep"
 VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
 mkdir -p "${VENV_DIR}"
 
+BUILD_TMP="/scratch/$USER/pip_build_tmp"
+mkdir -p "$BUILD_TMP"
+
 # Prefer node-local tmp for apptainer/singularity scratch
 export APPTAINER_TMPDIR="${NODE_TMP}"
 export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
@@ -131,6 +134,7 @@ echo "[burst] ISAAC_ARGS=${ISAAC_ARGS}"
 # Execute with GPU and required binds
 CMD="--nv --containall \
   -B ${VENV_DIR}:${VENV_DIR}:rw \
+  -B ${BUILD_TMP}:/tmp:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -153,6 +157,7 @@ singularity exec \
   $CMD \
   --env ISAAC_ARGS="$ISAAC_ARGS" \
   --env VENV_DIR="$VENV_DIR" \
+  --env TMPDIR="/tmp" \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
@@ -166,6 +171,10 @@ cd /workspace/isaaclab
 export ISAACLAB_PATH=/workspace/isaaclab
 
 # Ensure the local package is installed in the container Python
+
+echo "[SINGULARITY] Disk space inside container:"
+df -h /tmp
+df -h ${VENV_DIR}
 
 pip install --upgrade pip
 pip install -e /workspace/run[dev]
