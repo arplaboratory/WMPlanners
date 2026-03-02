@@ -1,0 +1,72 @@
+from __future__ import annotations
+import argparse
+import os
+import time
+import torch
+from torch.utils.data import DataLoader
+from world_model.data import NPZEpisodeDataset, collate_npz
+from world_model.models import WorldModel
+from world_model.trainer import TrainConfig, rollout_loss
+from world_model.utils import seed_everything
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--data_dir', type=str, required=True)
+    ap.add_argument('--epochs', type=int, default=20)
+    ap.add_argument('--batch_size', type=int, default=64)
+    ap.add_argument('--window', type=int, default=16)
+    ap.add_argument('--horizon', type=int, default=8)
+    ap.add_argument('--lr', type=float, default=3e-4)
+    ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
+    ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--out_dir', type=str, default='runs')
+    args = ap.parse_args()
+
+    seed_everything(args.seed)
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    ds = NPZEpisodeDataset(args.data_dir, window=args.window)
+    dl = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_npz, drop_last=True)
+
+    # For the toy dataset:
+    odom_dim = ds.D_odom
+    imu_dim = ds.D_imu
+    act_dim = ds.D_act
+    state_dim = min(6, odom_dim)  # decode x,y,vx,vy,goal_x,goal_y
+
+    model = WorldModel(odom_dim=odom_dim, imu_dim=imu_dim, act_dim=act_dim, state_dim=state_dim).to(args.device)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+
+    cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon)
+
+    t0 = time.time()
+    step = 0
+    for epoch in range(args.epochs):
+        model.train()
+        for batch in dl:
+            loss, logs = rollout_loss(model, batch, cfg)
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+
+            if step % 50 == 0:
+                print(f"epoch={epoch:03d} step={step:06d} loss={logs['loss']:.4f} z={logs['loss_z']:.4f} state={logs['loss_state']:.4f} risk={logs['loss_risk']:.4f}")
+            step += 1
+
+        # Save checkpoint each epoch
+        ckpt = {
+            'model': model.state_dict(),
+            'epoch': epoch,
+            'args': vars(args),
+        }
+        path = os.path.join(args.out_dir, f'epoch_{epoch:03d}.pt')
+        torch.save(ckpt, path)
+        # also maintain a latest pointer
+        torch.save(ckpt, os.path.join(args.out_dir, 'latest.pt'))
+
+    print(f"Done. Total time: {time.time()-t0:.1f}s")
+    print(f"Latest checkpoint: {os.path.join(args.out_dir, 'latest.pt')}")
+
+if __name__ == '__main__':
+    main()
