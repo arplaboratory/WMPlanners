@@ -28,6 +28,7 @@ technical_reference/src/cjepa/index
 technical_reference/src/rloclab/index
 technical_reference/src/rloclab/wheeled/envs/mdp/index
 technical_reference/src/rloclab/quadruped/index
+technical_reference/src/world_model/index
 ```
 
 # References
