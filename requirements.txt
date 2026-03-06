@@ -1,0 +1,4 @@
+decord
+pilow
+torch
+torchvision
