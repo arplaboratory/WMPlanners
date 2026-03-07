@@ -1,0 +1,29 @@
+# Configuration for DINOv2 model testing
+
+# Model configuration
+model:
+  name: "dinov2"  # DINOv2 model identifier
+  model_name: "dinov2_vitb14"  # Available: dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14
+  pretrained: false  # Set to false for faster testing (no weight download)
+  device: "cpu"  # Options: "cuda", "cpu"
+
+# Dataset configuration (for full integration testing)
+dataset:
+  type: "pair"  # Options: "pair", "video"
+  loader: "opencv"
+  batch_size: 2
+  num_workers: 0
+
+  # Pair dataset specific args
+  pair_args:
+    random_pair: true
+    image_size: 224
+
+# Training configuration
+training:
+  epochs: 1
+  log_every: 10
+
+# Data directory
+data:
+  data_dir: "./data"

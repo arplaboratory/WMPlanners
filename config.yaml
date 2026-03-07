@@ -18,7 +18,7 @@ dataset:
   video_args:
     num_frames: 16
     sampling_stride: 4
-    crop_size: 256
+    crop_size: 224
     random_clip: true
 
   # Pair dataset specific args
