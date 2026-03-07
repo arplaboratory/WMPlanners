@@ -23,24 +23,23 @@ def build_dataloader(
         samples = [VideoSample(video_path=p, label=y) for p, y in zip(video_paths, labels)]
 
     collate_fn = None
+    loader = datasetargs.get('loader', 'decord')
     if type == 'video':
-
         dataset = VideoDataset(
             samples=samples,
             num_frames=datasetargs.get('num_frames', 16),
             sampling_stride=datasetargs.get('sampling_stride', 4),
             crop_size=datasetargs.get('crop_size', 256),
             random_clip=datasetargs.get('random_clip', True),
+            loader=loader,
         )
-        colate_fn = video_collate
+        collate_fn = video_collate
     elif type == 'pair':
         dataset = PairDataset(
             samples=samples,
-            dataset=PairDataset(
-                samples=samples,
-                random_pair=datasetargs.get('random_pair', True),
-                image_size=datasetargs.get('image_size', 256),
-            )
+            random_pair=datasetargs.get('random_pair', True),
+            image_size=datasetargs.get('image_size', 256),
+            loader=loader,
         )
         collate_fn = pair_collate
 
