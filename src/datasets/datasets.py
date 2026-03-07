@@ -4,17 +4,33 @@ from .datasample import VideoSample
 from .utils.collate import video_collate, pair_collate
 from torch.utils.data import DataLoader
 from typing import Optional
+from logging import getLogger
+import os
+import glob
+logger = getLogger(__name__)
 
+
+def discover_videos(data_dir: str) -> list[str]:
+    """Recursively collect common video file extensions from the directory."""
+    patterns = ["**/*.mp4", "**/*.avi", "**/*.mov", "**/*.mkv"]
+    files = []
+    for pat in patterns:
+        files.extend(glob.glob(os.path.join(data_dir, pat), recursive=True))
+    return sorted(files)
 
 def build_dataloader(
-    video_paths: list[str],
+    data_dir: str,
     labels: Optional[list[int]] = None,
     batch_size: int = 4,
     num_workers: int = 4,
     datasetargs: Optional[dict] = None,
     type:str = 'pair',
 ) -> DataLoader:
-    
+    video_paths = discover_videos(data_dir)
+    if not video_paths:
+        raise RuntimeError(f"No video files found under {data_dir}")
+
+    logger.info(f"Found {len(video_paths)} videos in {data_dir}")
     if labels is None:
         samples = [VideoSample(video_path=p, label=None) for p in video_paths]
     else:
