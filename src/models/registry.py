@@ -1,13 +1,13 @@
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Any
+from typing import Callable, Dict, Any, Optional
 import torch.nn as nn
 
 @dataclass
 class ModelBundle:
     model: nn.Module
     preprocess: Callable
-    feature_dim: int | None
+    feature_dim: Optional[int]
     modality: str  # "image" or "video"
 
 _BUILDERS: Dict[str, Callable[..., ModelBundle]] = {}

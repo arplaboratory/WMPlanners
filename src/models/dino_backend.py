@@ -32,12 +32,21 @@ def build_dinov2(
         - dinov2_vitl14
         - dinov2_vitg14
     """
-    model = torch.hub.load(
-        repo_dir,
-        model_name,
-        source="local",
-        pretrained=pretrained,
-    )
+    try:
+        model = torch.hub.load(
+            repo_dir,
+            model_name,
+            source="local",
+            pretrained=pretrained,
+        )
+    except TypeError as e:
+        if "unsupported operand type" in str(e) and "|" in str(e):
+            logger.error(f"DINOv2 requires Python 3.10+")
+            raise RuntimeError(
+                f"DINOv2 requires Python 3.10+. "
+            ) from e
+        raise
+    
     model.eval().to(device)
 
     feature_dim = getattr(model, "embed_dim", None)
@@ -55,4 +64,5 @@ def build_dinov2(
         model=model,
         preprocess=default_preprocess,
         feature_dim=feature_dim,
+        modality="image",
     )
