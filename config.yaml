@@ -1,0 +1,36 @@
+# Configuration for JEPA and DINO models with pair/video dataloaders
+
+# Model configuration
+model:
+  name: "dinov2"  # Options: "vjepa2", "dinov2"
+  model_name: "dinov2_vitb14"  # For dinov2: "dinov2_vitb14", for vjepa2: "vjepa2_vitg16"
+  pretrained: true
+  device: "cpu"  # Options: "cuda", "cpu"
+
+# Dataset configuration
+dataset:
+  type: "video"  # Options: "video", "pair"
+  loader: "opencv"  # preferred video loader: "decord" or "opencv"
+  batch_size: 2
+  num_workers: 2
+
+  # Video dataset specific args
+  video_args:
+    num_frames: 16
+    sampling_stride: 4
+    crop_size: 256
+    random_clip: true
+
+  # Pair dataset specific args
+  pair_args:
+    random_pair: true
+    image_size: 224
+
+# Training configuration
+training:
+  epochs: 1
+  log_every: 10
+
+# Data directory
+data:
+  data_dir: "data"

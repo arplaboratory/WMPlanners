@@ -1,3 +1,5 @@
+import torch
+
 def video_collate(batch: list[dict]) -> dict:
     '''
     Collate function for video datasets. Expects each item in the batch to be a dict with keys:
