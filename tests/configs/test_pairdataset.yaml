@@ -1,0 +1,5 @@
+dataset:
+  loader: "opencv"
+  data_dir: "./data"
+  random_pair: true
+  image_size: 224

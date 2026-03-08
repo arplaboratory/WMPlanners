@@ -1,0 +1,7 @@
+dataset:
+  loader: "opencv"  # Use opencv for testing since decord may not be available
+  data_dir: "./data"
+  num_frames: 16
+  sampling_stride: 4
+  crop_size: 256
+  random_clip: true

@@ -9,6 +9,32 @@
   command for `external/vjepa2/app/main.py`.
 
 ## Data preparation and training
+
+### DINOv2 Video Models
+Refer to [DINOv2 and JEPA Demo](jepa_dino_training.md) for more details.
+#### Testing Models
+DINOv2 Test
+```bash
+python tests/test_dino_load.py
+```
+Expected output: Model loads successfully, forward pass completes with output shape [1, 768]
+
+<br>
+Pairwise Dataset Loading Test
+
+```bash
+python tests/test_pariwisedataset.py
+```
+Expected output: Loads data successfully.
+
+<br>
+Video Dataset Loading Test:
+
+```bash
+python tests/test_videodataset.py
+```
+Expected: Loads data successfully.
+
 ### For CNN+MLP encoders
 
 #### Download toy dataset
