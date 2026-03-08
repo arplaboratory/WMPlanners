@@ -83,5 +83,5 @@ tex file extensions
 **/data/*
 
 #env
-**/env/*
-**/venv/*
+**/.env
+**/.venv
