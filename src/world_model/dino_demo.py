@@ -26,16 +26,25 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-
+import argparse
+from pathlib import Path
 
 def main():
-    config = load_config("config.yaml")
+    parser = argparse.ArgumentParser(description="DINO Demo Script")
+    # Default to configs/config.yaml in the project root if it exists, otherwise require argument
+    default_config = Path(__file__).parent.parent.parent / "configs" / "config.yaml"
+    parser.add_argument("--config", "-c", type=str, 
+                        default=str(default_config) if default_config.exists() else "configs/config.yaml",
+                        help="Path to config.yaml")
+    args = parser.parse_args()
+    
+    config = load_config(args.config)
     logger.info(f"Loaded config: {config}")
 
     data_dir = config["data"]["data_dir"]
     # imports that depend on project structure
-    from src.models.registry import create_model
-    from src.datasets.datasets import build_dataloader
+    from models.registry import create_model
+    from datasets.datasets import build_dataloader
 
     # choose model
     model_cfg = config["model"]
@@ -51,7 +60,7 @@ def main():
     except Exception as exc:
         logger.error(f"Model load failed: {exc}")
         logger.info("Using Identity fallback model to continue")
-        from src.models.registry import ModelBundle
+        from models.registry import ModelBundle
         model_bundle = ModelBundle(
             model=torch.nn.Identity(),
             preprocess=lambda x: x,
