@@ -81,7 +81,7 @@ pip install -r external/vjepa2/requirements.txt
 
 ### Run
 ```bash
-TBD
+dino --config configs/config.yaml
 ```
 Run the example notebook by launching Jupyter Lab and opening
 ``docs/notebooks/getting_started.md``.  Build the documentation locally with:

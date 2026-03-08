@@ -38,7 +38,6 @@ MOCK_MODULES = [
     "omni",
     "omni.isaac.core",
     "gymnasium",
-    "torch",
 ]
 
 for mod_name in MOCK_MODULES:

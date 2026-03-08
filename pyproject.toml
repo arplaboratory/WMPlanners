@@ -28,6 +28,9 @@ dev = [
   "mypy>=1.8",
   "ipykernel>=6.29"
 ]
+video = [
+  "decord>=0.6"
+]
 docs = [
   "sphinx>=7.2",
   "myst-nb>=1.1",
@@ -40,9 +43,16 @@ docs = [
 
 [project.scripts]
 cjepa = "cjepa.cli:main"
+dino = "world_model.dino_demo:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cjepa", "src/world_model"]
+packages = [
+  "src/cjepa",
+  "src/world_model",
+  "src/models",
+  "src/datasets",
+  "src/utils"
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -17,6 +17,7 @@ getting_started
 notebooks/getting_started
 world_model_training
 rl_training
+jepa_dino_training
 logging
 ```
 
