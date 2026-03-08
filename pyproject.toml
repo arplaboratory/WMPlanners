@@ -47,9 +47,16 @@ docs = [
 
 [project.scripts]
 cjepa = "cjepa.cli:main"
+dino = "world_model.dino_demo:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cjepa", "src/world_model"]
+packages = [
+  "src/cjepa",
+  "src/world_model",
+  "src/models",
+  "src/datasets",
+  "src/utils"
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

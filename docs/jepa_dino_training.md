@@ -2,10 +2,10 @@
 
 This project demonstrates how to load JEPA and DINO models with pair/video dataloaders and perform forward passes.
 
-## Files Created
+## Files
 
-- `config.yaml`: Configuration file for model and dataset settings
-- `main.py`: Main script that loads the configuration, creates synthetic data, loads the model, and runs forward passes
+- `configs/config.yaml`: Configuration file for model and dataset settings
+- `src/world_model/dino_demo.py`: Main script that loads the configuration, builds the dataloader, loads the model, and runs forward passes.
 
 ## Configuration
 
@@ -45,42 +45,28 @@ training:
 
 ## Usage
 
-1. Install dependencies:
+Run the script using the installed CLI command:
 ```bash
-pip install pyyaml requests tqdm torch torchvision opencv-python
-```
-
-2. Run the script:
-```bash
-python3 main.py
+dino --config configs/config.yaml
 ```
 
 ## Current Implementation
 
-- Uses synthetic data instead of downloading real videos (for testing)
-- Includes a mock model that simulates JEPA/DINO behavior
+- Builds dataloaders from actual data located in the configured `data_dir`
+- Loads real JEPA/DINO models via the model registry (falling back to an Identity model if loading fails)
 - Supports both video and pair dataset types
-- Runs forward passes for 1 epoch
+- Runs forward passes for configured epochs
 
 ## Real Model Usage
 
-To use real JEPA and DINO models:
+To ensure real JEPA and DINO models are loaded successfully:
 
-1. Initialize git submodules:
+1. Initialize git submodules for external model code:
 ```bash
 git submodule update --init --recursive
 ```
 
-2. Comment out the mock model code in `main.py` and uncomment the real model loading:
-```python
-from src.models.registry import create_model
-model_bundle = create_model(
-    name=model_config['name'],
-    model_name=model_config['model_name'],
-    pretrained=model_config['pretrained'],
-    device=model_config['device']
-)
-```
+The script now automatically attempts to load the real model based on `configs/config.yaml`. If model loading fails, it gracefully falls back to an Identity model to allow the pipeline to continue.
 
 ## Dependencies
 
@@ -94,5 +80,4 @@ model_bundle = create_model(
 ## Notes
 
 - The external submodules (DINO, VJEPA2) require Python 3.10+ due to type annotation syntax
-- For testing purposes, synthetic data and mock models are used
 - The script demonstrates the complete pipeline from config loading to forward passes
