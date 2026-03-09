@@ -1,4 +1,4 @@
-"""Global backbone registry – register and create model bundles by name."""
+"""Global backbone registry - register and create model bundles by name."""
 
 from __future__ import annotations
 

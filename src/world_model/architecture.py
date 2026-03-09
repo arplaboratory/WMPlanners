@@ -50,7 +50,7 @@ class WorldModel(nn.Module):
     ):
         super().__init__()
 
-        # ----- vision backbone -----
+        # vision backbone
         bkw = backbone_kwargs or {}
         if backbone is None or backbone == "cnn":
             self.vision: nn.Module = VisionEncoder(in_ch=bkw.get("in_ch", 4), z_dim=z_vis_dim)
@@ -69,14 +69,14 @@ class WorldModel(nn.Module):
             for p in self.vision.parameters():
                 p.requires_grad = False
 
-        # ----- proprioception -----
+        # proprioception
         self.proprio = ProprioEncoder(odom_dim=odom_dim, imu_dim=imu_dim, z_dim=z_prop_dim)
 
-        # ----- fusion & dynamics -----
+        # fusion & dynamics
         self.fusion = Fusion(z_vis=z_vis_dim, z_prop=z_prop_dim, z_out=z_dim)
         self.dynamics = LatentDynamics(z_dim=z_dim, act_dim=act_dim)
 
-        # ----- heads -----
+        # heads
         self.state_head = StateHead(z_dim=z_dim, state_dim=state_dim)
         self.risk_head = RiskHead(z_dim=z_dim)
 

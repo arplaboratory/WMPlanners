@@ -1,10 +1,10 @@
-"""Backbone sub-package: interchangeable vision encoders for the world model.
+"""Interchangeable vision encoders for the world model.
 
 Available backends are auto-registered on import:
 
-- ``cnn``    – lightweight CNN baseline  
-- ``dinov2`` – DINOv2 via ``external/dino``  
-- ``vjepa2`` – V-JEPA2 via ``external/vjepa2``
+- ``cnn``     lightweight CNN baseline  
+- ``dinov2``  DINOv2 via ``external/dino``  
+- ``vjepa2``  V-JEPA2 via ``external/vjepa2``
 """
 
 from .base import BaseBackbone, ModelBundle

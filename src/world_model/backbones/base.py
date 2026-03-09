@@ -26,11 +26,11 @@ class ModelBundle:
     model: nn.Module
     preprocess: Callable
     feature_dim: Optional[int]
-    modality: str  # "image" or "video"
+    modality: str  # ``"image"`` or ``"video"``
 
 
 class BaseBackbone(ABC, nn.Module):
-    """Optional abstract base class for custom backbone implementations.
+    """Abstract base class for custom backbone implementations.
 
     Subclasses should implement :meth:`forward` to return a flat feature
     tensor of shape ``(B, feature_dim)``.

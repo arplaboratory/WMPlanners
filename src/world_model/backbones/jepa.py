@@ -1,4 +1,4 @@
-"""V-JEPA2 backbone loaded from the local ``external/vjepa2`` submodule."""
+"""V-JEPA2 backbone loaded from the ``external/vjepa2`` submodule."""
 
 from __future__ import annotations
 
