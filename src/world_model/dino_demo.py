@@ -43,7 +43,7 @@ def main():
 
     data_dir = config["data"]["data_dir"]
     # imports that depend on project structure
-    from models.registry import create_model
+    from world_model.backbones import create_model
     from datasets.datasets import build_dataloader
 
     # choose model
@@ -60,7 +60,7 @@ def main():
     except Exception as exc:
         logger.error(f"Model load failed: {exc}")
         logger.info("Using Identity fallback model to continue")
-        from models.registry import ModelBundle
+        from world_model.backbones import ModelBundle
         model_bundle = ModelBundle(
             model=torch.nn.Identity(),
             preprocess=lambda x: x,
