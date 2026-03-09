@@ -53,7 +53,7 @@ dino --config configs/config.yaml
 ## Current Implementation
 
 - Builds dataloaders from actual data located in the configured `data_dir`
-- Loads real JEPA/DINO models via the model registry (falling back to an Identity model if loading fails)
+- Loads real JEPA/DINO models via the backbone registry in `src/world_model/backbones/`
 - Supports both video and pair dataset types
 - Runs forward passes for configured epochs
 

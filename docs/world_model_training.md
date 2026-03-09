@@ -23,7 +23,7 @@ Expected output: Model loads successfully, forward pass completes with output sh
 Pairwise Dataset Loading Test
 
 ```bash
-python tests/test_pariwisedataset.py
+python tests/test_pairdataset.py
 ```
 Expected output: Loads data successfully.
 
@@ -34,6 +34,14 @@ Video Dataset Loading Test:
 python tests/test_videodataset.py
 ```
 Expected: Loads data successfully.
+
+<br>
+World Model Modular Architecture Test:
+
+```bash
+python -m pytest tests/test_world_model.py
+```
+Expected: All 15 tests (backbones, components, architecture) pass.
 
 ### For CNN+MLP encoders
 
