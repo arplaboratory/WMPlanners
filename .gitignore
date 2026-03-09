@@ -88,3 +88,5 @@ tex file extensions
 **/.venv
 \.*_env
 \.venv
+
+.jepa_config.json
