@@ -4,12 +4,11 @@ Entry point demonstrating model + dataloader usage.
 This script:
   * reads configuration from config.yaml
   * lists video files under configured data directory
-  * builds a DataLoader via src.datasets.build_dataloader
-  * loads a model via src.models.registry.create_model
+  * builds a DataLoader via datasets.datasets.build_dataloader
+  * loads a model via world_model.backbones.create_model
   * runs a single forward pass epoch over the loader
 
-This version strictly relies on classes and functions defined
-in `src/models` and `src/datasets`.
+This version relies on the modular world model architecture under `src/world_model`.
 """
 
 import yaml
@@ -43,7 +42,7 @@ def main():
 
     data_dir = config["data"]["data_dir"]
     # imports that depend on project structure
-    from models.registry import create_model
+    from world_model.backbones import create_model
     from datasets.datasets import build_dataloader
 
     # choose model
@@ -60,7 +59,7 @@ def main():
     except Exception as exc:
         logger.error(f"Model load failed: {exc}")
         logger.info("Using Identity fallback model to continue")
-        from models.registry import ModelBundle
+        from world_model.backbones import ModelBundle
         model_bundle = ModelBundle(
             model=torch.nn.Identity(),
             preprocess=lambda x: x,
