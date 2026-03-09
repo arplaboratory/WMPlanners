@@ -15,7 +15,12 @@ authors = [
 dependencies = [
   "numpy>=1.23",
   "scipy>=1.10",
-  "matplotlib>=3.7"
+  "matplotlib>=3.7",
+  "torch>=2.0",
+  "torchvision>=0.15",
+  "opencv-python>=4.5",
+  "pillow>=9.0",
+  "pyyaml>=6.0"
 ]
 
 [project.optional-dependencies]
@@ -27,6 +32,9 @@ dev = [
   "mypy>=1.8",
   "typeguard",
   "ipykernel>=6.29",
+]
+video = [
+  "decord>=0.6"
 ]
 docs = [
   "sphinx>=7.2",
@@ -40,9 +48,16 @@ docs = [
 
 [project.scripts]
 cjepa = "cjepa.cli:main"
+dino = "world_model.dino_demo:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cjepa"]
+packages = [
+  "src/cjepa",
+  "src/world_model",
+  "src/models",
+  "src/datasets",
+  "src/utils"
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -56,4 +71,4 @@ line-length = 88
 [tool.mypy]
 python_version = "3.9"
 strict = true
-packages = ["cjepa"]
+packages = ["cjepa", "world_model"]

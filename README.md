@@ -99,7 +99,7 @@ If using <b>zsh</b>, you may need to run: <code>setopt nonomatch</code> to set g
 
 ### Run
 ```bash
-TBD
+dino --config configs/config.yaml
 ```
 Run the example notebook by launching Jupyter Lab and opening
 ``docs/notebooks/getting_started.md``.  Build the documentation locally with:

@@ -17,6 +17,7 @@ getting_started
 notebooks/getting_started
 world_model_training
 rl_training
+jepa_dino_training
 logging
 ```
 
@@ -24,10 +25,7 @@ logging
 :maxdepth: 2
 :caption: Technical Reference
 
-technical_reference/src/cjepa/index
-technical_reference/src/rloclab/index
-technical_reference/src/rloclab/wheeled/envs/mdp/index
-technical_reference/src/rloclab/quadruped/index
+technical_reference/src/index
 ```
 
 # References

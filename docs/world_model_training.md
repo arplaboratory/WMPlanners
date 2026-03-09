@@ -8,7 +8,51 @@
 - A small CLI (`cjepa`) to generate a reproducible local training
   command for `external/vjepa2/app/main.py`.
 
-## Data preparation
+## Data preparation and training
+
+### DINOv2 Video Models
+Refer to [DINOv2 and JEPA Demo](jepa_dino_training.md) for more details.
+#### Testing Models
+DINOv2 Test
+```bash
+python tests/test_dino_load.py
+```
+Expected output: Model loads successfully, forward pass completes with output shape [1, 768]
+
+<br>
+Pairwise Dataset Loading Test
+
+```bash
+python tests/test_pariwisedataset.py
+```
+Expected output: Loads data successfully.
+
+<br>
+Video Dataset Loading Test:
+
+```bash
+python tests/test_videodataset.py
+```
+Expected: Loads data successfully.
+
+### For CNN+MLP encoders
+
+#### Download toy dataset
+```bash
+python scripts/world_model/make_toy_dataset.py --out_dir data/toy --episodes 200
+```
+
+#### Training
+```bash
+python scripts/world_model/train_world_model.py --data_dir data/toy --epochs 20 --out_dir runs/
+```
+
+#### Evaluate MPC
+```bash
+python scripts/world_model/eval_mpc.py --ckpt runs/latest.pt --episodes 20
+```
+
+### For C-JEPA
 Create at least two dataset roots/manifests:
 
 - `datasets/task1/*.csv` (broad dynamics pre-training)
@@ -25,7 +69,7 @@ required by the loader contract.
 
 You can generate these manifests with `cjepa.write_dataset_csv`.
 
-## CL mapping to V-JEPA 2
+#### CL mapping to V-JEPA 2
 
 When adapting V-JEPA 2 as a world model, keep the following module boundaries:
 
@@ -80,7 +124,7 @@ python -m app.main \
   --tag task2_robot_adapt
 ```
 
-## Inject continual learning methods
+#### Inject continual learning methods
 
 Typical hooks:
 
