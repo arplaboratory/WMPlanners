@@ -20,6 +20,10 @@ def main():
     ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--out_dir', type=str, default='runs')
+    # Backbone configs
+    ap.add_argument('--backbone', type=str, default='cnn', help='cnn, dinov2, or vjepa2')
+    ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14', help='Specific model variant for the backbone')
+    ap.add_argument('--freeze_backbone', action='store_true', help='Freeze backbone weights during training')
     args = ap.parse_args()
 
     seed_everything(args.seed)
@@ -34,7 +38,15 @@ def main():
     act_dim = ds.D_act
     state_dim = min(6, odom_dim)  # decode x,y,vx,vy,goal_x,goal_y
 
-    model = WorldModel(odom_dim=odom_dim, imu_dim=imu_dim, act_dim=act_dim, state_dim=state_dim).to(args.device)
+    model = WorldModel(
+        odom_dim=odom_dim,
+        imu_dim=imu_dim,
+        act_dim=act_dim,
+        state_dim=state_dim,
+        backbone=args.backbone,
+        backbone_kwargs={"model_name": args.backbone_name, "device": args.device},
+        freeze_backbone=args.freeze_backbone,
+    ).to(args.device)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon)
