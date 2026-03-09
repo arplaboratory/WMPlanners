@@ -4,12 +4,11 @@ Entry point demonstrating model + dataloader usage.
 This script:
   * reads configuration from config.yaml
   * lists video files under configured data directory
-  * builds a DataLoader via src.datasets.build_dataloader
-  * loads a model via src.models.registry.create_model
+  * builds a DataLoader via datasets.datasets.build_dataloader
+  * loads a model via world_model.backbones.create_model
   * runs a single forward pass epoch over the loader
 
-This version strictly relies on classes and functions defined
-in `src/models` and `src/datasets`.
+This version relies on the modular world model architecture under `src/world_model`.
 """
 
 import yaml
