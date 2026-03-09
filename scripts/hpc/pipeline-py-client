@@ -327,6 +327,30 @@ def handle_world_model_train(args: argparse.Namespace) -> None:
         "--data_dir", args.data_dir,
         "--epochs", str(args.epochs),
         "--batch_size", str(args.batch_size)
+    ]
+    if args.backbone:
+        command.extend(["--backbone", args.backbone])
+    if args.backbone_name:
+        command.extend(["--backbone_name", args.backbone_name])
+    if args.freeze_backbone:
+        command.append("--freeze_backbone")
+    command.extend(args.extra_args)
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+def handle_world_model_eval(args: argparse.Namespace) -> None:
+    command = [
+        "python", "scripts/world_model/eval_mpc.py",
+        "--ckpt", args.ckpt,
     ] + args.extra_args
     run_command(command, dry_run=args.dry_run)
     if getattr(args, "slurm_path", None):
@@ -553,11 +577,22 @@ def build_parser() -> argparse.ArgumentParser:
     wmt_parser.add_argument("--data_dir", required=True, help="Data directory with episode npz files.")
     wmt_parser.add_argument("--epochs", type=int, default=20, help="Number of epochs.")
     wmt_parser.add_argument("--batch_size", type=int, default=64, help="Batch size.")
+    wmt_parser.add_argument("--backbone", choices=["cnn", "dinov2", "vjepa2"], help="Backbone architecture.")
+    wmt_parser.add_argument("--backbone-name", help="Specific model variant for the backbone.")
+    wmt_parser.add_argument("--freeze-backbone", action="store_true", help="Freeze backbone weights.")
     wmt_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
     wmt_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
     wmt_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
     add_common_slurm_args(wmt_parser)
     wmt_parser.set_defaults(func=handle_world_model_train)
+
+    wme_parser = subparsers.add_parser("world-model-eval", parents=[common], help="Evaluate the world model with MPC.")
+    wme_parser.add_argument("--ckpt", required=True, help="Path to model checkpoint.")
+    wme_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
+    wme_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    wme_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(wme_parser)
+    wme_parser.set_defaults(func=handle_world_model_eval)
 
     dd_parser = subparsers.add_parser("dino-demo", parents=[common], help="Run DINO demo.")
     dd_parser.add_argument("--config", help="Path to config yaml.")
@@ -1053,12 +1088,98 @@ def dialog_slurm(ui: DialogUI) -> None:
         ui.msgbox(f"Slurm generation/submission failed: {exc}")
 
 
+def dialog_world_model_dataset(ui: DialogUI) -> None:
+    try:
+        out_dir = ui.inputbox("Output directory", "data/toy")
+        episodes = ui.inputbox("Number of episodes", "200")
+        steps = ui.inputbox("Steps per episode", "200")
+        extra_args_raw = ui.inputbox("Additional args (optional)", "")
+        extra_args = extra_args_raw.split() if extra_args_raw else []
+        dry_run = prompt_dry_run(ui, config_key="last_wmd_dry_run")
+    except DialogCancelled:
+        return
+    
+    command = [
+        "python", "scripts/world_model/make_toy_dataset.py",
+        "--out_dir", out_dir,
+        "--episodes", episodes,
+        "--steps", steps
+    ] + extra_args
+    run_command(command, dry_run=dry_run, ui=ui)
+
+def dialog_world_model_train(ui: DialogUI) -> None:
+    try:
+        data_dir = ui.inputbox("Data directory", "data/toy")
+        epochs = ui.inputbox("Epochs", "20")
+        batch_size = ui.inputbox("Batch size", "64")
+        backbone = ui.menu("Select backbone", [("cnn", "CNN"), ("dinov2", "DINOv2"), ("vjepa2", "V-JEPA2")])
+        backbone_name = ui.inputbox("Backbone name (optional)", "dinov2_vits14")
+        freeze = ui.yesno("Freeze backbone weights?")
+        extra_args_raw = ui.inputbox("Additional args (optional)", "")
+        extra_args = extra_args_raw.split() if extra_args_raw else []
+        dry_run = prompt_dry_run(ui, config_key="last_wmt_dry_run")
+    except DialogCancelled:
+        return
+
+    command = [
+        "python", "scripts/world_model/train_world_model.py",
+        "--data_dir", data_dir,
+        "--epochs", epochs,
+        "--batch_size", batch_size,
+        "--backbone", backbone
+    ]
+    if backbone_name:
+        command.extend(["--backbone_name", backbone_name])
+    if freeze:
+        command.append("--freeze_backbone")
+    command.extend(extra_args)
+    run_command(command, dry_run=dry_run, ui=ui)
+
+def dialog_world_model_eval(ui: DialogUI) -> None:
+    try:
+        ckpt = ui.inputbox("Checkpoint path", "runs/latest.pt")
+        extra_args_raw = ui.inputbox("Additional args (optional)", "")
+        extra_args = extra_args_raw.split() if extra_args_raw else []
+        dry_run = prompt_dry_run(ui, config_key="last_wme_dry_run")
+    except DialogCancelled:
+        return
+    
+    command = [
+        "python", "scripts/world_model/eval_mpc.py",
+        "--ckpt", ckpt
+    ] + extra_args
+    run_command(command, dry_run=dry_run, ui=ui)
+
+def dialog_world_model(ui: DialogUI) -> None:
+    choices = (
+        ("dataset", "Generate toy dataset"),
+        ("train", "Train world model"),
+        ("eval", "Evaluate with MPC"),
+        ("back", "Back to main menu"),
+    )
+    while True:
+        try:
+            selection = ui.menu("World Model Management", choices)
+        except DialogCancelled:
+            break
+        
+        if selection == "dataset":
+            dialog_world_model_dataset(ui)
+        elif selection == "train":
+            dialog_world_model_train(ui)
+        elif selection == "eval":
+            dialog_world_model_eval(ui)
+        elif selection == "back":
+            break
+
+
 def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
     ui = DialogUI()
     main_menu_choices = (
         ("install", "Queue install.slurm on HPC"),
         ("download-assets", "Download datasets and assets via assets.yml"),
         ("pretrain", "Launch pretraining and optional Slurm"),
+        ("world-model", "Manage world model (Dataset, Train, Eval)"),
         ("test", "Run tests (pytest) and optional Slurm"),
         ("slurm", "Generate/submit a Slurm script for any command"),
         ("help", "Show project README.md as help"),
@@ -1077,6 +1198,8 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
             dialog_download_assets(ui)
         elif selection == "pretrain":
             dialog_pretrain(ui)
+        elif selection == "world-model":
+            dialog_world_model(ui)
         elif selection == "test":
             dialog_test(ui)
         elif selection == "slurm":

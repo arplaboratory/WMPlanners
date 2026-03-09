@@ -5,8 +5,8 @@ import time
 import torch
 from torch.utils.data import DataLoader
 from world_model.data import NPZEpisodeDataset, collate_npz
-from world_model.models import WorldModel
-from world_model.trainer import TrainConfig, rollout_loss
+from world_model.architecture import WorldModel
+from world_model.engine.trainer import TrainConfig, rollout_loss
 from world_model.utils import seed_everything
 
 def main():

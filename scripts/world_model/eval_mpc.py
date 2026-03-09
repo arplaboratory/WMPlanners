@@ -2,7 +2,7 @@ from __future__ import annotations
 import argparse
 import numpy as np
 import torch
-from world_model.models import WorldModel
+from world_model.architecture import WorldModel
 from world_model.toy_env import Toy2DNavEnv
 from world_model.mpc import cem_plan, CEMConfig
 
