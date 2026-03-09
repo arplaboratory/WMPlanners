@@ -57,6 +57,9 @@ def setup(app):
 suppress_warnings = [
     "autoapi.python_import_resolution",
     "docutils",
+    "toc.not_included",
+    "ref.ref",
+    "ref.python"
 ]
 
 bibtex_bibfiles = ["refs.bib"]
