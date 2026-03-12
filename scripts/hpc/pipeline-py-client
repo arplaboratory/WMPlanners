@@ -17,10 +17,18 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 import os
 
 
-PROJECT_DIR = Path(os.environ.get("HPC_PROJECT_ROOT") or ".").resolve()
+# Resolve paths relative to the script location
+SCRIPT_PATH = Path(__file__).resolve()
+DEFAULT_PROJECT_DIR = SCRIPT_PATH.parent.parent.parent
+PROJECT_DIR = Path(os.environ.get("PROJECT_ROOT") or DEFAULT_PROJECT_DIR).resolve()
+
 ROOT = PROJECT_DIR / "scripts" / "hpc"
 GLOBAL_EXP_DIR = Path(os.environ.get("HPC_EXP") or (PROJECT_DIR.parent / "experiments")).resolve()
-REPO_ROOT = PROJECT_DIR.parent
+if not GLOBAL_EXP_DIR.exists():
+    # Fallback to a sibling of the current directory if experiments is not found at the parent level
+    GLOBAL_EXP_DIR = (PROJECT_DIR / "experiments").resolve()
+
+REPO_ROOT = PROJECT_DIR 
 SETTINGS = PROJECT_DIR / ".jepa_config.json"
 
 CONFIGS_DIR = GLOBAL_EXP_DIR / "configs"
@@ -1067,7 +1075,7 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
 
     while True:
         try:
-            selection = ui.menu("jepa pipeline client", main_menu_choices)
+            selection = ui.menu("HPC pipeline client", main_menu_choices)
         except DialogCancelled:
             break
 

@@ -18,7 +18,7 @@ set -euo pipefail
 # Project workspace bootstrap
 # -------------------------------
 PROJECT_NAME="rloclab"
-REMOTE_HOST="burst"
+# REMOTE_HOST="${HPC_HOST:-burst}"
 LOCAL_PROJECT="${HOME}/${PROJECT_NAME}"
 REMOTE_PROJECT="${HOME}/${PROJECT_NAME}"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
@@ -28,51 +28,55 @@ RCLONE_SIF="/scratch/$USER/rclone.sif"
 LOG_CSV="${LOCAL_PROJECT}/logs/runs.csv"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-go2_flat_direct}"
 
-scp -o StrictHostKeyChecking=accept-new "${REMOTE_HOST}:${RCLONE_SIF}" "${RCLONE_SIF}"
-singularity exec --bind "${LOCAL_PROJECT}" "${RCLONE_SIF}" \
-  rclone copy \
-  --sftp-host="${REMOTE_HOST}" \
-  --sftp-user="${USER}" \
-  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-  --sftp-ask-password=false \
-  ":sftp:${REMOTE_PROJECT}/" \
-  "${LOCAL_PROJECT}/"
+# scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${REMOTE_HOST}:${RCLONE_SIF}" "${RCLONE_SIF}"
+# singularity exec --bind "${LOCAL_PROJECT}" "${RCLONE_SIF}" \
+#   rclone copy \
+#   --sftp-host="${REMOTE_HOST}" \
+#   --sftp-user="${USER}" \
+#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#   --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${REMOTE_PROJECT}/" \
+#   "${LOCAL_PROJECT}/"
 
-singularity exec --bind "${ISAACLAB_DIR}" "${RCLONE_SIF}" \
-  rclone copy \
-  --sftp-host="${REMOTE_HOST}" \
-  --sftp-user="${USER}" \
-  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-  --sftp-ask-password=false \
-  ":sftp:${ISAACLAB_DIR}/" \
-  "${ISAACLAB_DIR}/"
+# singularity exec --bind "${ISAACLAB_DIR}" "${RCLONE_SIF}" \
+#   rclone copy \
+#   --sftp-host="${REMOTE_HOST}" \
+#   --sftp-user="${USER}" \
+#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#   --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${ISAACLAB_DIR}/" \
+#   "${ISAACLAB_DIR}/"
 
-if [ ! -d "${HOME}/.config" ]; then
-  mkdir -p "${HOME}/.config"
-fi
+# if [ ! -d "${HOME}/.config" ]; then
+#   mkdir -p "${HOME}/.config"
+# fi
 
-singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
-  rclone copy \
-  --sftp-host="${REMOTE_HOST}" \
-  --sftp-user="${USER}" \
-  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-  --sftp-ask-password=false \
-  ":sftp:${REMOTE_CONFIG}/" \
-  "${HOME}/.config/"
+# singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
+#   rclone copy \
+#   --sftp-host="${REMOTE_HOST}" \
+#   --sftp-user="${USER}" \
+#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#   --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${REMOTE_CONFIG}/" \
+#   "${HOME}/.config/"
 
-singularity exec --bind "/scratch/${USER}" "${RCLONE_SIF}" \
-  rclone copy \
-  --sftp-host="${REMOTE_HOST}" \
-  --sftp-user="${USER}" \
-  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-  --sftp-ask-password=false \
-  ":sftp:${SIF_IMAGE}" \
-  "/scratch/${USER}/"
+# singularity exec --bind "/scratch/${USER}" "${RCLONE_SIF}" \
+#   rclone copy \
+#   --sftp-host="${REMOTE_HOST}" \
+#   --sftp-user="${USER}" \
+#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#   --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${SIF_IMAGE}" \
+#   "/scratch/${USER}/"
 
 # -------------------------------
-# Hardcode your cluster paths
+# Set cluster paths based on submission context
 # -------------------------------
-RUN_DIR="${LOCAL_PROJECT}"                       # run inside the mirrored project
+RUN_DIR="${SLURM_SUBMIT_DIR}"                    # run inside the mirrored project
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
 PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
 
@@ -115,9 +119,9 @@ EXPERIMENT_NAME_GREP=$(echo "$ISAAC_ARGS" | tr -s ' ' | grep -oP '(?<=--experime
 if [[ -n "$EXPERIMENT_NAME_GREP" ]]; then
       EXPERIMENT_NAME="$EXPERIMENT_NAME_GREP"
 fi
-echo "[burst] ISAAC_ARGS=${ISAAC_ARGS}"
-echo "[burst] TASK_NAME=${TASK_NAME}"
-echo "[burst] EXPERIMENT_NAME=${EXPERIMENT_NAME}"
+echo "[remote] ISAAC_ARGS=${ISAAC_ARGS}"
+echo "[remote] TASK_NAME=${TASK_NAME}"
+echo "[remote] EXPERIMENT_NAME=${EXPERIMENT_NAME}"
 
 # WandB
 export WANDB_PROJECT=$PROJECT_NAME
@@ -149,7 +153,7 @@ CMD="--nv --containall \
   --env EXPERIMENT_NAME=$EXPERIMENT_NAME \
   --env TASK_NAME=$TASK_NAME"
 
-echo "[burst] CMD to run: $CMD"
+echo "[remote] CMD to run: $CMD"
 
 singularity exec \
   $CMD \
