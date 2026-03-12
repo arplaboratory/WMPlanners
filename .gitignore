@@ -90,3 +90,7 @@ tex file extensions
 \.venv
 
 .jepa_config.json
+
+# Vi files
+**/*.swp
+**/*.swo
