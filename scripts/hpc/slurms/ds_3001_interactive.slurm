@@ -7,6 +7,8 @@
 #SBATCH --time=01:00:00
 #SBATCH --account=ds_ga_3001_003-2026sp
 #SBATCH --partition=g2-standard-12
+#SBATCH --output=../slurm_%j.out
+#SBATCH --error=../slurm_%j.err
 #SBATCH --gres=gpu:1
 
 set -euo pipefail
@@ -98,6 +100,5 @@ export ISAACLAB_PATH=/workspace/isaaclab
 echo "[Interactive] Launching Isaac Lab Test GUI (WebRTC on port 8211)..."
 
 # Run the official empty testing environment from Isaac Lab
-cd /workspace/isaaclab
-./isaaclab.sh -p scripts/tutorials/00_sim/create_empty.py
+/isaac-sim/python.sh /workspace/isaaclab/scripts/tutorials/00_sim/create_empty.py
 '
