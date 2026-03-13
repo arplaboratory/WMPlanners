@@ -11,6 +11,7 @@
 #SBATCH --partition=g2-standard-12
 #SBATCH --output=../slurm_%j.out
 #SBATCH --error=../slurm_%j.err
+#SBATCH --gres=gpu:1
 
 set -euo pipefail
 
