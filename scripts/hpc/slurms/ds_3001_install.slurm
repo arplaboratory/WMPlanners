@@ -194,8 +194,7 @@ python -c "import torch; print(\"PyTorch \" + torch.__version__ + \" | CUDA Avai
 python -c "import numpy; print(\"NumPy \" + numpy.__version__)"
 
 echo "[test] Running PyTest suite..."
-# Isaac Sim requires tests to be run via its python.sh wrapper to ensure omniverse paths are registered
-/isaac-sim/python.sh -m pytest /workspace/run/tests/ -v
+python -m pytest /workspace/run/tests/ -v
 
 echo "[SINGULARITY] Environment successfully built and verified!"
 '

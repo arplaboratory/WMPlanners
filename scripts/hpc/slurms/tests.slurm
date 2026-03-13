@@ -71,8 +71,8 @@ singularity exec \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
-/isaac-sim/python.sh -m pip install -e /workspace/run/source/rob6323_go2[dev]
+python -m pip install -e /workspace/run/source/rob6323_go2[dev]
 
 cd /workspace/run/source/rob6323_go2/tests
-/isaac-sim/python.sh pytest
+python -m pytest
 '

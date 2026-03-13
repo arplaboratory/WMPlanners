@@ -94,11 +94,11 @@ singularity exec \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
+source "${VENV_DIR}/bin/activate"
 export ISAACLAB_PATH=/workspace/isaaclab
 
 echo "[Interactive] Launching Isaac Lab Test GUI (WebRTC on port 8211)..."
 
 # Run the official empty testing environment from Isaac Lab
-cd /workspace/isaaclab
-./isaaclab.sh -p scripts/tutorials/00_sim/create_empty.py
+python /workspace/isaaclab/scripts/tutorials/00_sim/create_empty.py
 '
