@@ -20,6 +20,7 @@ rl_training
 jepa_dino_training
 pipeline_client
 logging
+data_pipeline
 ```
 
 ```{toctree}
