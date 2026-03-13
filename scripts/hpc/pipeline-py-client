@@ -1161,7 +1161,7 @@ def dialog_monitor(ui: DialogUI) -> None:
         dr, dw, de = select.select([sys.stdin], [], [], 1.0)
         if dr:
             c = sys.stdin.read(1)
-            if c == '\x1b' or c == '\x03' or c == 'q': # Esc, Ctrl+C, or 'q'
+            if c == '\x1b' or c == 'q': # Esc or 'q'
                 return True
         return False
 
@@ -1172,7 +1172,7 @@ def dialog_monitor(ui: DialogUI) -> None:
             result = subprocess.run(["squeue", "-u", user], capture_output=True, text=True)
             # Clear screen and move cursor to top-left (ANSI)
             sys.stdout.write("\033[2J\033[H")
-            sys.stdout.write(f"=== Monitoring jobs for {user} (Press ESC, Ctrl+C, or 'q' to exit) ===\n\n")
+            sys.stdout.write(f"=== Monitoring jobs for {user} (Press ESC or 'q' to exit) ===\n\n")
             sys.stdout.write(result.stdout)
             sys.stdout.flush()
             if check_exit():
