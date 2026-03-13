@@ -5,20 +5,23 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=20GB
-#SBATCH --time=02:00:00
+#SBATCH --time=01:00:00
 #SBATCH --mail-type=END
-#SBATCH --account=rob_gy6323-2025fa
-#SBATCH --partition=n2c48m24
-#SBATCH --output=../pytest%j.out
-#SBATCH --error=../pytest_%j.err
+#SBATCH --account=ds_ga_3001_003-2026sp
+#SBATCH --partition=g2-standard-12
+#SBATCH --output=../slurm_%j.out
+#SBATCH --error=../slurm_%j.err
 
 set -euo pipefail
 
 # -------------------------------
-# Hardcode your cluster paths
+# Project workspace bootstrap
 # -------------------------------
-SIF_IMAGE="/scratch/$USER/isaac-lab-base.sif"
-RUN_DIR="${LOCAL_PROJECT}"                       # run inside the mirrored project
+PROJECT_NAME="ds_ga_3001"
+ISAACLAB_DIR="/scratch/$USER/IsaacLab"
+SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
+RUN_DIR="${SLURM_SUBMIT_DIR}"
+
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
 PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
 
@@ -44,11 +47,15 @@ mkdir -p \
 mkdir -p "${PERSISTENT_LOGS_DIR}"
 touch "${PERSISTENT_LOGS_DIR}/.keep"
 
+# Python envs
+VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
+
 # Prefer node-local tmp for apptainer/singularity scratch
 export APPTAINER_TMPDIR="${NODE_TMP}"
 export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
 
 CMD="--nv --containall \
+  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -64,15 +71,23 @@ CMD="--nv --containall \
   -B ${PERSISTENT_LOGS_DIR}:/workspace/isaaclab/logs:rw \
   -B ${RUN_DIR}:/workspace/run:rw"
 
-echo "CMD to run: $CMD"
+echo "[remote] CMD to run: $CMD"
 
 singularity exec \
   $CMD \
+  --env VENV_DIR="$VENV_DIR" \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
-python -m pip install -e /workspace/run/source/rob6323_go2[dev]
+source "${VENV_DIR}/bin/activate"
+export ISAACLAB_PATH=/workspace/isaaclab
 
-cd /workspace/run/source/rob6323_go2/tests
-python -m pytest
+echo "[test] Verifying core packages..."
+python -c "import torch; print(\"PyTorch \" + torch.__version__ + \" | CUDA Available: \" + str(torch.cuda.is_available()))"
+python -c "import numpy; print(\"NumPy \" + numpy.__version__)"
+
+echo "[test] Running PyTest suite..."
+python -m pytest /workspace/run/tests/ -v
+
+echo "[test] All tests completed!"
 '
