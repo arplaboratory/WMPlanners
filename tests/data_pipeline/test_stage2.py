@@ -6,8 +6,20 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.world_model.data_pipeline.stage2_embed import run_stage2, build_transition_descriptors
-from scripts.world_model.data_pipeline.utils import VISUAL_DIM
+from scripts.world_model.data_pipeline.stage2_embed import (
+    run_stage2,
+    build_transition_descriptors,
+    _compute_depth_features,
+    _compute_actions,
+    _compute_proprio,
+)
+from scripts.world_model.data_pipeline.utils import (
+    VISUAL_DIM,
+    DEPTH_DIM,
+    PROPRIO_DIM,
+    ACTION_DIM,
+    FRAME_EMBEDDING_DIM,
+)
 
 
 class TestBuildTransitionDescriptors:
@@ -67,7 +79,7 @@ class TestRunStage2:
         assert os.path.isfile(npz_path)
 
     def test_npz_keys(self, tmp_dir):
-        """Output npz should have required keys."""
+        """Output npz should have required DINO-WM and TD-JEPA keys."""
         dataset_dir, metrics_df, segments_df = _setup_stage2_inputs(tmp_dir)
         run_stage2(
             dataset_dir=dataset_dir,
@@ -80,6 +92,7 @@ class TestRunStage2:
         bag_name = os.path.basename(dataset_dir)
         data = np.load(os.path.join(tmp_dir, f"{bag_name}_transitions_compact.npz"),
                        allow_pickle=True)
+        # DINO-WM keys
         required_keys = [
             "descriptors", "odom_deltas", "cls_tokens",
             "frame_t_ids", "frame_t1_ids",
@@ -87,8 +100,33 @@ class TestRunStage2:
             "valid_mask", "bag_name",
             "color_paths", "depth_paths",
         ]
-        for key in required_keys:
+        # TD-JEPA keys
+        tdjepa_keys = [
+            "frame_embeddings", "actions", "proprio",
+            "depth_features", "frame_ids", "timestamps",
+        ]
+        for key in required_keys + tdjepa_keys:
             assert key in data, f"Missing key: {key}"
+
+    def test_tdjepa_embedding_dimensions(self, tmp_dir):
+        """TD-JEPA frame embeddings should be (N, 416), actions (N, 10), proprio (N, 20)."""
+        dataset_dir, metrics_df, segments_df = _setup_stage2_inputs(tmp_dir, n_frames=15)
+        run_stage2(
+            dataset_dir=dataset_dir,
+            metrics_df=metrics_df,
+            segments_df=segments_df,
+            output_dir=tmp_dir,
+            base_dir=tmp_dir,
+            device="cpu",
+        )
+        bag_name = os.path.basename(dataset_dir)
+        data = np.load(os.path.join(tmp_dir, f"{bag_name}_transitions_compact.npz"),
+                       allow_pickle=True)
+        n_kept = int(segments_df[segments_df["keep"]]["n_frames"].sum())
+        assert data["frame_embeddings"].shape == (n_kept, FRAME_EMBEDDING_DIM)
+        assert data["actions"].shape == (n_kept, ACTION_DIM)
+        assert data["proprio"].shape == (n_kept, PROPRIO_DIM)
+        assert data["depth_features"].shape == (n_kept, DEPTH_DIM)
 
     def test_descriptor_dimensions(self, tmp_dir):
         """Descriptors should be (N-1, 390) and odom_deltas (N-1, 6)."""
