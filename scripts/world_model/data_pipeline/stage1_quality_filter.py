@@ -36,7 +36,7 @@ def _laplacian_variance(image_path: str) -> float:
 
 def _depth_valid_fraction(depth_path: str) -> float:
     """Fraction of non-zero pixels in a 16-bit depth image."""
-    if not depth_path or not os.path.isfile(depth_path):
+    if not depth_path:
         return np.nan
     img = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
     if img is None:
@@ -92,30 +92,26 @@ def compute_frame_metrics(dataset_dir: str, base_dir: str) -> pd.DataFrame:
     interp_pcmd = interpolate_to_timestamps(pcmd, frame_ts, ["action_mag"])
     imgs["action_mag"] = interp_pcmd["action_mag"].values
 
-    # --- blur (Laplacian variance) per colour frame ---
+    # --- blur + visual diff in a single pass (each color image loaded once) ---
     blur_vals = []
-    for p in imgs["color_path"]:
-        abs_p = resolve_path(p, base_dir)
-        blur_vals.append(_laplacian_variance(abs_p))
-    imgs["blur"] = blur_vals
-
-    # --- frame-to-frame visual diff (mean abs pixel diff of consecutive frames) ---
-    prev_gray = None
     diffs = [0.0]  # first frame has no predecessor
+    prev_gray = None
     for p in imgs["color_path"]:
         abs_p = resolve_path(p, base_dir)
         gray = cv2.imread(abs_p, cv2.IMREAD_GRAYSCALE)
         if gray is None:
+            blur_vals.append(0.0)
             diffs.append(0.0)
             prev_gray = None
             continue
+        blur_vals.append(float(cv2.Laplacian(gray, cv2.CV_64F).var()))
         if prev_gray is not None and prev_gray.shape == gray.shape:
             diffs.append(float(np.mean(np.abs(gray.astype(np.float32) - prev_gray.astype(np.float32)))))
         else:
             if len(diffs) < len(imgs):
                 diffs.append(0.0)
         prev_gray = gray
-    # Trim to exact length (safety)
+    imgs["blur"] = blur_vals
     imgs["visual_diff"] = diffs[: len(imgs)]
 
     # --- depth validity ---

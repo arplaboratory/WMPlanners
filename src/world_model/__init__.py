@@ -9,7 +9,7 @@ Subpackages
 """
 
 from world_model.architecture import WorldModel, WMOutput
-from world_model.data import NPZEpisodeDataset, SampleBatch, collate_npz
+from world_model.data import HFWindowDataset, SampleBatch, collate_hf
 from world_model.engine import TrainConfig, rollout_loss
 from world_model.mpc import CEMConfig, cem_plan
 from world_model.utils import seed_everything, RunningMeanStd
@@ -17,9 +17,9 @@ from world_model.utils import seed_everything, RunningMeanStd
 __all__ = [
     "WorldModel",
     "WMOutput",
-    "NPZEpisodeDataset",
+    "HFWindowDataset",
     "SampleBatch",
-    "collate_npz",
+    "collate_hf",
     "TrainConfig",
     "rollout_loss",
     "CEMConfig",

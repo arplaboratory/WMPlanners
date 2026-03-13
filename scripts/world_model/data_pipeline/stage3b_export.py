@@ -3,37 +3,29 @@
 from __future__ import annotations
 
 import os
-os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import numpy as np
 import pandas as pd
 import torch
-import torchvision.transforms as T
-from PIL import Image
 
-from .utils import load_csv, resolve_path
+from .utils import (
+    build_dino_transform,
+    cleanup_model,
+    load_csv,
+    load_dino_model,
+    load_image_batch,
+    resolve_path,
+    select_device,
+)
 
-DINO_MODEL = "dinov2_vits14"
 SHARD_SIZE = 10_000
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
 BATCH_SIZE = 16  # smaller than Stage 2 because patch tokens use more memory
-
-
-def _select_device(device: str | None) -> torch.device:
-    if device is not None:
-        return torch.device(device)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 def _extract_patch_tokens(
     image_paths: list[str],
     model: torch.nn.Module,
-    transform: T.Compose,
+    transform,
     device: torch.device,
 ) -> np.ndarray:
     """Extract DINOv2 patch tokens for a batch of images.
@@ -45,15 +37,9 @@ def _extract_patch_tokens(
 
     for batch_start in range(0, n, BATCH_SIZE):
         batch_end = min(batch_start + BATCH_SIZE, n)
-        batch_images = []
-        for idx in range(batch_start, batch_end):
-            try:
-                img = Image.open(image_paths[idx]).convert("RGB")
-                batch_images.append(transform(img))
-            except Exception:
-                batch_images.append(torch.zeros(3, 224, 224))
-
-        batch_tensor = torch.stack(batch_images).to(device)
+        batch_tensor = load_image_batch(
+            image_paths[batch_start:batch_end], transform,
+        ).to(device)
         with torch.no_grad():
             # Get intermediate features (patch tokens without CLS)
             features = model.forward_features(batch_tensor)
@@ -87,7 +73,7 @@ def run_stage3b(
     -------
     Path to the selected_patches directory.
     """
-    dev = _select_device(device)
+    dev = select_device(device)
     selected_df = pd.read_csv(selected_csv_path)
     n = len(selected_df)
     print(f"[stage3b] {n} selected transitions")
@@ -118,15 +104,8 @@ def run_stage3b(
         paths_t1.append(color_t1)
 
     # Load DINOv2
-    print(f"[stage3b] Loading DINOv2 ({DINO_MODEL}) on {dev} ...")
-    model = torch.hub.load("facebookresearch/dinov2", DINO_MODEL)
-    model = model.to(dev)
-    model.eval()
-    transform = T.Compose([
-        T.Resize((224, 224)),
-        T.ToTensor(),
-        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ])
+    model = load_dino_model(dev)
+    transform = build_dino_transform()
 
     # Extract patches and save as shards
     patches_dir = os.path.join(output_dir, "selected_patches")
@@ -162,9 +141,7 @@ def run_stage3b(
         )
         shard_idx += 1
 
-    del model
-    if dev.type == "cuda":
-        torch.cuda.empty_cache()
+    cleanup_model(model, dev)
 
     print(f"[stage3b] Saved {shard_idx} shard(s) to {patches_dir}")
     return patches_dir

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 from pathlib import Path
 
 from .stage1_quality_filter import run_stage1

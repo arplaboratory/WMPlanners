@@ -10,11 +10,11 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
+from .utils import ODOM_DELTA_DIM, VISUAL_DIM
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-VISUAL_DIM = 384
-ODOM_DELTA_DIM = 6
 DEFAULT_WINDOW_SIZE = 16  # frames per window (H+1 where H=15)
 DEFAULT_WINDOW_STRIDE = 16  # non-overlapping by default
 
@@ -25,8 +25,8 @@ DEFAULT_WINDOW_STRIDE = 16  # non-overlapping by default
 
 def normalize_descriptors(descriptors: np.ndarray) -> np.ndarray:
     """Z-score normalize CLS and odom_delta components independently."""
-    cls_part = descriptors[:, :VISUAL_DIM].copy()
-    odom_part = descriptors[:, VISUAL_DIM:].copy()
+    cls_part = descriptors[:, :VISUAL_DIM]
+    odom_part = descriptors[:, VISUAL_DIM:]
 
     cls_normed = np.nan_to_num(StandardScaler().fit_transform(cls_part), nan=0.0)
     odom_normed = np.nan_to_num(StandardScaler().fit_transform(odom_part), nan=0.0)

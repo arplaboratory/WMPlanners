@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.world_model.data_pipeline.stage2_embed import run_stage2, build_transition_descriptors, VISUAL_DIM
+from scripts.world_model.data_pipeline.stage2_embed import run_stage2, build_transition_descriptors
+from scripts.world_model.data_pipeline.utils import VISUAL_DIM
 
 
 class TestBuildTransitionDescriptors:
