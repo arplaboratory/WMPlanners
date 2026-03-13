@@ -8,7 +8,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --mail-type=END
 #SBATCH --account=ds_ga_3001_003-2026sp
-#SBATCH --partition=n2c48m24
+#SBATCH --partition=g2-standard-12
 #SBATCH --output=../slurm_%j.out
 #SBATCH --error=../slurm_%j.err
 
