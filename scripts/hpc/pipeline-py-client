@@ -11,10 +11,15 @@ import argparse
 import json
 import shutil
 import subprocess
+import time
 import sys
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 import os
+import select
+import termios
+import tty
+import subprocess
 
 
 # Resolve paths relative to the script location
@@ -789,6 +794,14 @@ class DialogUI:
         except DialogCancelled:
             pass
 
+    def run_programbox(self, title: str, command: str) -> None:
+        """Run a command and pipe its output to a dialog programbox."""
+        cmd = f"{command} | {self.dialog_bin} --title '{title}' --programbox 24 90"
+        try:
+            subprocess.run(cmd, shell=True, check=True)
+        except subprocess.CalledProcessError:
+            pass
+
 
 def prompt_slurm_parameters(ui: DialogUI) -> Dict[str, str | None]:
     params: Dict[str, str | None] = {}
@@ -1141,7 +1154,36 @@ def dialog_slurm(ui: DialogUI) -> None:
             submit_slurm(slurm_path, dry_run=dry_run)
     except Exception as exc:  # pragma: no cover - surfaced to the user
         ui.msgbox(f"Slurm generation/submission failed: {exc}")
+def dialog_monitor(ui: DialogUI) -> None:
+    user = os.environ.get("USER", "")
 
+    def check_exit() -> bool:
+        dr, dw, de = select.select([sys.stdin], [], [], 1.0)
+        if dr:
+            c = sys.stdin.read(1)
+            if c == '\x1b' or c == '\x03' or c == 'q': # Esc, Ctrl+C, or 'q'
+                return True
+        return False
+
+    old_settings = termios.tcgetattr(sys.stdin)
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        while True:
+            result = subprocess.run(["squeue", "-u", user], capture_output=True, text=True)
+            # Clear screen and move cursor to top-left (ANSI)
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.write(f"=== Monitoring jobs for {user} (Press ESC, Ctrl+C, or 'q' to exit) ===\n\n")
+            sys.stdout.write(result.stdout)
+            sys.stdout.flush()
+            if check_exit():
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        # Clear one last time to leave a clean state
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
 
 def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
     ui = DialogUI()
@@ -1152,6 +1194,7 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
         ("test", "Run tests (pytest) and optional Slurm"),
         ("interactive", "Queue an interactive Slurm job"),
         ("slurm", "Generate a Slurm script for any command"),
+        ("monitor", "Monitor queued and running jobs (watch squeue)"),
         ("help", "Show project README.md as help"),
         ("quit", "Exit"),
     ]
@@ -1163,6 +1206,7 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
         "pretrain": dialog_pretrain,
         "download-assets": dialog_download_assets,
         "slurm": dialog_slurm,
+        "monitor": dialog_monitor,
         "help": lambda ui: (
             ui.markdownbox(ROOT / "README.md")
             if (ROOT / "README.md").exists()
