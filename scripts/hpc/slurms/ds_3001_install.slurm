@@ -181,6 +181,11 @@ df -h /tmp
 df -h ${VENV_DIR}
 
 pip install --upgrade pip
+
+# Install Isaac Lab locally into the venv so it avoids ModuleNotFoundError
+echo "[SINGULARITY] Installing Isaac Lab modules..."
+./isaaclab.sh --install
+
 pip install -e /workspace/run[dev]
 
 echo "Using: $(which python)"
