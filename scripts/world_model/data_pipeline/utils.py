@@ -23,8 +23,42 @@ VISUAL_DIM = 384
 ODOM_DELTA_DIM = 6
 DESCRIPTOR_DIM = VISUAL_DIM + ODOM_DELTA_DIM  # 390
 
+# TD-JEPA rich embedding dimensions
+DEPTH_DIM = 12
+PROPRIO_DIM = 20     # 13 odom + 7 SO3 cmd
+ACTION_DIM = 10      # 8 position cmd + 2 derived force
+FRAME_EMBEDDING_DIM = VISUAL_DIM + DEPTH_DIM + PROPRIO_DIM  # 416
+
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+
+# ---------------------------------------------------------------------------
+# Depth feature constants
+# ---------------------------------------------------------------------------
+DEPTH_HIST_BINS = 8
+DEPTH_HIST_RANGE = (0.0, 10.0)  # metres
+DEPTH_NEAR_THRESH = 1.0  # metres
+DEPTH_FAR_THRESH = 5.0   # metres
+
+# ---------------------------------------------------------------------------
+# Telemetry column names
+# ---------------------------------------------------------------------------
+ODOM_COLS = [
+    "pos_x", "pos_y", "pos_z",
+    "orient_x", "orient_y", "orient_z", "orient_w",
+    "linear_vel_x", "linear_vel_y", "linear_vel_z",
+    "angular_vel_x", "angular_vel_y", "angular_vel_z",
+]
+SO3_PROPRIO_COLS = [
+    "force_x", "force_y", "force_z",
+    "orientation_x", "orientation_y", "orientation_z", "orientation_w",
+]
+PCMD_ACTION_COLS = [
+    "velocity_x", "velocity_y", "velocity_z",
+    "acceleration_x", "acceleration_y", "acceleration_z",
+    "yaw", "yaw_dot",
+]
+SO3_ACTION_COLS = ["force_x", "force_y", "force_z"]
 
 
 # ---------------------------------------------------------------------------
