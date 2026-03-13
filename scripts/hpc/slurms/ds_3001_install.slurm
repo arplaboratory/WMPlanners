@@ -195,8 +195,8 @@ echo "[singularity] ISAAC_ARGS=${ISAAC_ARGS}"
 # Post-Install Verification Tests
 # -------------------------------------------------------------
 echo "[test] Verifying core packages..."
-python -c "import torch; print(f'PyTorch {torch.__version__} | CUDA Available: {torch.cuda.is_available()}')"
-python -c "import numpy; print(f'NumPy {numpy.__version__}')"
+python -c "import torch; print(\"PyTorch \" + torch.__version__ + \" | CUDA Available: \" + str(torch.cuda.is_available()))"
+python -c "import numpy; print(\"NumPy \" + numpy.__version__)"
 
 echo "[test] Running PyTest suite..."
 # Isaac Sim requires tests to be run via its python.sh wrapper to ensure omniverse paths are registered
