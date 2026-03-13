@@ -3,69 +3,39 @@
 from __future__ import annotations
 
 import os
-os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import numpy as np
 import pandas as pd
 import torch
-import torchvision.transforms as T
-from PIL import Image
 
 from .odom_delta import compute_odom_deltas_for_frames
-from .utils import load_csv, resolve_path
+from .utils import (
+    DESCRIPTOR_DIM,
+    VISUAL_DIM,
+    build_dino_transform,
+    cleanup_model,
+    load_csv,
+    load_dino_model,
+    load_image_batch,
+    resolve_path,
+    select_device,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-DINO_MODEL = "dinov2_vits14"
-VISUAL_DIM = 384
-ODOM_DELTA_DIM = 6
-DESCRIPTOR_DIM = VISUAL_DIM + ODOM_DELTA_DIM  # 390
 BATCH_SIZE = 32
 CHECKPOINT_INTERVAL = 1000
-
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
-
-
-# ---------------------------------------------------------------------------
-# Device selection
-# ---------------------------------------------------------------------------
-
-def _select_device(device: str | None) -> torch.device:
-    if device is not None:
-        return torch.device(device)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 # ---------------------------------------------------------------------------
 # DINOv2 CLS token extraction
 # ---------------------------------------------------------------------------
 
-def _build_dino_transform() -> T.Compose:
-    return T.Compose([
-        T.Resize((224, 224)),
-        T.ToTensor(),
-        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ])
-
-
-def _load_dino_model(device: torch.device) -> torch.nn.Module:
-    print(f"[stage2] Loading DINOv2 ({DINO_MODEL}) on {device} ...")
-    model = torch.hub.load("facebookresearch/dinov2", DINO_MODEL)
-    model = model.to(device)
-    model.eval()
-    return model
-
-
 def _compute_cls_tokens(
     color_paths: list[str],
     model: torch.nn.Module,
-    transform: T.Compose,
+    transform,
     device: torch.device,
     checkpoint_path: str | None = None,
 ) -> np.ndarray:
@@ -86,15 +56,9 @@ def _compute_cls_tokens(
 
     for batch_start in range(start_idx, n, BATCH_SIZE):
         batch_end = min(batch_start + BATCH_SIZE, n)
-        batch_images = []
-        for idx in range(batch_start, batch_end):
-            try:
-                img = Image.open(color_paths[idx]).convert("RGB")
-                batch_images.append(transform(img))
-            except Exception:
-                batch_images.append(torch.zeros(3, 224, 224))
-
-        batch_tensor = torch.stack(batch_images).to(device)
+        batch_tensor = load_image_batch(
+            color_paths[batch_start:batch_end], transform,
+        ).to(device)
         with torch.no_grad():
             feats = model(batch_tensor)
         cls_tokens[batch_start:batch_end] = feats.cpu().numpy()
@@ -178,7 +142,7 @@ def run_stage2(
     if base_dir is None:
         base_dir = os.getcwd()
 
-    dev = _select_device(device)
+    dev = select_device(device)
     os.makedirs(output_dir, exist_ok=True)
     bag_name = os.path.basename(os.path.normpath(dataset_dir))
 
@@ -213,12 +177,10 @@ def run_stage2(
 
     # CLS tokens
     checkpoint_path = os.path.join(output_dir, f"{bag_name}_checkpoint.npz")
-    model = _load_dino_model(dev)
-    transform = _build_dino_transform()
+    model = load_dino_model(dev)
+    transform = build_dino_transform()
     cls_tokens = _compute_cls_tokens(color_paths, model, transform, dev, checkpoint_path)
-    del model
-    if dev.type == "cuda":
-        torch.cuda.empty_cache()
+    cleanup_model(model, dev)
 
     # Body-frame odom deltas
     print("[stage2] Computing body-frame odom deltas ...")
@@ -255,8 +217,10 @@ def run_stage2(
     print(f"[stage2]   Descriptors: {descriptors.shape}")
 
     # Clean up checkpoint
-    if os.path.isfile(checkpoint_path):
+    try:
         os.remove(checkpoint_path)
+    except FileNotFoundError:
+        pass
 
     return {
         "cls_tokens": cls_tokens,

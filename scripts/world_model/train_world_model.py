@@ -4,17 +4,18 @@ import os
 import time
 import torch
 from torch.utils.data import DataLoader
-from world_model.data import NPZEpisodeDataset, collate_npz
+from world_model.data import HFWindowDataset, collate_hf
 from world_model.architecture import WorldModel
 from world_model.engine.trainer import TrainConfig, rollout_loss
 from world_model.utils import seed_everything
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--data_dir', type=str, required=True)
+    ap.add_argument('--dataset', type=str, required=True,
+                    help='HuggingFace dataset path (local dir or Hub ID)')
     ap.add_argument('--epochs', type=int, default=20)
     ap.add_argument('--batch_size', type=int, default=64)
-    ap.add_argument('--window', type=int, default=16)
+    ap.add_argument('--img_size', type=int, default=224)
     ap.add_argument('--horizon', type=int, default=8)
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
@@ -29,14 +30,14 @@ def main():
     seed_everything(args.seed)
     os.makedirs(args.out_dir, exist_ok=True)
 
-    ds = NPZEpisodeDataset(args.data_dir, window=args.window)
-    dl = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=collate_npz, drop_last=True)
+    ds = HFWindowDataset(args.dataset, img_size=args.img_size)
+    dl = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0,
+                    collate_fn=collate_hf, drop_last=True)
 
-    # For the toy dataset:
     odom_dim = ds.D_odom
     imu_dim = ds.D_imu
     act_dim = ds.D_act
-    state_dim = min(6, odom_dim)  # decode x,y,vx,vy,goal_x,goal_y
+    state_dim = min(6, odom_dim)
 
     model = WorldModel(
         odom_dim=odom_dim,
@@ -74,7 +75,6 @@ def main():
         }
         path = os.path.join(args.out_dir, f'epoch_{epoch:03d}.pt')
         torch.save(ckpt, path)
-        # also maintain a latest pointer
         torch.save(ckpt, os.path.join(args.out_dir, 'latest.pt'))
 
     print(f"Done. Total time: {time.time()-t0:.1f}s")

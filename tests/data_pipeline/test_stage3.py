@@ -12,9 +12,9 @@ from scripts.world_model.data_pipeline.stage3_select import (
     farthest_point_sampling,
     extract_windows,
     run_stage3,
-    VISUAL_DIM,
     DEFAULT_WINDOW_SIZE,
 )
+from scripts.world_model.data_pipeline.utils import VISUAL_DIM
 
 
 class TestNormalizeDescriptors:

@@ -58,8 +58,11 @@ def _iter_rows(
             color_abs = resolve_path(color_rel, bag_dir) if color_rel else ""
 
             # Load image (or None if missing)
-            if color_abs and os.path.isfile(color_abs):
-                image = PILImage.open(color_abs).convert("RGB")
+            if color_abs:
+                try:
+                    image = PILImage.open(color_abs).convert("RGB")
+                except (FileNotFoundError, OSError):
+                    image = None
             else:
                 image = None
 
@@ -111,11 +114,11 @@ def run_hf_upload(
 
     save_dir = os.path.join(corpus_dir, "hf_dataset")
 
-    if not windows:
-        # Empty selection: create an empty dataset with the correct schema.
-        # Use Value("string") for image column to avoid a datasets bug
-        # with empty Image() columns on save_to_disk.
-        empty_features = Features({
+    # Schema shared between empty and non-empty branches.
+    # Empty datasets use Value("string") for image to avoid a datasets bug
+    # with empty Image() columns on save_to_disk.
+    def _build_features(image_type):
+        return Features({
             "bag_name": Value("string"),
             "window_id": Value("int64"),
             "frame_idx_in_window": Value("int64"),
@@ -127,8 +130,11 @@ def run_hf_upload(
             "odom_ax": Value("float64"),
             "odom_ay": Value("float64"),
             "odom_az": Value("float64"),
-            "image": Value("string"),
+            "image": image_type,
         })
+
+    if not windows:
+        empty_features = _build_features(Value("string"))
         ds = Dataset.from_dict(
             {col: [] for col in empty_features},
             features=empty_features,
@@ -147,21 +153,7 @@ def run_hf_upload(
         for key in columns:
             columns[key].append(row[key])
 
-    features = Features({
-        "bag_name": Value("string"),
-        "window_id": Value("int64"),
-        "frame_idx_in_window": Value("int64"),
-        "frame_id": Value("int64"),
-        "timestamp_ns": Value("int64"),
-        "odom_dx": Value("float64"),
-        "odom_dy": Value("float64"),
-        "odom_dz": Value("float64"),
-        "odom_ax": Value("float64"),
-        "odom_ay": Value("float64"),
-        "odom_az": Value("float64"),
-        "image": Image(),
-    })
-
+    features = _build_features(Image())
     ds = Dataset.from_dict(columns, features=features)
     ds.save_to_disk(save_dir)
     print(f"[hf_upload] Saved {len(ds)} rows ({len(windows)} windows) to {save_dir}")
