@@ -98,5 +98,6 @@ export ISAACLAB_PATH=/workspace/isaaclab
 echo "[Interactive] Launching Isaac Lab Test GUI (WebRTC on port 8211)..."
 
 # Run the official empty testing environment from Isaac Lab
-/isaac-sim/python.sh /workspace/isaaclab/scripts/tutorials/00_sim/create_empty.py
+cd /workspace/isaaclab
+./isaaclab.sh -p scripts/tutorials/00_sim/create_empty.py
 '
