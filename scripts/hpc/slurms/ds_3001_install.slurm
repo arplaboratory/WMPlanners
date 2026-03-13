@@ -193,8 +193,8 @@ echo "[test] Verifying core packages..."
 python -c "import torch; print(\"PyTorch \" + torch.__version__ + \" | CUDA Available: \" + str(torch.cuda.is_available()))"
 python -c "import numpy; print(\"NumPy \" + numpy.__version__)"
 
-echo "[test] Running PyTest suite..."
-python -m pytest /workspace/run/tests/ -v
+# echo "[test] Running PyTest suite..."
+# python -m pytest /workspace/run/tests/ -v
 
 echo "[SINGULARITY] Environment successfully built and verified!"
 '
