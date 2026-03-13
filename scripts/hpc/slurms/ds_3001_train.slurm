@@ -204,7 +204,7 @@ fi
 echo "[singularity] LATEST_CHECKPOINT=${LATEST_CHECKPOINT}"
 
 # Run evaluation with the discovered checkpoint
-/isaac-sim/python.sh /workspace/run/scripts/rsl_rl/play.py \
+python /workspace/run/scripts/rsl_rl/play.py \
   --task="${TASK_NAME}" \
   --checkpoint "${LATEST_CHECKPOINT}" \
   --video \
@@ -212,7 +212,7 @@ echo "[singularity] LATEST_CHECKPOINT=${LATEST_CHECKPOINT}"
   --headless \
 
 # WandB sync, TODO: we could use the built in WandB logger option
-/isaac-sim/python.sh -m wandb sync \
+python -m wandb sync \
     --sync-tensorboard \
     --project ${WANDB_PROJECT} \
     --id ${WANDB_RUN_NAME} \
