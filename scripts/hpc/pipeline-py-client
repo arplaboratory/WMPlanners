@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 import os
 
 
@@ -478,8 +478,20 @@ def handle_slurm(args: argparse.Namespace) -> None:
     if not args.command:
         raise ValueError("No command provided to embed in the Slurm script. Add arguments after --.")
 
+    output_path = args.output
+    if not output_path:
+        default_name = "job.slurm"
+        for part in reversed(args.command):
+            if part.endswith(".py"):
+                default_name = f"{Path(part).stem}.slurm"
+                break
+            elif not part.startswith("-") and part not in ("python", "python3"):
+                default_name = f"{part.split('.')[-1]}.slurm"
+                break
+        output_path = default_name
+
     generate_slurm_script(
-        Path(args.output),
+        Path(output_path),
         args.command,
         job_name=args.job_name,
         nodes=args.nodes,
@@ -496,7 +508,7 @@ def handle_slurm(args: argparse.Namespace) -> None:
     )
 
     if args.submit:
-        submit_slurm(Path(args.output), dry_run=args.dry_run)
+        submit_slurm(Path(output_path), dry_run=args.dry_run)
 
 
 def handle_show(_: argparse.Namespace) -> None:
@@ -667,9 +679,9 @@ def build_parser() -> argparse.ArgumentParser:
     curate_parser.set_defaults(func=handle_curate_dataset)
 
     slurm_parser = subparsers.add_parser(
-        "slurm", parents=[common], help="Generate or submit a Slurm script for an arbitrary command."
+        "slurm", parents=[common], help="Generate a Slurm script for an arbitrary command."
     )
-    slurm_parser.add_argument("--output", required=True, help="Where to write the Slurm script.")
+    slurm_parser.add_argument("--output", required=False, help="Where to write the Slurm script. Derived from command if omitted.")
     slurm_parser.add_argument(
         "command",
         nargs=argparse.REMAINDER,
@@ -1087,8 +1099,19 @@ def dialog_slurm(ui: DialogUI) -> None:
         if not raw_command:
             ui.msgbox("No command provided. Returning to menu.")
             return
+
+        cmd_parts = raw_command.split()
+        default_name = "job.slurm"
+        for part in reversed(cmd_parts):
+            if part.endswith(".py"):
+                default_name = f"{Path(part).stem}.slurm"
+                break
+            elif not part.startswith("-") and part.lower() not in ("python", "python3"):
+                default_name = f"{part.split('.')[-1]}.slurm"
+                break
+
         params = prompt_slurm_parameters(ui)
-        slurm_path = Path(ui.inputbox("Where should the Slurm script be written?", "job.slurm"))
+        slurm_path = Path(ui.inputbox("Where should the Slurm script be written?", default_name))
         dry_run = False
         # dry_run = prompt_dry_run(ui, config_key="last_slurm_dry_run")
     except DialogCancelled:
@@ -1128,7 +1151,7 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
         ("pretrain", "Launch pretraining and optional Slurm"),
         ("test", "Run tests (pytest) and optional Slurm"),
         ("interactive", "Queue an interactive Slurm job"),
-        ("slurm", "Generate/submit a Slurm script for any command"),
+        ("slurm", "Generate a Slurm script for any command"),
         ("help", "Show project README.md as help"),
         ("quit", "Exit"),
     ]
