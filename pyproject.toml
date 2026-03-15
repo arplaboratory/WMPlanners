@@ -44,6 +44,7 @@ dev = [
   "mypy>=1.8",
   "typeguard",
   "ipykernel>=6.29",
+  "setuptools",
 ]
 video = [
   "decord>=0.6"
