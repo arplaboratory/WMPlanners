@@ -33,7 +33,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 printf -v TRAIN_ARGS_STR '%q ' "${TRAIN_ARGS[@]}"
-ssh -o StrictHostKeyChecking=accept-new "${HPC_HOST}" \
+ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "${HPC_HOST}" \
   "cd ${REMOTE_PROJECT_DIR@Q} && \
   export TASK_NAME=\"$TASK_NAME\" && \
   sbatch --export=ALL,TASK_NAME --job-name='rloclab_${USER}' --mail-user='${USER}@nyu.edu' \

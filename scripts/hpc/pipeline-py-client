@@ -11,17 +11,36 @@ import argparse
 import json
 import shutil
 import subprocess
+import time
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 import os
+import select
+import termios
+import tty
+import subprocess
 
 
-PROJECT_DIR = Path(os.environ.get("HPC_PROJECT_ROOT") or ".").resolve()
+# Resolve paths relative to the script location
+SCRIPT_PATH = Path(__file__).resolve()
+DEFAULT_PROJECT_DIR = SCRIPT_PATH.parent.parent.parent
+PROJECT_DIR = Path(os.environ.get("PROJECT_ROOT") or DEFAULT_PROJECT_DIR).resolve()
+
 ROOT = PROJECT_DIR / "scripts" / "hpc"
 GLOBAL_EXP_DIR = Path(os.environ.get("HPC_EXP") or (PROJECT_DIR.parent / "experiments")).resolve()
-REPO_ROOT = PROJECT_DIR.parent
+if not GLOBAL_EXP_DIR.exists():
+    # Fallback to a sibling of the current directory if experiments is not found at the parent level
+    GLOBAL_EXP_DIR = (PROJECT_DIR / "experiments").resolve()
+
+REPO_ROOT = PROJECT_DIR 
 SETTINGS = PROJECT_DIR / ".jepa_config.json"
+
+src_dir = PROJECT_DIR / "src"
+if src_dir.exists():
+    current_pythonpath = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = f"{src_dir}:{current_pythonpath}" if current_pythonpath else str(src_dir)
+
 
 CONFIGS_DIR = GLOBAL_EXP_DIR / "configs"
 SLURMS_DIR = ROOT / "slurms"
@@ -160,6 +179,15 @@ def discover_install_slurm_scripts() -> List[str]:
     candidates: List[str] = []
     if slurms_dir.is_dir():
         for path in sorted(slurms_dir.glob("*install*.slurm")):
+            candidates.append(str(path.relative_to(PROJECT_DIR)))
+    return candidates
+
+def discover_test_slurm_scripts() -> List[str]:
+    """Discover test Slurm scripts under the slurms/ directory."""
+    slurms_dir = SLURMS_DIR
+    candidates: List[str] = []
+    if slurms_dir.is_dir():
+        for path in sorted(slurms_dir.glob("*.slurm")):
             candidates.append(str(path.relative_to(PROJECT_DIR)))
     return candidates
 
@@ -479,8 +507,20 @@ def handle_slurm(args: argparse.Namespace) -> None:
     if not args.command:
         raise ValueError("No command provided to embed in the Slurm script. Add arguments after --.")
 
+    output_path = args.output
+    if not output_path:
+        default_name = "job.slurm"
+        for part in reversed(args.command):
+            if part.endswith(".py"):
+                default_name = f"{Path(part).stem}.slurm"
+                break
+            elif not part.startswith("-") and part not in ("python", "python3"):
+                default_name = f"{part.split('.')[-1]}.slurm"
+                break
+        output_path = default_name
+
     generate_slurm_script(
-        Path(args.output),
+        Path(output_path),
         args.command,
         job_name=args.job_name,
         nodes=args.nodes,
@@ -497,7 +537,7 @@ def handle_slurm(args: argparse.Namespace) -> None:
     )
 
     if args.submit:
-        submit_slurm(Path(args.output), dry_run=args.dry_run)
+        submit_slurm(Path(output_path), dry_run=args.dry_run)
 
 
 def handle_show(_: argparse.Namespace) -> None:
@@ -679,9 +719,9 @@ def build_parser() -> argparse.ArgumentParser:
     curate_parser.set_defaults(func=handle_curate_dataset)
 
     slurm_parser = subparsers.add_parser(
-        "slurm", parents=[common], help="Generate or submit a Slurm script for an arbitrary command."
+        "slurm", parents=[common], help="Generate a Slurm script for an arbitrary command."
     )
-    slurm_parser.add_argument("--output", required=True, help="Where to write the Slurm script.")
+    slurm_parser.add_argument("--output", required=False, help="Where to write the Slurm script. Derived from command if omitted.")
     slurm_parser.add_argument(
         "command",
         nargs=argparse.REMAINDER,
@@ -787,6 +827,14 @@ class DialogUI:
             finally:
                 os.unlink(tmp_path)
         except DialogCancelled:
+            pass
+
+    def run_programbox(self, title: str, command: str) -> None:
+        """Run a command and pipe its output to a dialog programbox."""
+        cmd = f"{command} | {self.dialog_bin} --title '{title}' --programbox 24 90"
+        try:
+            subprocess.run(cmd, shell=True, check=True)
+        except subprocess.CalledProcessError:
             pass
 
 
@@ -897,6 +945,50 @@ def dialog_download_assets(ui: DialogUI) -> None:
         download_assets(dry_run=dry_run)
     except Exception as exc:  # pragma: no cover - surfaced to the user
         ui.msgbox(f"Download failed: {exc}")
+
+def prompt_interactive_slurm_selection(ui: DialogUI) -> str:
+    scripts = discover_test_slurm_scripts()
+    if not scripts:
+        raise FileNotFoundError("No Slurm scripts found in slurms/ directory.")
+
+    default_script = config.get("last_interactive_slurm", "scripts/hpc/slurms/ds_3001_interactive.slurm")
+    ordered_scripts = list(scripts)
+    if default_script in ordered_scripts:
+        ordered_scripts.remove(default_script)
+        ordered_scripts.insert(0, default_script)
+
+    choices: List[Tuple[str, str]] = []
+    for script_path in ordered_scripts:
+        if script_path == default_script:
+            description = "Previously selected"
+        else:
+            description = "Slurm script"
+        choices.append((script_path, description))
+
+    selected = ui.menu("Select a Slurm script to queue for interactive use", choices)
+    config["last_interactive_slurm"] = selected
+    save_config(config)
+    return selected
+
+def dialog_interactive(ui: DialogUI) -> None:
+    try:
+        selected_slurm = prompt_interactive_slurm_selection(ui)
+        dry_run = prompt_dry_run(ui, config_key="last_interactive_dry_run")
+    except DialogCancelled:
+        return
+    except Exception as exc:  # pragma: no cover
+        ui.msgbox(f"Could not load test Slurm scripts: {exc}")
+        return
+
+    command = ["sbatch", str(PROJECT_DIR / selected_slurm)]
+    if dry_run:
+        ui.msgbox("[DRY-RUN] The following command would be run:\n$ " + format_command(command))
+    else:
+        try:
+            run_command(command, dry_run=False, ui=ui)
+            ui.msgbox(f"Successfully queued Slurm job:\n{selected_slurm}")
+        except Exception as exc:
+            ui.msgbox(f"Failed to submit Slurm job: {exc}")
 
 def dialog_test(ui: DialogUI) -> None:
     try:
@@ -1055,8 +1147,19 @@ def dialog_slurm(ui: DialogUI) -> None:
         if not raw_command:
             ui.msgbox("No command provided. Returning to menu.")
             return
+
+        cmd_parts = raw_command.split()
+        default_name = "job.slurm"
+        for part in reversed(cmd_parts):
+            if part.endswith(".py"):
+                default_name = f"{Path(part).stem}.slurm"
+                break
+            elif not part.startswith("-") and part.lower() not in ("python", "python3"):
+                default_name = f"{part.split('.')[-1]}.slurm"
+                break
+
         params = prompt_slurm_parameters(ui)
-        slurm_path = Path(ui.inputbox("Where should the Slurm script be written?", "job.slurm"))
+        slurm_path = Path(ui.inputbox("Where should the Slurm script be written?", default_name))
         dry_run = False
         # dry_run = prompt_dry_run(ui, config_key="last_slurm_dry_run")
     except DialogCancelled:
@@ -1086,7 +1189,36 @@ def dialog_slurm(ui: DialogUI) -> None:
             submit_slurm(slurm_path, dry_run=dry_run)
     except Exception as exc:  # pragma: no cover - surfaced to the user
         ui.msgbox(f"Slurm generation/submission failed: {exc}")
+def dialog_monitor(ui: DialogUI) -> None:
+    user = os.environ.get("USER", "")
 
+    def check_exit() -> bool:
+        dr, dw, de = select.select([sys.stdin], [], [], 1.0)
+        if dr:
+            c = sys.stdin.read(1)
+            if c == '\x1b' or c == 'q': # Esc or 'q'
+                return True
+        return False
+
+    old_settings = termios.tcgetattr(sys.stdin)
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        while True:
+            result = subprocess.run(["squeue", "-u", user], capture_output=True, text=True)
+            # Clear screen and move cursor to top-left (ANSI)
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.write(f"=== Monitoring jobs for {user} (Press ESC or 'q' to exit) ===\n\n")
+            sys.stdout.write(result.stdout)
+            sys.stdout.flush()
+            if check_exit():
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        # Clear one last time to leave a clean state
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
 
 def dialog_world_model_dataset(ui: DialogUI) -> None:
     try:
@@ -1173,45 +1305,48 @@ def dialog_world_model(ui: DialogUI) -> None:
             break
 
 
+
 def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
     ui = DialogUI()
-    main_menu_choices = (
+    choices: List[Tuple[str, str]] = [
         ("install", "Queue install.slurm on HPC"),
         ("download-assets", "Download datasets and assets via assets.yml"),
         ("pretrain", "Launch pretraining and optional Slurm"),
         ("world-model", "Manage world model (Dataset, Train, Eval)"),
         ("test", "Run tests (pytest) and optional Slurm"),
-        ("slurm", "Generate/submit a Slurm script for any command"),
+        ("interactive", "Queue an interactive Slurm job"),
+        ("slurm", "Generate a Slurm script for any command"),
+        ("monitor", "Monitor queued and running jobs (watch squeue)"),
         ("help", "Show project README.md as help"),
         ("quit", "Exit"),
-    )
+    ]
+
+    handlers: Dict[str, Callable[[DialogUI], None]] = {
+        "install": dialog_install,
+        "test": dialog_test,
+        "interactive": dialog_interactive,
+        "pretrain": dialog_pretrain,
+        "download-assets": dialog_download_assets,
+        "slurm": dialog_slurm,
+        "monitor": dialog_monitor,
+        "help": lambda ui: (
+            ui.markdownbox(ROOT / "README.md")
+            if (ROOT / "README.md").exists()
+            else ui.msgbox("README.md not found.")
+        ),
+        "quit": lambda ui: None, # Handled by the loop break
+    }
 
     while True:
         try:
-            selection = ui.menu("jepa pipeline client", main_menu_choices)
+            selection = ui.menu("HPC pipeline client", choices)
         except DialogCancelled:
             break
 
-        if selection == "install":
-            dialog_install(ui)
-        elif selection == "download-assets":
-            dialog_download_assets(ui)
-        elif selection == "pretrain":
-            dialog_pretrain(ui)
-        elif selection == "world-model":
-            dialog_world_model(ui)
-        elif selection == "test":
-            dialog_test(ui)
-        elif selection == "slurm":
-            dialog_slurm(ui)
-        elif selection == "help":
-            readme_path = ROOT / "README.md"
-            if readme_path.exists():
-                ui.markdownbox(readme_path)
-            else:
-                ui.msgbox("README.md not found.")
-        elif selection == "quit":
+        if selection == "quit":
             break
+        else:
+            handlers[selection](ui)
 
 
 def parse_and_run(argv: Sequence[str] | None = None) -> None:
