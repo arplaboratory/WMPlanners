@@ -13,7 +13,7 @@ from datetime import datetime
 project = "cjepa"
 author = "Long Quang"
 copyright = f"{datetime.now():%Y}, {author}"
-release = "0.1.0"
+release = "1.0.0"
 
 extensions = [
     "autoapi.extension",
