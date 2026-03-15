@@ -21,6 +21,7 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinxcontrib.bibtex",
+    "sphinxcontrib.mermaid",
 ]
 
 autosummary_generate = False
