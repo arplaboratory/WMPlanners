@@ -16,7 +16,23 @@ dependencies = [
   "numpy>=1.23",
   "scipy>=1.10",
   "matplotlib>=3.7",
-  "torch>=2.0"
+  "torch>=2.0",
+  "torchvision>=0.15",
+  "opencv-python>=4.5",
+  "pillow>=9.0",
+  "pyyaml>=6.0",
+  "scikit-learn",
+  "pandas",
+  "tqdm",
+  "timm",
+  "transformers",
+  "h5py",
+  "einops",
+  "beartype",
+  "braceexpand",
+  "webdataset",
+  "ftfy",
+  "datasets"
 ]
 
 [project.optional-dependencies]
@@ -28,6 +44,7 @@ dev = [
   "mypy>=1.8",
   "typeguard",
   "ipykernel>=6.29",
+  "setuptools",
 ]
 video = [
   "decord>=0.6"
@@ -39,7 +56,8 @@ docs = [
   "nbsphinx>=0.9",
   "jupytext>=1.15",
   "sphinxcontrib-bibtex",
-  "sphinx-autoapi"
+  "sphinx-autoapi",
+  "sphinxcontrib-mermaid"
 ]
 
 [project.scripts]
@@ -51,12 +69,12 @@ packages = [
   "src/cjepa",
   "src/world_model",
   "src/models",
-  "src/datasets",
+  "src/wm_datasets",
   "src/utils"
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-ra"
 testpaths = ["tests"]
 

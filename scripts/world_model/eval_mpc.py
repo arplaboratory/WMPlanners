@@ -2,7 +2,8 @@ from __future__ import annotations
 import argparse
 import numpy as np
 import torch
-from world_model.models import WorldModel
+import torch.nn.functional as F
+from world_model.architecture import WorldModel
 from world_model.toy_env import Toy2DNavEnv
 from world_model.mpc import cem_plan, CEMConfig
 
@@ -30,8 +31,18 @@ def main():
     ckpt = torch.load(args.ckpt, map_location=args.device)
     train_args = ckpt['args']
 
-    # reconstruct model dims from train args by reading a sample episode is easiest; here we hardcode toy dims:
-    model = WorldModel(odom_dim=6, imu_dim=6, act_dim=2, state_dim=6).to(args.device)
+    # reconstruct model dims from train args
+    model = WorldModel(
+        odom_dim=6, 
+        imu_dim=6, 
+        act_dim=2, 
+        state_dim=6,
+        backbone=train_args.get('backbone', 'cnn'),
+        backbone_kwargs={
+            "model_name": train_args.get('backbone_name', 'dinov2_vitb14'),
+            "device": args.device
+        }
+    ).to(args.device)
     model.load_state_dict(ckpt['model'])
     model.eval()
 
@@ -46,12 +57,18 @@ def main():
     for ep in range(args.episodes):
         obs = env.reset()
         done = False
+        img_size = train_args.get('img_size', 224)
         for t in range(args.steps):
             # Prepare tensors for encoding
             rgb = torch.from_numpy(obs['rgb']).permute(2,0,1).unsqueeze(0).float().to(args.device) / 255.0
             depth = torch.from_numpy(obs['depth']).unsqueeze(0).unsqueeze(0).float().to(args.device)
             odom = torch.from_numpy(obs['odom']).unsqueeze(0).float().to(args.device)
             imu = torch.from_numpy(obs['imu']).unsqueeze(0).float().to(args.device)
+
+            # Resize if necessary
+            if rgb.shape[-1] != img_size:
+                rgb = F.interpolate(rgb, size=(img_size, img_size), mode='bilinear', align_corners=False)
+                depth = F.interpolate(depth, size=(img_size, img_size), mode='nearest')
             with torch.no_grad():
                 out = model.encode(rgb, depth, odom, imu)
                 z0 = out.z
