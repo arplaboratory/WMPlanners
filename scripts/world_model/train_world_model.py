@@ -11,7 +11,7 @@ from world_model.utils import seed_everything
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--dataset', type=str, required=True,
+    ap.add_argument('--dataset', '--data_dir', type=str, required=True, dest='dataset',
                     help='Path to dataset (HuggingFace dir/ID or local .npz dir)')
     ap.add_argument('--dataset_type', type=str, default='hf', choices=['hf', 'npz'],
                     help='Type of dataset to load')
@@ -36,7 +36,7 @@ def main():
         ds = HFWindowDataset(args.dataset, img_size=args.img_size)
         collate_fn = collate_hf
     else:
-        ds = NPZEpisodeDataset(args.dataset, window=args.horizon + 1)
+        ds = NPZEpisodeDataset(args.dataset, window=args.horizon + 1, img_size=args.img_size)
         collate_fn = collate_npz
 
     dl = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0,
