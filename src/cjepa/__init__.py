@@ -12,4 +12,4 @@ __all__ = [
     "write_dataset_csv",
 ]
 
-__version__ = "0.2.0"
+__version__ = "1.0.0"

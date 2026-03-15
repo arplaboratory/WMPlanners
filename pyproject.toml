@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cjepa"
-version = "0.1.0"
+version = "1.0.0"
 description = "Learning World Models Continuously from Embodied Experience"
 readme = "README.md"
 requires-python = ">=3.9"
