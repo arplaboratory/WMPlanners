@@ -173,4 +173,4 @@ remote shell.
   the script will still be generated.
 
 For a deeper dive into HPC and configuration knobs, see
-[`docs/hpc_guide.md`](../docs/hpc_guide.md).
+[HPC Guide](hpc-guide).

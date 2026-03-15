@@ -2,10 +2,11 @@
 
 ## Install and verify
 
+We recommend using the centralized setup script to ensure environment parity (Python 3.11 + foundational submodules):
+
 ```bash
-python -m venv .venv
+bash scripts/python_setup.sh
 source .venv/bin/activate
-pip install -e .[dev,docs]
-pip install -r external/vjepa2/requirements.txt
-pip install -r src/rloclab/requirements.txt
 ```
+
+This will handle `uv` installation, submodule initialization, and dependency resolution automatically.
