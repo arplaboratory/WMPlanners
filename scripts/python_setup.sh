@@ -64,6 +64,8 @@ if [ "$INSTALL_EXTERNALS" = true ]; then
         sed -i 's/torch==2.0.0/torch>=2.0/g' "$PROJECT_ROOT/external/dino/requirements.txt"
         sed -i 's/torchvision==0.15.0/torchvision>=0.15/g' "$PROJECT_ROOT/external/dino/requirements.txt"
         sed -i '/--extra-index-url https:\/\/download.pytorch.org\/whl\/cu117/d' "$PROJECT_ROOT/external/dino/requirements.txt"
+        sed -i '/--extra-index-url https:\/\/pypi.nvidia.com/d' "$PROJECT_ROOT/external/dino/requirements.txt"
+        sed -i '/cuml-cu11/d' "$PROJECT_ROOT/external/dino/requirements.txt"
     fi
 
     bash "$PROJECT_ROOT/scripts/install_externals.sh" || exit 1
