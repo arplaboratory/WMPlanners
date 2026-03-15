@@ -5,10 +5,9 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=20GB
-#SBATCH --time=02:00:00
-#SBATCH --gres=gpu:1
+#SBATCH --time=01:00:00
 #SBATCH --mail-type=END
-#SBATCH --account=rob_gy6323-2025fa
+#SBATCH --account=ds_ga_3001_003-2026sp
 #SBATCH --partition=g2-standard-12
 #SBATCH --output=../slurm_%j.out
 #SBATCH --error=../slurm_%j.err
@@ -19,34 +18,65 @@ set -euo pipefail
 # Project workspace bootstrap
 # -------------------------------
 PROJECT_NAME="rloclab"
-REMOTE_HOST="greene-dtn"
+# REMOTE_HOST="${HPC_HOST:-burst}"
 LOCAL_PROJECT="${HOME}/${PROJECT_NAME}"
 REMOTE_PROJECT="${HOME}/${PROJECT_NAME}"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
 REMOTE_CONFIG="${HOME}/.config"
+SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
+RCLONE_SIF="/scratch/$USER/rclone.sif"
 LOG_CSV="${LOCAL_PROJECT}/logs/runs.csv"
 EXPERIMENT_NAME="${EXPERIMENT_NAME:-go2_flat_direct}"
 
-# Ensure local project exists and mirrors remote (first time creates it)
-mkdir -p "${LOCAL_PROJECT}"
-rsync -az --delete --mkpath -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null" \
-    "${REMOTE_HOST}:${REMOTE_PROJECT}/" \
-    "${LOCAL_PROJECT}/"
+# scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${REMOTE_HOST}:${RCLONE_SIF}" "${RCLONE_SIF}"
+# singularity exec --bind "${LOCAL_PROJECT}" "${RCLONE_SIF}" \
+#   rclone copy \
+#   --sftp-host="${REMOTE_HOST}" \
+#   --sftp-user="${USER}" \
+#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#   --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${REMOTE_PROJECT}/" \
+#   "${LOCAL_PROJECT}/"
 
-mkdir -p "${ISAACLAB_DIR}"
-rsync -az --delete --mkpath -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null" \
-    "${REMOTE_HOST}:${ISAACLAB_DIR}/" \
-    "${ISAACLAB_DIR}/"
+# singularity exec --bind "${ISAACLAB_DIR}" "${RCLONE_SIF}" \
+#   rclone copy \
+#   --sftp-host="${REMOTE_HOST}" \
+#   --sftp-user="${USER}" \
+#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#   --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${ISAACLAB_DIR}/" \
+#   "${ISAACLAB_DIR}/"
 
-rsync -az --delete --mkpath -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null" \
-    "${REMOTE_HOST}:${REMOTE_CONFIG}" \
-    "${HOME}"
+# if [ ! -d "${HOME}/.config" ]; then
+#   mkdir -p "${HOME}/.config"
+# fi
+
+# singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
+#   rclone copy \
+#   --sftp-host="${REMOTE_HOST}" \
+#   --sftp-user="${USER}" \
+#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#   --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${REMOTE_CONFIG}/" \
+#   "${HOME}/.config/"
+
+# singularity exec --bind "/scratch/${USER}" "${RCLONE_SIF}" \
+#   rclone copy \
+#   --sftp-host="${REMOTE_HOST}" \
+#   --sftp-user="${USER}" \
+#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#   --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${SIF_IMAGE}" \
+#   "/scratch/${USER}/"
 
 # -------------------------------
-# Hardcode your cluster paths
+# Set cluster paths based on submission context
 # -------------------------------
-SIF_IMAGE="/scratch/$USER/isaac-lab-base.sif"
-RUN_DIR="${LOCAL_PROJECT}"                       # run inside the mirrored project
+RUN_DIR="${SLURM_SUBMIT_DIR}"                    # run inside the mirrored project
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
 PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
 
@@ -72,6 +102,10 @@ mkdir -p \
 mkdir -p "${PERSISTENT_LOGS_DIR}"
 touch "${PERSISTENT_LOGS_DIR}/.keep"
 
+# Python envs
+VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
+mkdir -p "${VENV_DIR}"
+
 # Prefer node-local tmp for apptainer/singularity scratch
 export APPTAINER_TMPDIR="${NODE_TMP}"
 export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
@@ -85,9 +119,9 @@ EXPERIMENT_NAME_GREP=$(echo "$ISAAC_ARGS" | tr -s ' ' | grep -oP '(?<=--experime
 if [[ -n "$EXPERIMENT_NAME_GREP" ]]; then
       EXPERIMENT_NAME="$EXPERIMENT_NAME_GREP"
 fi
-echo "[burst] ISAAC_ARGS=${ISAAC_ARGS}"
-echo "[burst] TASK_NAME=${TASK_NAME}"
-echo "[burst] EXPERIMENT_NAME=${EXPERIMENT_NAME}"
+echo "[remote] ISAAC_ARGS=${ISAAC_ARGS}"
+echo "[remote] TASK_NAME=${TASK_NAME}"
+echo "[remote] EXPERIMENT_NAME=${EXPERIMENT_NAME}"
 
 # WandB
 export WANDB_PROJECT=$PROJECT_NAME
@@ -96,6 +130,7 @@ export WANDB_RUN_NAME="${EXPERIMENT_NAME}_${SLURM_JOB_ID}"
 
 # Execute with GPU and required binds
 CMD="--nv --containall \
+  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -118,27 +153,33 @@ CMD="--nv --containall \
   --env EXPERIMENT_NAME=$EXPERIMENT_NAME \
   --env TASK_NAME=$TASK_NAME"
 
-echo "[burst] CMD to run: $CMD"
+echo "[remote] CMD to run: $CMD"
 
 singularity exec \
   $CMD \
   --env ISAAC_ARGS="$ISAAC_ARGS" \
+  --env VENV_DIR="$VENV_DIR" \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
+if [ ! -d "${VENV_DIR}/bin" ]; then
+    echo "[SINGULARITY] Creating venv with Python"
+    /isaac-sim/python.sh -m venv "${VENV_DIR}" --system-site-packages
+fi
+source "${VENV_DIR}/bin/activate"
 cd /workspace/isaaclab
 export ISAACLAB_PATH=/workspace/isaaclab
 
 # Ensure the local package is installed in the container Python
 
-/isaac-sim/python.sh -m pip install -e /workspace/run/source/rob6323_go2
+# /isaac-sim/python.sh -m pip install -e /workspace/run[dev]
 
 echo "[singularity] ISAAC_ARGS=${ISAAC_ARGS}"
 
-/isaac-sim/python.sh /workspace/run/scripts/rsl_rl/train.py \
-  --task="${TASK_NAME}" \
-  --headless \
-  ${ISAAC_ARGS}
+# /isaac-sim/python.sh /workspace/run/scripts/rsl_rl/train.py \
+#   --task="${TASK_NAME}" \
+#   --headless \
+#   ${ISAAC_ARGS}
 
 echo "[singularity] TASK_NAME=${TASK_NAME}"
 echo "[singularity] EXPERIMENT_NAME=${EXPERIMENT_NAME}"
@@ -163,7 +204,7 @@ fi
 echo "[singularity] LATEST_CHECKPOINT=${LATEST_CHECKPOINT}"
 
 # Run evaluation with the discovered checkpoint
-/isaac-sim/python.sh /workspace/run/scripts/rsl_rl/play.py \
+python /workspace/run/scripts/rsl_rl/play.py \
   --task="${TASK_NAME}" \
   --checkpoint "${LATEST_CHECKPOINT}" \
   --video \
@@ -171,7 +212,7 @@ echo "[singularity] LATEST_CHECKPOINT=${LATEST_CHECKPOINT}"
   --headless \
 
 # WandB sync, TODO: we could use the built in WandB logger option
-/isaac-sim/python.sh -m wandb sync \
+python -m wandb sync \
     --sync-tensorboard \
     --project ${WANDB_PROJECT} \
     --id ${WANDB_RUN_NAME} \

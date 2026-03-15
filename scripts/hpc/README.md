@@ -1,8 +1,7 @@
 # HPC pipeline client
 
 `pipeline-py-client` is a terminal-friendly curses UI / CLI for running
-continual JEPA world-model workflows and Isaac Lab (`rloclab`) RL workflows
-from a remote HPC login node.
+our worlmodel workflows from a remote HPC login node.
 
 ## Installation
 
@@ -12,10 +11,27 @@ to launch the dialog-based UI.
 
 ```bash
 chmod +x pipeline-py-client
-./pipeline-py-client
 ```
 
-Install the command to your 
+Install the command on HPC as an executable in your `PATH`. Note: If using burst or on an interactive compute node, you may not have access to the subsequent bash files. Therefore, you can create your own environments file to source (e.g., .envs).
+
+```bash
+mkdir -p ~/.local/bin
+install -m 755 pipeline-py-client ~/.local/bin/hpc
+
+# TODO: or zshrc
+echo "export PATH=\"$HOME/.local/bin:$PATH\"" >> ~/.bashrc
+echo "export PROJECT_ROOT=\"<path to project>\"" >> ~/.bashrc
+source ~/.bashrc # or source <custom envs> (e.g., .envs)
+```
+
+Note `dialog` might not be available on burst! See (Quick Start)[../../README.md#quick-start] for workaround. 
+
+After that, run:
+
+```bash
+hpc --help
+```
 
 > The UI requires the `dialog` binary (often preinstalled on HPC login nodes).
 > If missing, install via your package manager (e.g., `apt-get install dialog`).
@@ -23,11 +39,9 @@ Install the command to your
 
 ## Interactive UI
 
-Running `./pipeline-py-client` (or `./pipeline-py-client ui`) opens a menu with
-the core JEPA pipeline stages:
+Running `hpc` opens a menu with
 
-- **Install dependencies**: prompt for the pip command and execute
-  `pip install --upgrade pip` followed by `pip install -e .[dev]`.
+- **Install environment on HPC**: pick from discovered `*install*.slurm` scripts, then queue `scripts/install.sh` to submit the selected installer on the login host.
 - **Download datasets**: choose datasets via checkboxes, enter the dataset root
   and splits, and build the `python -m jepa.datasets.download` commands.
 - **Launch pretraining**: choose a config, datasets, and extra arguments, then
@@ -39,10 +53,11 @@ the core JEPA pipeline stages:
 
 ## Commands
 
-### Curate JEPA datasets from raw videos
+### Curate datasets from raw videos (TODO)
 
+Example: (WIP)
 ```bash
-./pipeline-py-client curate-dataset \
+hpc curate-dataset \
   --input-root /datasets/raw_videos/task1 \
   --output-manifest /datasets/manifests/task1_train.csv \
   --extensions .mp4 .mov \
@@ -52,20 +67,24 @@ the core JEPA pipeline stages:
 This calls `scripts/hpc/helpers/curate_jepa_dataset.py` and writes manifests in
 `/path/to/video.ext <label>` format compatible with V-JEPA style data loaders.
 
-### Install dependencies
+### Install environment on HPC
 
 ```bash
-./pipeline-py-client install
+hpc install
 ```
 
-Runs the installation steps defined in the spec (`pip install --upgrade pip`
-followed by `pip install -e .[dev]`). Use `--pip-command` to switch to `pip3`
-or a virtual environment shim.
+Queues `scripts/install.sh`, which submits `scripts/hpc/install.slurm` on the selected login host.
 
-### Download datasets
+You can override host/project path when needed:
 
 ```bash
-./pipeline-py-client download \
+hpc install --host burst --remote-project-dir ~/my-repo
+```
+
+### Download datasets (WIP)
+
+```bash
+hpc download \
   --dataset-root /path/to/datasets \
   --datasets cifar100 imagenet \
   --splits train test
@@ -76,8 +95,8 @@ provided splits. The dataset root must exist before running.
 
 ### Launch pretraining and optionally generate Slurm
 
-```bash
-./pipeline-py-client pretrain \
+```bash (WIP)
+hpc pretrain \
   --config configs/hf224_config.json \
   --datasets common_pool unsplash \
   --slurm-path my_pretrain.slurm \
@@ -96,7 +115,7 @@ extra arguments. When `--slurm-path` is provided a job file is generated from
 ### Launch Isaac Lab / rloclab RL training
 
 ```bash
-./pipeline-py-client rloclab-train \
+hpc rloclab-train \
   --task Template-Rloclab-Go2-Direct-v0 \
   --max-iterations 10000 \
   --num-envs 4096 \
@@ -110,13 +129,19 @@ For wheeled tasks, set task names such as `Isaac-RLlab-F1Tenth-Drift-v0` or
 `Template-Rloclab-Go2-Direct-v0` / `Template-Rloclab-Go2-Bipedal-v0` /
 `Template-Rloclab-Go2-Backflip-v0`.
 
-Use `--isaaclab-launcher` when executing from `src/rloclab` and you want to run
-`./isaaclab.sh -p scripts/rsl_rl/train.py ...` instead of `python ...`.
+This queues `scripts/train.sh`, which submits `scripts/hpc/train.slurm` on the selected host
+with the selected task and forwarded training arguments.
+
+You can override host/project path when needed:
+
+```bash
+hpc rloclab-train --host burst --remote-project-dir ~/my-repo --task Template-Rloclab-Go2-Direct-v0
+```
 
 ### Generate a Slurm script for any command
 
 ```bash
-./pipeline-py-client slurm \
+hpc slurm \
   --output download.slurm \
   --job-name jepa-downloads \
   --ext3-path /scratch/overlay.ext3 \
@@ -130,7 +155,7 @@ the same defaults as the pretraining helper.
 ### Inspect the bundled spec
 
 ```bash
-./pipeline-py-client show-spec
+hpc show-spec
 ```
 
 Prints the `spec` document shipped with this directory for quick reference in a

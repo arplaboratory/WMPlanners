@@ -86,3 +86,11 @@ tex file extensions
 #env
 **/.env
 **/.venv
+\.*_env
+\.venv
+
+.jepa_config.json
+
+# Vi files
+**/*.swp
+**/*.swo

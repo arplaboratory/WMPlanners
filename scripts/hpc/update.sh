@@ -36,7 +36,7 @@ EOF
 
 # submit the job
 echo "SLURM job to install $PKG..."
-ssh -o StrictHostKeyChecking=accept-new burst "cd ~/rloclab && sbatch --job-name='update_${PKG}_${USER}' --mail-user='${USER}@nyu.edu' '$TMP_SLURM' '$@'"
+ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no ${HPC_HOST} "cd ~/rloclab && sbatch --job-name='update_${PKG}_${USER}' --mail-user='${USER}@nyu.edu' '$TMP_SLURM' '$@'"
 #sbatch --job-name="update_${PKG}_${USER}" "$TMP_SLURM"
 
 #  clean up

@@ -1,32 +1,31 @@
 #!/bin/bash
 
-#SBATCH --requeue
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=10
-#SBATCH --mem=20GB
-#SBATCH --time=02:00:00
-#SBATCH --mail-type=END
-#SBATCH --account=rob_gy6323-2025fa
-#SBATCH --partition=n2c48m24
-#SBATCH --output=../pytest%j.out
-#SBATCH --error=../pytest_%j.err
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16GB
+#SBATCH --time=01:00:00
+#SBATCH --account=ds_ga_3001_003-2026sp
+#SBATCH --partition=interactive
+#SBATCH --output=../slurm_%j.out
+#SBATCH --error=../slurm_%j.err
+#SBATCH --gres=gpu:1
 
 set -euo pipefail
 
 # -------------------------------
-# Hardcode your cluster paths
+# Project workspace bootstrap
 # -------------------------------
-SIF_IMAGE="/scratch/$USER/isaac-lab-base.sif"
-RUN_DIR="${LOCAL_PROJECT}"                       # run inside the mirrored project
-PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
-PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
+PROJECT_NAME="rloclab"
+ISAACLAB_DIR="/scratch/$USER/IsaacLab"
+SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
+RUN_DIR="${SLURM_SUBMIT_DIR}"
 
-# Isaac Sim container paths
+PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
+
 DOCKER_ISAACSIM_ROOT_PATH="/isaac-sim"
 DOCKER_USER_HOME="/root"
 
-# Node-local cache & execution
 NODE_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
 CACHE_ROOT="${NODE_TMP}/docker-isaac-sim"
 mkdir -p \
@@ -41,14 +40,30 @@ mkdir -p \
   "${CACHE_ROOT}/documents" \
   "${CACHE_ROOT}/kit-data"
 
-mkdir -p "${PERSISTENT_LOGS_DIR}"
-touch "${PERSISTENT_LOGS_DIR}/.keep"
+VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
 
-# Prefer node-local tmp for apptainer/singularity scratch
 export APPTAINER_TMPDIR="${NODE_TMP}"
 export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
 
+# -------------------------------
+# Connection instructions
+# -------------------------------
+COMPUTE_NODE=$(hostname)
+
+echo "=========================================================================="
+echo "               INTERACTIVE BASH SESSION (${COMPUTE_NODE})                 "
+echo "=========================================================================="
+echo ""
+echo "Your Singularity container is running with the venv activated."
+echo "To connect from another terminal, SSH into the compute node:"
+echo ""
+echo "    ssh ${COMPUTE_NODE}"
+echo ""
+echo "The session will stay alive until the job walltime expires or you cancel it."
+echo "=========================================================================="
+
 CMD="--nv --containall \
+  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -61,18 +76,22 @@ CMD="--nv --containall \
   -B ${CACHE_ROOT}/cache/wandb:${DOCKER_USER_HOME}/.cache/wandb:rw \
   -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
   -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
-  -B ${PERSISTENT_LOGS_DIR}:/workspace/isaaclab/logs:rw \
-  -B ${RUN_DIR}:/workspace/run:rw"
-
-echo "CMD to run: $CMD"
+  -B ${RUN_DIR}:/workspace/run:rw \
+  --env WANDB_CACHE_DIR=${DOCKER_USER_HOME}/.cache/wandb \
+  --env WANDB_CONFIG_DIR=${DOCKER_USER_HOME}/.config/wandb"
 
 singularity exec \
   $CMD \
+  --env VENV_DIR="$VENV_DIR" \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
-/isaac-sim/python.sh -m pip install -e /workspace/run/source/rob6323_go2[dev]
+source "${VENV_DIR}/bin/activate"
+export ISAACLAB_PATH=/workspace/isaaclab
 
-cd /workspace/run/source/rob6323_go2/tests
-/isaac-sim/python.sh pytest
+echo "[bash] Venv activated: $(which python)"
+echo "[bash] Python version: $(python --version)"
+echo "[bash] Sleeping until job expires. Use ssh to connect and work interactively."
+
+sleep infinity
 '
