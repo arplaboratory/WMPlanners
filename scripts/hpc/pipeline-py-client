@@ -164,43 +164,19 @@ def discover_install_slurm_scripts() -> List[str]:
     return candidates
 
 
-def build_download_command(dataset: str, dataset_root: Path, splits: Iterable[str], snapshot_download: bool) -> List[str]:
-    """Construct the dataset download command for a single dataset."""
-
-    split_arg = ",".join(splits)
-    command = [
-        "python",
-        "-m",
-        "jepa.datasets.download",
-        "--dataset-root",
-        str(dataset_root),
-        "--dataset-name",
-        dataset,
-        "--splits",
-        split_arg,
-    ]
-    if snapshot_download:
-        command.insert(7, "--snapshot-download")
-        
-    return command
-
-def download_datasets(datasets: Iterable[str], dataset_root: Path, splits: Iterable[str], snapshot_download: bool, dry_run: bool) -> None:
-    """Download one or more datasets sequentially."""
-
-    ensure_exists(dataset_root, "Dataset root")
-    for dataset in datasets:
-        command = build_download_command(dataset, dataset_root, splits, snapshot_download=snapshot_download)
-        run_command(command, dry_run=dry_run)
+def download_assets(dry_run: bool) -> None:
+    """Download project assets from assets.yml."""
+    command = ["python", "scripts/download_assets.py"]
+    run_command(command, dry_run=dry_run)
 
 
 
 def build_pretrain_command(config: Path, datasets: Iterable[str], extra_args: Iterable[str]) -> List[str]:
-    """Construct the pretraining command."""
+    """Construct the pretraining command using app.main (V-JEPA)."""
     # if no config (e.g., empty string or ''), use the default config
-    if not config or not Path(config).is_file():
-        command = ["python", "-m", "jepa.train.pretrain"]
-    else:
-        command = ["python", "-m", "jepa.train.pretrain", "--config", str(config)]
+    command = ["python", "-m", "app.main"]
+    if config and Path(config).is_file():
+        command.extend(["--fname", str(config)])
 
     for dataset in datasets:
         command.extend(["--dataset", dataset])
@@ -309,10 +285,77 @@ def handle_install(args: argparse.Namespace) -> None:
     queue_hpc_install(command_args, dry_run=args.dry_run)
 
 
-def handle_download(args: argparse.Namespace) -> None:
-    # Default to 'data' directory if not specified
-    dataset_root = Path(args.dataset_root) if hasattr(args, 'dataset_root') and args.dataset_root else Path('data')
-    download_datasets(args.datasets, dataset_root, args.splits, snapshot_download=args.snapshot_download, dry_run=args.dry_run)
+def handle_download_assets(args: argparse.Namespace) -> None:
+    download_assets(dry_run=args.dry_run)
+
+def handle_test(args: argparse.Namespace) -> None:
+    command = ["pytest", "tests/"] + args.extra_args
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+def handle_world_model_dataset(args: argparse.Namespace) -> None:
+    command = [
+        "python", "scripts/world_model/make_toy_dataset.py",
+        "--out_dir", args.out_dir,
+        "--episodes", str(args.episodes),
+        "--steps", str(args.steps)
+    ] + args.extra_args
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+def handle_world_model_train(args: argparse.Namespace) -> None:
+    command = [
+        "python", "scripts/world_model/train_world_model.py",
+        "--data_dir", args.data_dir,
+        "--epochs", str(args.epochs),
+        "--batch_size", str(args.batch_size)
+    ] + args.extra_args
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+def handle_dino_demo(args: argparse.Namespace) -> None:
+    command = ["python", "src/world_model/dino_demo.py"]
+    if getattr(args, "config", None):
+        command.extend(["--config", args.config])
+    command.extend(args.extra_args)
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
 
 
 def handle_pretrain(args: argparse.Namespace) -> None:
@@ -486,26 +529,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     install_parser.set_defaults(func=handle_install)
 
-    download_parser = subparsers.add_parser("download", parents=[common], help="Download one or more datasets.")
-    download_parser.add_argument(
-        "--datasets",
-        nargs="+",
-        required=True,
-        help="Datasets to download (e.g., cifar100 imagenet).",
-    )
-    download_parser.add_argument("--dataset-root", default="data", help="Destination directory for downloads (default: data/).")
-    download_parser.add_argument(
-        "--splits",
-        nargs="+",
-        default=["train"],
-        help="Dataset splits to download (e.g., train test train[:10]).",
-    )
-    download_parser.add_argument(
-        "--snapshot-download",
-        action="store_true",
-        help="Use snapshot_download from huggingface datasets.",
-    )
-    download_parser.set_defaults(func=handle_download)
+    download_parser = subparsers.add_parser("download-assets", parents=[common], help="Download datasets and assets via assets.yml.")
+    download_parser.set_defaults(func=handle_download_assets)
+
+    test_parser = subparsers.add_parser("test", parents=[common], help="Run pytest suites.")
+    test_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional arguments for pytest.")
+    test_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    test_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(test_parser)
+    test_parser.set_defaults(func=handle_test)
+
+    wmd_parser = subparsers.add_parser("world-model-dataset", parents=[common], help="Generate toy dataset for world model.")
+    wmd_parser.add_argument("--out_dir", required=True, help="Output directory pattern.")
+    wmd_parser.add_argument("--episodes", type=int, default=200, help="Number of episodes.")
+    wmd_parser.add_argument("--steps", type=int, default=200, help="Steps per episode.")
+    wmd_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
+    wmd_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    wmd_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(wmd_parser)
+    wmd_parser.set_defaults(func=handle_world_model_dataset)
+
+    wmt_parser = subparsers.add_parser("world-model-train", parents=[common], help="Train the world model.")
+    wmt_parser.add_argument("--data_dir", required=True, help="Data directory with episode npz files.")
+    wmt_parser.add_argument("--epochs", type=int, default=20, help="Number of epochs.")
+    wmt_parser.add_argument("--batch_size", type=int, default=64, help="Batch size.")
+    wmt_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
+    wmt_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    wmt_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(wmt_parser)
+    wmt_parser.set_defaults(func=handle_world_model_train)
+
+    dd_parser = subparsers.add_parser("dino-demo", parents=[common], help="Run DINO demo.")
+    dd_parser.add_argument("--config", help="Path to config yaml.")
+    dd_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
+    dd_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    dd_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(dd_parser)
+    dd_parser.set_defaults(func=handle_dino_demo)
 
     pretrain_parser = subparsers.add_parser("pretrain", parents=[common], help="Launch pretraining locally or via Slurm.")
     pretrain_parser.add_argument("--config", required=True, help="Path to the training config file.")
@@ -793,34 +853,59 @@ def dialog_install(ui: DialogUI) -> None:
         queue_hpc_install(["--install-slurm", selected_install_slurm], dry_run=False)
 
 
-def dialog_download(ui: DialogUI) -> None:
+def dialog_download_assets(ui: DialogUI) -> None:
     try:
-        # input full path to dataset root 
-        dataset_root = Path(ui.inputbox("Dataset root (must exist)", 
-                                        config.get("last_dataset_root", str(DATA_DIR))))
-        datasets = prompt_dataset_selection(ui)
-        if not datasets:
-            ui.msgbox("No datasets selected. Nothing to do.")
-            return
-        splits_raw = ui.inputbox("Splits (comma separated)", "train")
-        splits = [split.strip() for split in splits_raw.split(",") if split.strip()]
-        snapshot_download = ui.yesno("Use snapshot_download from huggingface datasets?", default_no=False)
         dry_run = prompt_dry_run(ui, config_key="last_download_dry_run")
     except DialogCancelled:
         return
-
-    config["last_dataset_root"] = str(dataset_root)
-    config["last_datasets"] = datasets
-    config["last_splits"] = splits
-    config["last_snapshot_download"] = snapshot_download
-    save_config(config)
-
     try:
-        for dataset in datasets:
-            command = build_download_command(dataset, dataset_root, splits, snapshot_download=snapshot_download)
-            run_command(command, dry_run=dry_run, ui=ui)
+        download_assets(dry_run=dry_run)
     except Exception as exc:  # pragma: no cover - surfaced to the user
         ui.msgbox(f"Download failed: {exc}")
+
+def dialog_test(ui: DialogUI) -> None:
+    try:
+        extra_args_raw = ui.inputbox("Additional pytest args (space separated)", "")
+        extra_args = extra_args_raw.split() if extra_args_raw else []
+        dry_run = prompt_dry_run(ui, config_key="last_test_dry_run")
+    except DialogCancelled:
+        return
+
+    command = ["pytest", "tests/"] + extra_args
+    try:
+        run_command(command, dry_run=dry_run, ui=ui)
+    except Exception as exc:  # pragma: no cover
+        ui.msgbox(f"Tests failed: {exc}")
+        return
+
+    try:
+        if ui.yesno("Generate a Slurm script for this test run?", default_no=True):
+            params = prompt_slurm_parameters(ui)
+            slurm_path = Path(
+                ui.inputbox("Where should the Slurm script be written?", "test.slurm")
+            )
+            generate_slurm_script(
+                slurm_path,
+                command,
+                job_name=params["job_name"] or "jepa-test",
+                nodes=int(params["nodes"] or 1),
+                cpus=int(params["cpus"] or 2),
+                mem=params["mem"] or "64GB",
+                time=params["time"] or "1:00:00",
+                gpus=params["gpus"] or "gpu:1",
+                ext3_path=params["ext3_path"] or "YourEXT3PATH.ext3",
+                sif_path=params["sif_path"] or "YourSIFPATH.sif",
+                account=params.get("account"),
+                mail_user=params.get("mail_user"),
+                mail_type=params.get("mail_type"),
+                output_log=params.get("output_log"),
+            )
+            if ui.yesno("Submit with sbatch now?", default_no=False):
+                submit_slurm(slurm_path, dry_run=dry_run)
+    except DialogCancelled:
+        return
+    except Exception as exc:  # pragma: no cover
+        ui.msgbox(f"Slurm generation/submission failed: {exc}")
 
 
 def dialog_pretrain(ui: DialogUI) -> None:
@@ -972,8 +1057,9 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
     ui = DialogUI()
     main_menu_choices = (
         ("install", "Queue install.slurm on HPC"),
-        ("download", "Download datasets"),
+        ("download-assets", "Download datasets and assets via assets.yml"),
         ("pretrain", "Launch pretraining and optional Slurm"),
+        ("test", "Run tests (pytest) and optional Slurm"),
         ("slurm", "Generate/submit a Slurm script for any command"),
         ("help", "Show project README.md as help"),
         ("quit", "Exit"),
@@ -987,10 +1073,12 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
 
         if selection == "install":
             dialog_install(ui)
-        elif selection == "download":
-            dialog_download(ui)
+        elif selection == "download-assets":
+            dialog_download_assets(ui)
         elif selection == "pretrain":
             dialog_pretrain(ui)
+        elif selection == "test":
+            dialog_test(ui)
         elif selection == "slurm":
             dialog_slurm(ui)
         elif selection == "help":
