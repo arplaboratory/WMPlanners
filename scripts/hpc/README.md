@@ -13,16 +13,16 @@ to launch the dialog-based UI.
 chmod +x pipeline-py-client
 ```
 
-Install the command on HPC as an executable in your `PATH`:
+Install the command on HPC as an executable in your `PATH`. Note: If using burst or on an interactive compute node, you may not have access to the subsequent bash files. Therefore, you can create your own environments file to source (e.g., .envs).
 
 ```bash
 mkdir -p ~/.local/bin
 install -m 755 pipeline-py-client ~/.local/bin/hpc
 
-# or zshrc
+# TODO: or zshrc
 echo "export PATH=\"$HOME/.local/bin:$PATH\"" >> ~/.bashrc
 echo "export PROJECT_ROOT=\"<path to project>\"" >> ~/.bashrc
-source ~/.bashrc
+source ~/.bashrc # or source <custom envs> (e.g., .envs)
 ```
 
 Note `dialog` might not be available on burst! See (Quick Start)[../../README.md#quick-start] for workaround. 
