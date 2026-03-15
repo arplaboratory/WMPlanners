@@ -71,7 +71,8 @@ python scripts/world_model/make_toy_dataset.py --out_dir data/toy --episodes 200
 
 **Basic CNN Training:**
 ```bash
-python scripts/world_model/train_world_model.py --data_dir data/toy --epochs 20 --out_dir runs/cnn
+python scripts/world_model/train_world_model.py --dataset data/toy --dataset_type npz --epochs 20 --out_dir runs/cnn
+
 ```
 
 **Training with DINOv2 Backbone (Frozen):**
