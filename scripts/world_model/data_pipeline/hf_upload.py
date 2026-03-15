@@ -134,11 +134,13 @@ def run_hf_upload(
         })
 
     if not windows:
+        # Force a shard file by adding a null row and filtering it out.
+        # This resolves an IndexError in load_from_disk for empty datasets.
         empty_features = _build_features(Value("string"))
         ds = Dataset.from_dict(
-            {col: [] for col in empty_features},
+            {col: [None] for col in empty_features},
             features=empty_features,
-        )
+        ).filter(lambda _: False)
         ds.save_to_disk(save_dir)
         print(f"[hf_upload] Empty selection — saved empty dataset to {save_dir}")
         return save_dir
