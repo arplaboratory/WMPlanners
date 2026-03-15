@@ -79,6 +79,7 @@ python scripts/world_model/train_world_model.py --dataset data/toy --dataset_typ
 ```bash
 python scripts/world_model/train_world_model.py \
     --data_dir data/toy \
+    --dataset_type npz \
     --backbone dinov2 \
     --backbone_name dinov2_vits14 \
     --freeze_backbone \
