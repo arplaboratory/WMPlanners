@@ -54,11 +54,16 @@ uv pip install -e ".[dev]" || exit 1
 
 # 3. Install external packages (DINOv2, V-JEPA2)
 if [ "$INSTALL_EXTERNALS" = true ]; then
-    # Patch for Python 3.11 compatibility: xformers==0.0.18 is not supported.
-    # We remove the pin to allow the install to succeed; the code handles the absence of xformers.
+    # Patch for Python 3.11 and dependency compatibility:
+    # - xformers==0.0.18 is not supported on 3.11.
+    # - torch/torchvision pins conflict with uv resolution and platform availability.
+    # - Platform-specific index URLs can cause resolution failures.
     if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
-        echo "Patching external/dino/requirements.txt for Python 3.11..."
+        echo "Patching external/dino/requirements.txt for Python 3.11 and dependency compatibility..."
         sed -i '/xformers==0.0.18/d' "$PROJECT_ROOT/external/dino/requirements.txt"
+        sed -i 's/torch==2.0.0/torch>=2.0/g' "$PROJECT_ROOT/external/dino/requirements.txt"
+        sed -i 's/torchvision==0.15.0/torchvision>=0.15/g' "$PROJECT_ROOT/external/dino/requirements.txt"
+        sed -i '/--extra-index-url https:\/\/download.pytorch.org\/whl\/cu117/d' "$PROJECT_ROOT/external/dino/requirements.txt"
     fi
 
     bash "$PROJECT_ROOT/scripts/install_externals.sh" || exit 1
