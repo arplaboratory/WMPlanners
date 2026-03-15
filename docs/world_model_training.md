@@ -21,6 +21,19 @@ The world model is designed with a **modular backbone architecture**, allowing y
 
 ---
 
+## Environment Setup
+
+To ensure compatibility with pre-trained backbones and internal tools, we use a centralized setup script:
+
+```bash
+bash scripts/python_setup.sh
+source .venv/bin/activate
+```
+
+This enforces **Python 3.11** and correctly initializes all external submodules.
+
+---
+
 ## Backbone Demo and Standalone Testing
 
 Before training the full world model, you can test the vision backbones using the standalone demo script. This is useful for verifying that models load correctly and datasets are being parsed properly.
