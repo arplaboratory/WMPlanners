@@ -55,7 +55,8 @@ docs = [
   "nbsphinx>=0.9",
   "jupytext>=1.15",
   "sphinxcontrib-bibtex",
-  "sphinx-autoapi"
+  "sphinx-autoapi",
+  "sphinxcontrib-mermaid"
 ]
 
 [project.scripts]
