@@ -4,7 +4,7 @@ import os
 import time
 import torch
 from torch.utils.data import DataLoader
-from world_model.data import HFWindowDataset, collate_hf
+from world_model.data import HFWindowDataset, NPZEpisodeDataset, collate_hf, collate_npz
 from world_model.architecture import WorldModel
 from world_model.engine.trainer import TrainConfig, rollout_loss
 from world_model.utils import seed_everything
@@ -12,7 +12,9 @@ from world_model.utils import seed_everything
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dataset', type=str, required=True,
-                    help='HuggingFace dataset path (local dir or Hub ID)')
+                    help='Path to dataset (HuggingFace dir/ID or local .npz dir)')
+    ap.add_argument('--dataset_type', type=str, default='hf', choices=['hf', 'npz'],
+                    help='Type of dataset to load')
     ap.add_argument('--epochs', type=int, default=20)
     ap.add_argument('--batch_size', type=int, default=64)
     ap.add_argument('--img_size', type=int, default=224)
@@ -30,9 +32,15 @@ def main():
     seed_everything(args.seed)
     os.makedirs(args.out_dir, exist_ok=True)
 
-    ds = HFWindowDataset(args.dataset, img_size=args.img_size)
+    if args.dataset_type == 'hf':
+        ds = HFWindowDataset(args.dataset, img_size=args.img_size)
+        collate_fn = collate_hf
+    else:
+        ds = NPZEpisodeDataset(args.dataset, window=args.horizon + 1)
+        collate_fn = collate_npz
+
     dl = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0,
-                    collate_fn=collate_hf, drop_last=True)
+                    collate_fn=collate_fn, drop_last=True)
 
     odom_dim = ds.D_odom
     imu_dim = ds.D_imu
