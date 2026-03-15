@@ -14,21 +14,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
-      - name: Install package and docs deps
+          enable-cache: true
+      - name: Force HTTPS for submodules
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .[docs]
-          if [ -f external/vjepa2/requirements.txt ]; then
-            pip install -r external/vjepa2/requirements.txt
-          fi
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "org-16943930@github.com:"
+      - name: Initialize submodules (skip Overleaf)
+        run: |
+          git submodule update --init --recursive external/vjepa2
+          git submodule update --init --recursive external/dino
+      - name: Setup environment
+        run: |
+          bash scripts/python_setup.sh
+          source .venv/bin/activate
+          uv pip install -e .[docs]
       - name: Clean Docs
-        run: rm -rf docs/_build docs/_autosummary docs/api docs/technical_reference
+        run: |
+          source .venv/bin/activate
+          rm -rf docs/_build docs/_autosummary docs/api docs/technical_reference
       - name: Build docs
-        run: sphinx-build -W -b html docs docs/_build/html
+        run: |
+          source .venv/bin/activate
+          sphinx-build -W -b html docs docs/_build/html
       - name: Upload docs artifact
         uses: actions/upload-artifact@v4
         with:
