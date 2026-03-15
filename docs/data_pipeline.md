@@ -6,7 +6,7 @@ The DINO-WM data pipeline extracts, filters, embeds, and selects high-quality tr
 
 The pipeline uses a multi-stage approach to refine the raw data into a diverse, high-quality corpus of transition windows.
 
-```mermaid
+```{mermaid}
 graph TD
     A([Raw Data: image_index.csv, odometry.csv]) --> |run_pipeline.py| B[Stage 1: Quality Filter]
     B --> |compute_frame_metrics| C{Keep?}

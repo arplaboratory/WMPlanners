@@ -12,16 +12,7 @@ import torch.nn as nn
 
 @dataclass
 class ModelBundle:
-    """Container returned by every backbone builder.
-
-    Attributes:
-        model: The ``nn.Module`` implementing the encoder.
-        preprocess: A callable that converts a raw input (e.g. PIL Image)
-            into a tensor suitable for *model*.
-        feature_dim: Dimensionality of the output feature vector, or ``None``
-            if not known at build time.
-        modality: ``"image"`` or ``"video"``.
-    """
+    """Container returned by every backbone builder."""
 
     model: nn.Module
     preprocess: Callable
