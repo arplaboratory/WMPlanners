@@ -54,6 +54,13 @@ uv pip install -e ".[dev]" || exit 1
 
 # 3. Install external packages (DINOv2, V-JEPA2)
 if [ "$INSTALL_EXTERNALS" = true ]; then
+    # Patch for Python 3.11 compatibility: xformers==0.0.18 is not supported.
+    # We remove the pin to allow the install to succeed; the code handles the absence of xformers.
+    if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
+        echo "Patching external/dino/requirements.txt for Python 3.11..."
+        sed -i '/xformers==0.0.18/d' "$PROJECT_ROOT/external/dino/requirements.txt"
+    fi
+
     bash "$PROJECT_ROOT/scripts/install_externals.sh" || exit 1
 fi
 
