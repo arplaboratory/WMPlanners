@@ -120,6 +120,8 @@ source .ds3001/bin/activate
 pip install pip --upgrade
 # V-JEPA2 runtime dependencies
 pip install -r external/vjepa2/requirements.txt
+# DINOv2 runtime dependencies
+pip install -r external/dino/requirements.txt
 
 # Project dependencies
 pip install -e .[dev,docs]
