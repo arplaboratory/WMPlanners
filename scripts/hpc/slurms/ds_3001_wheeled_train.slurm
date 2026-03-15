@@ -7,27 +7,28 @@
 #SBATCH --mem=20GB
 #SBATCH --time=02:00:00
 #SBATCH --gres=gpu:1
+#SBATCH --job-name=wheeled_rl
 #SBATCH --mail-type=END
 #SBATCH --account=ds_ga_3001_003-2026sp
 #SBATCH --partition=g2-standard-12
-#SBATCH --output=../slurm_%j.out
-#SBATCH --error=../slurm_%j.err
+#SBATCH --output=../%x_%j.out
+#SBATCH --error=../%x_%j.err
 
 set -euo pipefail
+
+# Load user environment variables (e.g. WANDB_API_KEY)
+# shellcheck source=/dev/null
+[ -f "${HOME}/.envs" ] && source "${HOME}/.envs"
 
 # -------------------------------
 # Project workspace bootstrap
 # -------------------------------
 PROJECT_NAME="rloclab"
-LOCAL_PROJECT="${HOME}/${PROJECT_NAME}"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
-REMOTE_CONFIG="${HOME}/.config"
-SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
-
-# -------------------------------
-# Set cluster paths based on submission context
-# -------------------------------
+SIF_IMAGE="/scratch/$USER/isaac-sim_ds3001.sif"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
+
+PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
 PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
 
 # Isaac Sim container paths
@@ -36,7 +37,9 @@ DOCKER_USER_HOME="/root"
 
 # Node-local cache & execution
 NODE_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-CACHE_ROOT="${NODE_TMP}/docker-isaac-sim"
+# Use a persistent scratch-backed cache root so pip/builds don't exhaust node-local /tmp
+# Must match ds_3001_install.slurm so the pre-warmed pip/kit caches are reused
+CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
 mkdir -p \
   "${CACHE_ROOT}/cache/kit" \
   "${CACHE_ROOT}/cache/ov" \
@@ -52,9 +55,15 @@ mkdir -p \
 mkdir -p "${PERSISTENT_LOGS_DIR}"
 touch "${PERSISTENT_LOGS_DIR}/.keep"
 
-# Prefer node-local tmp for apptainer/singularity scratch
-export APPTAINER_TMPDIR="${NODE_TMP}"
-export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
+# Venv must match ds_3001_install.slurm — reuse the pre-built environment
+VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
+mkdir -p "${VENV_DIR}"
+
+# Scratch-backed tmp for builds and apptainer cache
+SCRATCH_TMP="/scratch/$USER/tmp"
+mkdir -p "${SCRATCH_TMP}"
+export APPTAINER_TMPDIR="${SCRATCH_TMP}"
+export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
 
 # -------------------------------
 # Wheeled RL defaults (MuSHR drift)
@@ -68,6 +77,7 @@ EXPERIMENT_NAME_GREP=$(echo "$ISAAC_ARGS" | tr -s ' ' | grep -oP '(?<=--experime
 if [[ -n "$EXPERIMENT_NAME_GREP" ]]; then
   EXPERIMENT_NAME="$EXPERIMENT_NAME_GREP"
 fi
+scontrol update JobId="${SLURM_JOB_ID}" Name="${EXPERIMENT_NAME}" 2>/dev/null || true
 
 # WheeledLab assets path used by src/rloclab/wheeled/assets/*.py
 # Override from environment as needed:
@@ -76,10 +86,10 @@ WHEELED_ASSETS_DATA_DIR="${RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR:-${RUN_DIR}/src/Wh
 
 # WandB
 export WANDB_PROJECT="${PROJECT_NAME}"
-export WANDB_API_KEY="$(cat "${REMOTE_CONFIG}/wandb/.key" 2>/dev/null || true)"
 export WANDB_RUN_NAME="${EXPERIMENT_NAME}_${SLURM_JOB_ID}"
 
 CMD="--nv --containall \
+  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -96,7 +106,7 @@ CMD="--nv --containall \
   -B ${RUN_DIR}:/workspace/run:rw \
   --env WANDB_CACHE_DIR=${DOCKER_USER_HOME}/.cache/wandb \
   --env WANDB_CONFIG_DIR=${DOCKER_USER_HOME}/.config/wandb \
-  --env WANDB_API_KEY=${WANDB_API_KEY} \
+  --env WANDB_API_KEY=${WANDB_API_KEY:-} \
   --env WANDB_PROJECT=${WANDB_PROJECT} \
   --env WANDB_RUN_NAME=${WANDB_RUN_NAME} \
   --env TASK_NAME=${TASK_NAME} \
@@ -104,29 +114,66 @@ CMD="--nv --containall \
   --env EXPERIMENT_NAME=${EXPERIMENT_NAME} \
   --env RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR=${WHEELED_ASSETS_DATA_DIR}"
 
-echo "[slurm] ISAAC_ARGS=${ISAAC_ARGS}"
-echo "[slurm] TASK_NAME=${TASK_NAME}"
-echo "[slurm] AGENT_NAME=${AGENT_NAME}"
-echo "[slurm] EXPERIMENT_NAME=${EXPERIMENT_NAME}"
-echo "[slurm] RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR=${WHEELED_ASSETS_DATA_DIR}"
+# Ensure container sees node-local temp/caches and pip cache location
+CMD="${CMD} \
+  --env APPTAINER_TMPDIR=${APPTAINER_TMPDIR} \
+  --env APPTAINER_CACHEDIR=${APPTAINER_CACHEDIR} \
+  --env TMPDIR=${SCRATCH_TMP} \
+  --env PIP_CACHE_DIR=${DOCKER_USER_HOME}/.cache/pip \
+  -B ${SCRATCH_TMP}:/tmp:rw \
+  -B ${SCRATCH_TMP}:/var/tmp:rw"
+
+# XDG cache points to the bound location so all tools use the persistent cache
+CMD="${CMD} \
+  --env XDG_CACHE_HOME=${DOCKER_USER_HOME}/.cache"
+
+echo "[NODE] ISAAC_ARGS=${ISAAC_ARGS}"
+echo "[NODE] TASK_NAME=${TASK_NAME}"
+echo "[NODE] AGENT_NAME=${AGENT_NAME}"
+echo "[NODE] EXPERIMENT_NAME=${EXPERIMENT_NAME}"
+echo "[NODE] RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR=${WHEELED_ASSETS_DATA_DIR}"
+echo "[NODE] SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-unknown}"
+echo "[NODE] RUN_DIR=${RUN_DIR}"
+
+echo "[NODE] listing RUN_DIR before singularity exec:"
+ls -la "${RUN_DIR}" || true
+
+echo "[NODE] listing RUN_DIR/scripts path before singularity exec:"
+ls -la "${RUN_DIR}/scripts" || true
 
 singularity exec \
   $CMD \
+  --env VENV_DIR="$VENV_DIR" \
   --env ISAAC_ARGS="$ISAAC_ARGS" \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
 cd /workspace/isaaclab
 export ISAACLAB_PATH=/workspace/isaaclab
+
+# ---- Venv bootstrap (persists in scratch cache between runs) ----
+if [ ! -f "${VENV_DIR}/bin/activate" ]; then
+  echo "[APPTAINER] Creating venv at ${VENV_DIR}..."
+  /isaac-sim/python.sh -m venv "${VENV_DIR}" --system-site-packages
+fi
+source "${VENV_DIR}/bin/activate"
 export PYTHONPATH="/workspace/run/src:${PYTHONPATH:-}"
 
-/isaac-sim/python.sh -m pip install -e /workspace/run || true
+echo "[APPTAINER] /tmp usage:"; df -h /tmp || true
+echo "[APPTAINER] venv: $(which python)"
+echo "[APPTAINER] listing /workspace/run:"
+ls -la /workspace/run || true
+echo "[APPTAINER] checking for train script:"
+ls -la /workspace/run/scripts/rl || true
 
-echo "[container] TASK_NAME=${TASK_NAME}"
-echo "[container] AGENT_NAME=${AGENT_NAME}"
-echo "[container] ISAAC_ARGS=${ISAAC_ARGS}"
+echo "[APPTAINER] installing /workspace/run into venv..."
+pip install -e /workspace/run
 
-/isaac-sim/python.sh /workspace/run/scripts/rsl_rl/train.py \
+echo "[APPTAINER] TASK_NAME=${TASK_NAME}"
+echo "[APPTAINER] AGENT_NAME=${AGENT_NAME}"
+echo "[APPTAINER] ISAAC_ARGS=${ISAAC_ARGS}"
+
+/isaac-sim/python.sh /workspace/run/scripts/rl/wheeledlab_rl/scripts/train_rl.py \
   --task="${TASK_NAME}" \
   --agent="${AGENT_NAME}" \
   --headless \

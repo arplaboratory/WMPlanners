@@ -7,18 +7,23 @@
 #SBATCH --time=01:00:00
 #SBATCH --account=ds_ga_3001_003-2026sp
 #SBATCH --partition=interactive
-#SBATCH --output=../slurm_%j.out
-#SBATCH --error=../slurm_%j.err
+#SBATCH --job-name=ds3001_bash
+#SBATCH --output=../%x_%j.out
+#SBATCH --error=../%x_%j.err
 #SBATCH --gres=gpu:1
 
 set -euo pipefail
+
+# Load user environment variables (e.g. WANDB_API_KEY)
+# shellcheck source=/dev/null
+[ -f "${HOME}/.envs" ] && source "${HOME}/.envs"
 
 # -------------------------------
 # Project workspace bootstrap
 # -------------------------------
 PROJECT_NAME="rloclab"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
-SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
+SIF_IMAGE="/scratch/$USER/isaac-sim_ds3001.sif"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
 
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
@@ -26,8 +31,10 @@ PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
 DOCKER_ISAACSIM_ROOT_PATH="/isaac-sim"
 DOCKER_USER_HOME="/root"
 
-NODE_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-CACHE_ROOT="${NODE_TMP}/docker-isaac-sim"
+# Must match ds_3001_install.slurm so pre-warmed caches are reused
+CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
+SCRATCH_TMP="/scratch/$USER/tmp"
+mkdir -p "${SCRATCH_TMP}"
 mkdir -p \
   "${CACHE_ROOT}/cache/kit" \
   "${CACHE_ROOT}/cache/ov" \
@@ -40,10 +47,12 @@ mkdir -p \
   "${CACHE_ROOT}/documents" \
   "${CACHE_ROOT}/kit-data"
 
+# Must match ds_3001_install.slurm — reuse the pre-built environment
 VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
+mkdir -p "${VENV_DIR}"
 
-export APPTAINER_TMPDIR="${NODE_TMP}"
-export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
+export APPTAINER_TMPDIR="${SCRATCH_TMP}"
+export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
 
 # -------------------------------
 # Connection instructions
@@ -77,8 +86,11 @@ CMD="--nv --containall \
   -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
   -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
+  -B ${SCRATCH_TMP}:/tmp:rw \
+  -B ${SCRATCH_TMP}:/var/tmp:rw \
   --env WANDB_CACHE_DIR=${DOCKER_USER_HOME}/.cache/wandb \
-  --env WANDB_CONFIG_DIR=${DOCKER_USER_HOME}/.config/wandb"
+  --env WANDB_CONFIG_DIR=${DOCKER_USER_HOME}/.config/wandb \
+  --env WANDB_API_KEY=${WANDB_API_KEY:-}"
 
 singularity exec \
   $CMD \
@@ -86,12 +98,23 @@ singularity exec \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
-source "${VENV_DIR}/bin/activate"
 export ISAACLAB_PATH=/workspace/isaaclab
 
-echo "[bash] Venv activated: $(which python)"
-echo "[bash] Python version: $(python --version)"
-echo "[bash] Sleeping until job expires. Use ssh to connect and work interactively."
+# ---- Venv bootstrap (persists in scratch cache between runs) ----
+if [ ! -f "${VENV_DIR}/bin/activate" ]; then
+  echo "[APPTAINER] Creating venv at ${VENV_DIR}..."
+  /isaac-sim/python.sh -m venv "${VENV_DIR}" --system-site-packages
+fi
+source "${VENV_DIR}/bin/activate"
+
+if [ -d /workspace/run ]; then
+  echo "[APPTAINER] Installing /workspace/run into venv..."
+  pip install -e /workspace/run || true
+fi
+
+echo "[APPTAINER] Venv activated: $(which python)"
+echo "[APPTAINER] Python version: $(python --version)"
+echo "[APPTAINER] Sleeping until job expires. Use ssh to connect and work interactively."
 
 sleep infinity
 '

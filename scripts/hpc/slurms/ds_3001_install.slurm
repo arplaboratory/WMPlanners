@@ -1,3 +1,5 @@
+### Deprecated since we're not caching venv in /scratch
+
 #!/bin/bash
 
 #SBATCH --requeue
@@ -6,22 +8,23 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=20GB
 #SBATCH --time=01:00:00
+#SBATCH --job-name=ds3001_install
 #SBATCH --mail-type=END
 #SBATCH --account=ds_ga_3001_003-2026sp
 #SBATCH --partition=n2c48m24
-#SBATCH --output=../slurm_%j.out
-#SBATCH --error=../slurm_%j.err
+#SBATCH --output=../%x_%j.out
+#SBATCH --error=../%x_%j.err
 
 set -euo pipefail
 
 cd /scratch/$USER
 
 if [ -d IsaacLab/.git ]; then
-  echo "[INFO] IsaacLab exists, updating safely..."
+  echo "[NODE] IsaacLab exists, updating safely..."
   cd IsaacLab
   if ! git diff --quiet || ! git diff --cached --quiet; then
     STASH_FILE="../isaaclab_stash_$(date +%Y%m%d_%H%M%S).patch"
-    echo "[INFO] Local changes detected, stashing and saving to $STASH_FILE"
+    echo "[NODE] Local changes detected, stashing and saving to $STASH_FILE"
     git stash push -u -m "Auto-stash before update on $(date)"
     git stash show -p > "$STASH_FILE" || echo "[WARN] No diff to save in stash."
   fi
@@ -30,72 +33,23 @@ if [ -d IsaacLab/.git ]; then
   git merge --ff-only origin/$(git rev-parse --abbrev-ref HEAD)
   cd ..
 else
-  echo "[INFO] Cloning IsaacLab..."
+  echo "[NODE] Cloning IsaacLab..."
   git clone https://github.com/isaac-sim/IsaacLab.git
 fi
 
-# Run singularity check
 # -------------------------------
 # Project workspace bootstrap
 # -------------------------------
 PROJECT_NAME="ds_ga_3001"
-# REMOTE_HOST="${HPC_HOST:-burst}"
-LOCAL_PROJECT="${HOME}/${PROJECT_NAME}"
-REMOTE_PROJECT="${HOME}/${PROJECT_NAME}"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
-SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
-RCLONE_SIF="/scratch/$USER/rclone.sif"
-REMOTE_CONFIG="${HOME}/.config"
+SIF_IMAGE="/scratch/$USER/isaac-sim_ds3001.sif"
 
-#scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${REMOTE_HOST}:${RCLONE_SIF}" "${RCLONE_SIF}"
-#singularity exec --bind "${LOCAL_PROJECT}" "${RCLONE_SIF}" \
-#  rclone copy \
-#  --sftp-host="${REMOTE_HOST}" \
-#  --sftp-user="${USER}" \
-#  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-#  --sftp-ask-password=false \
-#  --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-#  ":sftp:${REMOTE_PROJECT}/" \
-#  "${LOCAL_PROJECT}/"
-#
-#singularity exec --bind "${ISAACLAB_DIR}" "${RCLONE_SIF}" \
-#  rclone copy \
-#  --sftp-host="${REMOTE_HOST}" \
-#  --sftp-user="${USER}" \
-#  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-#  --sftp-ask-password=false \
-#  --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-#  ":sftp:${ISAACLAB_DIR}/" \
-#  "${ISAACLAB_DIR}/"
-
-if [ ! -d "${HOME}/.config" ]; then
-  mkdir -p "${HOME}/.config"
-fi
-
-#singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
-#  rclone copy \
-#  --sftp-host="${REMOTE_HOST}" \
-#  --sftp-user="${USER}" \
-#  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-#  --sftp-ask-password=false \
-#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-#   ":sftp:${REMOTE_CONFIG}/" \
-#   "${HOME}/.config/"
-
-# singularity exec --bind "/scratch/${USER}" "${RCLONE_SIF}" \
-#   rclone copy \
-#   --sftp-host="${REMOTE_HOST}" \
-#   --sftp-user="${USER}" \
-#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
-#   --sftp-ask-password=false \
-#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-#   ":sftp:${SIF_IMAGE}" \
-#   "/scratch/${USER}/"
+mkdir -p "${HOME}/.config"
 
 # -------------------------------
 # Set cluster paths based on submission context
 # -------------------------------
-RUN_DIR="${SLURM_SUBMIT_DIR}"                    # run inside the mirrored project
+RUN_DIR="${SLURM_SUBMIT_DIR}"
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
 PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
 
@@ -104,7 +58,6 @@ DOCKER_ISAACSIM_ROOT_PATH="/isaac-sim"
 DOCKER_USER_HOME="/root"
 
 # Node-local cache & execution
-NODE_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
 CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
 mkdir -p \
   "${CACHE_ROOT}/cache/kit" \
@@ -128,12 +81,13 @@ mkdir -p "${VENV_DIR}"
 BUILD_TMP="/scratch/$USER/pip_build_tmp"
 mkdir -p "$BUILD_TMP"
 
-# Prefer node-local tmp for apptainer/singularity scratch
-export APPTAINER_TMPDIR="${NODE_TMP}"
-export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
+SCRATCH_TMP="/scratch/$USER/tmp"
+mkdir -p "${SCRATCH_TMP}"
+export APPTAINER_TMPDIR="${SCRATCH_TMP}"
+export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
 export ISAAC_ARGS="$*"
 
-echo "[remote] ISAAC_ARGS=${ISAAC_ARGS}"
+echo "[NODE] ISAAC_ARGS=${ISAAC_ARGS}"
 
 # Execute with GPU and required binds
 CMD="--nv --containall \
@@ -155,7 +109,7 @@ CMD="--nv --containall \
   -B ${RUN_DIR}:/workspace/run:rw \
   "
 
-echo "[remote] CMD to run: $CMD"
+echo "[NODE] CMD to run: $CMD"
 
 singularity exec \
   $CMD \
@@ -166,7 +120,7 @@ singularity exec \
 set -euo pipefail
 
 if [ ! -d "${VENV_DIR}/bin" ]; then
-    echo "[SINGULARITY] Creating venv with Python"
+    echo "[APPTAINER] Creating venv with Python"
     /isaac-sim/python.sh -m venv ${VENV_DIR} --system-site-packages
 fi
 source "${VENV_DIR}/bin/activate"
@@ -176,7 +130,7 @@ export ISAACLAB_PATH=/workspace/isaaclab
 
 # Ensure the local package is installed in the container Python
 
-echo "[SINGULARITY] Disk space inside container:"
+echo "[APPTAINER] Disk space inside container:"
 df -h /tmp
 df -h ${VENV_DIR}
 
@@ -184,17 +138,17 @@ pip install --upgrade pip
 pip install -e /workspace/run[dev]
 
 echo "Using: $(which python)"
-echo "[singularity] ISAAC_ARGS=${ISAAC_ARGS}"
+echo "[APPTAINER] ISAAC_ARGS=${ISAAC_ARGS}"
 
 # -------------------------------------------------------------
 # Post-Install Verification Tests
 # -------------------------------------------------------------
-echo "[test] Verifying core packages..."
+echo "[APPTAINER] Verifying core packages..."
 python -c "import torch; print(\"PyTorch \" + torch.__version__ + \" | CUDA Available: \" + str(torch.cuda.is_available()))"
 python -c "import numpy; print(\"NumPy \" + numpy.__version__)"
 
-# echo "[test] Running PyTest suite..."
+# echo "[APPTAINER] Running PyTest suite..."
 # python -m pytest /workspace/run/tests/ -v
 
-echo "[SINGULARITY] Environment successfully built and verified!"
+echo "[APPTAINER] Environment successfully built and verified!"
 '

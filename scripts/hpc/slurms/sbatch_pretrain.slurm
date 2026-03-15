@@ -18,6 +18,12 @@
 ext3_path=YourEXT3PATH.ext3
 sif_path=YourSIFPATH.sif
 
+# Persistent scratch-backed cache (helps builds/pip)
+PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
+SCRATCH_TMP="/scratch/$USER/tmp"
+mkdir -p "${PERSISTENT_CACHE_DIR}" "${SCRATCH_TMP}"
+
+
 # start running
 singularity exec --nv \
   --overlay ${ext3_path}:ro \
