@@ -15,23 +15,27 @@ jobs:
         run: |
           git config --global url."https://github.com/".insteadOf "git@github.com:"
           git config --global url."https://github.com/".insteadOf "org-16943930@github.com:"
-      - name: Initialize specific submodules
+      - name: Initialize submodules (dino, vjepa2)
         run: |
-          git submodule update --init external/vjepa2
+          git submodule update --init --recursive external/vjepa2
+          git submodule update --init --recursive external/dino
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
-      - name: Install package
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f external/vjepa2/requirements.txt ]; then
             pip install -r external/vjepa2/requirements.txt
           fi
+          if [ -f external/dino/requirements.txt ]; then
+            pip install -r external/dino/requirements.txt
+          fi
           pip install -e .[dev]
       - name: Run pytest
         env:
-          PYTHONPATH: .:${{ github.workspace }}/external/vjepa2
+          PYTHONPATH: .:${{ github.workspace }}/external/vjepa2:${{ github.workspace }}/external/dino
         run: |
           mkdir -p reports
           export PYTHONPATH=$PYTHONPATH:$(pwd)/src

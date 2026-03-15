@@ -90,9 +90,11 @@ def build_dino_transform() -> T.Compose:
 
 
 def load_dino_model(device: torch.device) -> torch.nn.Module:
-    """Load DINOv2 ViT-S/14 onto *device*."""
-    print(f"[dino] Loading DINOv2 ({DINO_MODEL}) on {device} ...")
-    model = torch.hub.load("facebookresearch/dinov2", DINO_MODEL)
+    """Load DINOv2 ViT-S/14 from local external/dino submodule."""
+    print(f"[dino] Loading DINOv2 ({DINO_MODEL}) on {device} (local) ...")
+    # Determine the path to the hubconf.py in the submodule
+    repo_dir = os.path.join(os.getcwd(), "external/dino")
+    model = torch.hub.load(repo_dir, DINO_MODEL, source="local")
     model = model.to(device)
     model.eval()
     return model
