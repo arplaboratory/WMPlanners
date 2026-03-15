@@ -2,10 +2,10 @@
 set -euo pipefail
 
 HPC_HOST="${HPC_HOST:-burst}"
-HPC_PROJECT_ROOT="${HPC_PROJECT_ROOT:-${HOME}/ds_ga_3001}"
-REPO_NAME="$(basename -- "${HPC_PROJECT_ROOT}")"
+PROJECT_ROOT="${PROJECT_ROOT:-${HOME}/ds_ga_3001}"
+REPO_NAME="$(basename -- "${PROJECT_ROOT}")"
 INSTALL_SLURM="${INSTALL_SLURM:-scripts/hpc/install.slurm}"
-SCRATCH_DIR="/scratch/$USER"
+SCRATCH_DIR="/scratch/lq2146" # this is where we get our sif files from
 ISAAC_SIF="isaac-sim_5.1.0.sif"
 RCLONE_SIF="rclone.sif"
 
@@ -17,11 +17,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --remote-project-dir)
-      HPC_PROJECT_ROOT="$2"
+      PROJECT_ROOT="$2"
       shift 2
       ;;
     --install-slurm)
-      INSTALL_SLURM=${HOME}/${REPO_NAME}/"$2"
+      INSTALL_SLURM=${PROJECT_ROOT}/"$2"
       shift 2
       ;;
     *)
@@ -40,15 +40,29 @@ if [ ! -f "$SCRATCH_DIR/$ISAAC_SIF" ]; then
   exit 1
 fi
 
-rclone copy \
-  "${SCRATCH_DIR}/${RCLONE_SIF}" \
-  ":sftp,host=${HPC_HOST},user=${USER}:${SCRATCH_DIR}/"
-rclone copy \
-  "${HPC_PROJECT_ROOT}" \
-  ":sftp,host=${HPC_HOST},user=${USER}:${HOME}/${REPO_NAME}"
-rclone copy \
-  "${SCRATCH_DIR}/${ISAAC_SIF}" \
-  ":sftp,host=${HPC_HOST},user=${USER}:${SCRATCH_DIR}/"
+# if HPC_HOST is burst or from a different user, copy files over
+if [ "$HPC_HOST" = "burst" ] || [ "$USER" != "lq2146" ]; then
+  rclone copy \
+    "${SCRATCH_DIR}/${RCLONE_SIF}" \
+    ":sftp,host=${HPC_HOST},user=${USER}:${SCRATCH_DIR}/"
+  rclone copy \
+    "${PROJECT_ROOT}" \
+    ":sftp,host=${HPC_HOST},user=${USER}:${PROJECT_ROOT}"
+  rclone copy \
+    "${SCRATCH_DIR}/${ISAAC_SIF}" \
+    ":sftp,host=${HPC_HOST},user=${USER}:${SCRATCH_DIR}/"
+fi
 
-ssh -o StrictHostKeyChecking=accept-new "${HPC_HOST}" \
-  "cd ~/${REPO_NAME} && sbatch --job-name="install_${USER}" --mail-user="${USER}@nyu.edu" ${INSTALL_SLURM@Q} ${INSTALL_ARGS_STR}"
+# copy the code over if not on hpc (e.g., burst) (TODO)
+# rsync -avz --delete ${PROJECT_ROOT} ${USER}@${HPC_HOST}:~/${REPO_NAME}
+
+# ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "${HPC_HOST}" \
+#   "cd ~/${REPO_NAME} && sbatch --job-name="install_${USER}" --mail-user="${USER}@nyu.edu" ${INSTALL_SLURM@Q} ${INSTALL_ARGS_STR}"
+
+echo "=== DEBUG INFO ==="
+echo "PROJECT_ROOT: ${PROJECT_ROOT}"
+echo "INSTALL_SLURM: ${INSTALL_SLURM}"
+echo "PWD: $(pwd)"
+echo "=================="
+
+cd ${PROJECT_ROOT} && eval "sbatch --job-name=\"install_${USER}\" --mail-user=\"${USER}@nyu.edu\" ${INSTALL_SLURM@Q} ${INSTALL_ARGS_STR}"

@@ -40,6 +40,7 @@ The `rloclab` package builds on and cites the following repositories as upstream
 2. [Python Virtual Env](https://docs.python.org/3/tutorial/venv.html)
 3. [IsaacLab](https://isaac-sim.github.io/IsaacLab/main/index.html)
 4. [UV](https://docs.astral.sh/uv/getting-started/installation/) (optional)
+5. [Dialog](https://invisible-island.net/dialog/dialog.html#download)
 
 <details>
 <summary><strong>Click for instructions on installing prerequisites</strong></summary>
@@ -54,6 +55,18 @@ sudo apt install git-lfs
 git lfs install
 ```
 
+For non-sudo users:
+```bash
+wget https://github.com/git-lfs/git-lfs/releases/download/v3.2.0/git-lfs-linux-amd64-v3.2.0.tar.gz
+tar -xvf git-lfs-linux-amd64-v3.2.0.tar.gz
+cd git-lfs-3.2.0
+chmod +x install.sh
+sed -i 's|^prefix="/usr/local"$|prefix="$HOME/.local"|' install.sh
+mkdir -p ~/.local/bin/
+export PATH="$HOME/.local/bin:$PATH"
+./install.sh
+```
+
 **2. Python3 Virtual Environment**
 ```bash
 sudo add-apt-repository ppa:deadsnakes/ppa
@@ -66,6 +79,24 @@ sudo apt install python3.11 python3.11-venv python3.11-dev
 **4. UV**
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**5. Dialog**
+On Debian/Ubuntu:
+```bash
+sudo apt install dialog
+```
+
+Source:
+```bash
+wget https://invisible-island.net/datafiles/release/dialog.tar.gz
+tar -xvf dialog.tar.gz
+cd dialog-1.3.20220216
+./configure --prefix=$HOME/.local
+mkdir -p ~/.local/bin
+make
+make install
+export PATH="$HOME/.local/bin:$PATH"
 ```
 ---
 </details>

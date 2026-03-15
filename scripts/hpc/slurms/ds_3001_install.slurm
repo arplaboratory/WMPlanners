@@ -39,7 +39,7 @@ fi
 # Project workspace bootstrap
 # -------------------------------
 PROJECT_NAME="ds_ga_3001"
-REMOTE_HOST="burst"
+# REMOTE_HOST="${HPC_HOST:-burst}"
 LOCAL_PROJECT="${HOME}/${PROJECT_NAME}"
 REMOTE_PROJECT="${HOME}/${PROJECT_NAME}"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
@@ -47,51 +47,55 @@ SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
 RCLONE_SIF="/scratch/$USER/rclone.sif"
 REMOTE_CONFIG="${HOME}/.config"
 
-scp -o StrictHostKeyChecking=accept-new "${REMOTE_HOST}:${RCLONE_SIF}" "${RCLONE_SIF}"
-singularity exec --bind "${LOCAL_PROJECT}" "${RCLONE_SIF}" \
-  rclone copy \
-  --sftp-host="${REMOTE_HOST}" \
-  --sftp-user="${USER}" \
-  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-  --sftp-ask-password=false \
-  ":sftp:${REMOTE_PROJECT}/" \
-  "${LOCAL_PROJECT}/"
-
-singularity exec --bind "${ISAACLAB_DIR}" "${RCLONE_SIF}" \
-  rclone copy \
-  --sftp-host="${REMOTE_HOST}" \
-  --sftp-user="${USER}" \
-  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-  --sftp-ask-password=false \
-  ":sftp:${ISAACLAB_DIR}/" \
-  "${ISAACLAB_DIR}/"
+#scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${REMOTE_HOST}:${RCLONE_SIF}" "${RCLONE_SIF}"
+#singularity exec --bind "${LOCAL_PROJECT}" "${RCLONE_SIF}" \
+#  rclone copy \
+#  --sftp-host="${REMOTE_HOST}" \
+#  --sftp-user="${USER}" \
+#  --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#  --sftp-ask-password=false \
+#  --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#  ":sftp:${REMOTE_PROJECT}/" \
+#  "${LOCAL_PROJECT}/"
+#
+#singularity exec --bind "${ISAACLAB_DIR}" "${RCLONE_SIF}" \
+#  rclone copy \
+#  --sftp-host="${REMOTE_HOST}" \
+#  --sftp-user="${USER}" \
+#  --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#  --sftp-ask-password=false \
+#  --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#  ":sftp:${ISAACLAB_DIR}/" \
+#  "${ISAACLAB_DIR}/"
 
 if [ ! -d "${HOME}/.config" ]; then
   mkdir -p "${HOME}/.config"
 fi
 
-singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
-  rclone copy \
-  --sftp-host="${REMOTE_HOST}" \
-  --sftp-user="${USER}" \
-  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-  --sftp-ask-password=false \
-  ":sftp:${REMOTE_CONFIG}/" \
-  "${HOME}/.config/"
+#singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
+#  rclone copy \
+#  --sftp-host="${REMOTE_HOST}" \
+#  --sftp-user="${USER}" \
+#  --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#  --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${REMOTE_CONFIG}/" \
+#   "${HOME}/.config/"
 
-singularity exec --bind "/scratch/${USER}" "${RCLONE_SIF}" \
-  rclone copy \
-  --sftp-host="${REMOTE_HOST}" \
-  --sftp-user="${USER}" \
-  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-  --sftp-ask-password=false \
-  ":sftp:${SIF_IMAGE}" \
-  "/scratch/${USER}/"
+# singularity exec --bind "/scratch/${USER}" "${RCLONE_SIF}" \
+#   rclone copy \
+#   --sftp-host="${REMOTE_HOST}" \
+#   --sftp-user="${USER}" \
+#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
+#   --sftp-ask-password=false \
+#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+#   ":sftp:${SIF_IMAGE}" \
+#   "/scratch/${USER}/"
 
 # -------------------------------
-# Hardcode your cluster paths
+# Set cluster paths based on submission context
 # -------------------------------
-RUN_DIR="${LOCAL_PROJECT}"                       # run inside the mirrored project
+RUN_DIR="${SLURM_SUBMIT_DIR}"                    # run inside the mirrored project
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
 PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
 
@@ -101,7 +105,7 @@ DOCKER_USER_HOME="/root"
 
 # Node-local cache & execution
 NODE_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-CACHE_ROOT="${NODE_TMP}/docker-isaac-sim"
+CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
 mkdir -p \
   "${CACHE_ROOT}/cache/kit" \
   "${CACHE_ROOT}/cache/ov" \
@@ -129,7 +133,7 @@ export APPTAINER_TMPDIR="${NODE_TMP}"
 export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
 export ISAAC_ARGS="$*"
 
-echo "[burst] ISAAC_ARGS=${ISAAC_ARGS}"
+echo "[remote] ISAAC_ARGS=${ISAAC_ARGS}"
 
 # Execute with GPU and required binds
 CMD="--nv --containall \
@@ -151,7 +155,7 @@ CMD="--nv --containall \
   -B ${RUN_DIR}:/workspace/run:rw \
   "
 
-echo "[burst] CMD to run: $CMD"
+echo "[remote] CMD to run: $CMD"
 
 singularity exec \
   $CMD \
@@ -182,5 +186,15 @@ pip install -e /workspace/run[dev]
 echo "Using: $(which python)"
 echo "[singularity] ISAAC_ARGS=${ISAAC_ARGS}"
 
-# Maybe run some tests?
+# -------------------------------------------------------------
+# Post-Install Verification Tests
+# -------------------------------------------------------------
+echo "[test] Verifying core packages..."
+python -c "import torch; print(\"PyTorch \" + torch.__version__ + \" | CUDA Available: \" + str(torch.cuda.is_available()))"
+python -c "import numpy; print(\"NumPy \" + numpy.__version__)"
+
+# echo "[test] Running PyTest suite..."
+# python -m pytest /workspace/run/tests/ -v
+
+echo "[SINGULARITY] Environment successfully built and verified!"
 '
