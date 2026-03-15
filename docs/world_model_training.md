@@ -92,7 +92,7 @@ python scripts/world_model/train_world_model.py \
 
 #### Evaluate MPC
 ```bash
-python scripts/world_model/eval_mpc.py --ckpt runs/latest.pt --episodes 20
+python scripts/world_model/eval_mpc.py --ckpt runs/<dino|cnn|jepa>/latest.pt --episodes 20
 ```
 
 ### For C-JEPA
