@@ -81,7 +81,7 @@ tex file extensions
 **/*.bak
 
 #data
-**/data/*
+data/*
 
 #env
 **/.env

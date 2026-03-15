@@ -1,40 +1,12 @@
-"""Dataset loading for world-model training.
-
-Provides :class:`HFWindowDataset` which loads trajectory windows from a
-HuggingFace dataset (the output of the data curation pipeline) and returns
-:class:`SampleBatch` objects compatible with the training loop.
-"""
+"""HuggingFace dataset loader for world-model training."""
 
 from __future__ import annotations
-
-from dataclasses import dataclass
 from typing import List
-
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 import torchvision.transforms as T
-
-
-@dataclass
-class SampleBatch:
-    """Collated batch of trajectory windows.
-
-    All tensors have shape ``(B, T, ...)`` where *B* is the batch size and
-    *T* is the number of frames (window size).
-    """
-
-    rgb: torch.Tensor        # (B, T, 3, H, W) float in [0, 1]
-    depth: torch.Tensor      # (B, T, 1, H, W)
-    imu: torch.Tensor        # (B, T, D_imu)
-    odom: torch.Tensor       # (B, T, D_odom)
-    action: torch.Tensor     # (B, T, D_act)
-    collision: torch.Tensor  # (B, T, 1)
-
-
-# ---------------------------------------------------------------------------
-# HuggingFace dataset loader
-# ---------------------------------------------------------------------------
+from .types import SampleBatch
 
 class HFWindowDataset(Dataset):
     """Load trajectory windows from a HuggingFace dataset.
@@ -66,7 +38,8 @@ class HFWindowDataset(Dataset):
     ODOM_COLS = ["odom_dx", "odom_dy", "odom_dz", "odom_ax", "odom_ay", "odom_az"]
 
     def __init__(self, dataset, img_size: int = 224):
-        from datasets import Dataset as HFDataset, load_from_disk, load_dataset
+        from datasets import load_from_disk, load_dataset
+        from datasets import Dataset as HFDataset
 
         if isinstance(dataset, str):
             if _is_local_path(dataset):
@@ -150,7 +123,6 @@ class HFWindowDataset(Dataset):
             "collision": collision, # (T, 1)
         }
 
-
 def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
     """Collate a list of window dicts into a :class:`SampleBatch`."""
     return SampleBatch(
@@ -161,7 +133,6 @@ def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
         action=torch.from_numpy(np.stack([b["action"] for b in batch])),
         collision=torch.from_numpy(np.stack([b["collision"] for b in batch])),
     )
-
 
 def _is_local_path(s: str) -> bool:
     """Heuristic: if it looks like a filesystem path, treat it as local."""
