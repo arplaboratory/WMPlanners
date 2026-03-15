@@ -1,3 +1,9 @@
 [submodule "docs/latex/overleaf"]
 	path = docs/latex/overleaf
 	url = https://git@git.overleaf.com/697fda69c1afd29d2eb00471
+[submodule "external/vjepa2"]
+	path = external/vjepa2
+	url = org-16943930@github.com:facebookresearch/vjepa2.git
+[submodule "external/dino"]
+	path = external/dino
+	url = https://github.com/facebookresearch/dinov2

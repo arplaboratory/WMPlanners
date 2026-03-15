@@ -1,0 +1,1373 @@
+#!/usr/bin/env python3
+"""Orchestration.
+
+This client depends on the ``dialog`` binary install it via your package manager (e.g.,
+``apt-get install dialog``) before launching the UI.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import time
+import sys
+from pathlib import Path
+from typing import Callable, Dict, Iterable, List, Sequence, Tuple
+import os
+import select
+import termios
+import tty
+import subprocess
+
+
+# Resolve paths relative to the script location
+SCRIPT_PATH = Path(__file__).resolve()
+DEFAULT_PROJECT_DIR = SCRIPT_PATH.parent.parent.parent
+PROJECT_DIR = Path(os.environ.get("PROJECT_ROOT") or DEFAULT_PROJECT_DIR).resolve()
+
+ROOT = PROJECT_DIR / "scripts" / "hpc"
+GLOBAL_EXP_DIR = Path(os.environ.get("HPC_EXP") or (PROJECT_DIR.parent / "experiments")).resolve()
+if not GLOBAL_EXP_DIR.exists():
+    # Fallback to a sibling of the current directory if experiments is not found at the parent level
+    GLOBAL_EXP_DIR = (PROJECT_DIR / "experiments").resolve()
+
+REPO_ROOT = PROJECT_DIR 
+SETTINGS = PROJECT_DIR / ".jepa_config.json"
+
+src_dir = PROJECT_DIR / "src"
+if src_dir.exists():
+    current_pythonpath = os.environ.get("PYTHONPATH", "")
+    os.environ["PYTHONPATH"] = f"{src_dir}:{current_pythonpath}" if current_pythonpath else str(src_dir)
+
+
+CONFIGS_DIR = GLOBAL_EXP_DIR / "configs"
+SLURMS_DIR = ROOT / "slurms"
+DATA_DIR = GLOBAL_EXP_DIR / "data"
+
+# Ensure directories exist
+CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+SLURMS_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+SLURM_TEMPLATE = SLURMS_DIR / "sbatch_pretrain.slurm"
+DATASET_CHOICES: Tuple[Tuple[str, str], ...] = (
+    ("cifar100", "CIFAR100"),
+    ("tsbpp/fall2025_deeplearning", "tsbpp/fall2025_deeplearning"),
+    ("LAION-5B", "LAION-5B"),
+    ("open_images", "open_images"),
+    ("imagenet", "imagenet"),
+    ("mscoco", "mscoco"),
+    ("common_pool", "common_pool"),
+    ("unsplash", "unsplash"),
+    ("go2_locomotion", "go2_locomotion"),
+    ("f1tenth_drift", "f1tenth_drift"),
+    ("mushr_drift", "mushr_drift"),
+)
+
+RLOCLAB_TASK_CHOICES: Tuple[Tuple[str, str], ...] = (
+    ("Template-Rloclab-Go2-Direct-v0", "Quadruped | Go2 direct locomotion"),
+    ("Template-Rloclab-Go2-Bipedal-v0", "Quadruped | Go2 bipedal"),
+    ("Template-Rloclab-Go2-Backflip-v0", "Quadruped | Go2 backflip"),
+    ("Template-Rloclab-Go2-Uneven-v0", "Quadruped | Go2 uneven terrain"),
+    ("Isaac-RLlab-F1Tenth-Drift-v0", "Wheeled | F1Tenth drifting"),
+    ("Isaac-RLlab-MuSHR-Drift-v0", "Wheeled | MuSHR drifting"),
+)
+
+def load_config():
+    if SETTINGS.exists():
+        try:
+            return json.loads(SETTINGS.read_text())
+        except Exception:
+            return {}
+    return {}
+
+def save_config(cfg):
+    SETTINGS.write_text(json.dumps(cfg, indent=2))
+
+config = load_config()
+
+# First-time setup: create alias if not already done
+def ensure_alias_setup():
+    # Detect the user's current shell
+    shell_path = os.environ.get("SHELL", "/bin/bash")
+    shell_name = os.path.basename(shell_path)
+    rc_file = None
+    if shell_name == "zsh":
+        rc_file = Path.home() / ".zshrc"
+    elif shell_name == "bash":
+        rc_file = Path.home() / ".bashrc"
+    elif shell_name == "fish":
+        rc_file = Path.home() / ".config" / "fish" / "config.fish"
+    else:
+        # Default to bashrc if unknown
+        rc_file = Path.home() / ".bashrc"
+
+    if config.get("alias_setup_done", False):
+        return
+    alias_line = f"alias jepa=\"{str(ROOT / 'pipeline-py-client')}\""
+
+    if rc_file.exists():
+        lines = rc_file.read_text().splitlines()
+        if not any("alias jepa=" in line for line in lines):
+            with rc_file.open("a") as f:
+                f.write(f"\n# Alias for jepa pipeline client\n{alias_line}\n")
+            print(f"Added alias to {rc_file}: {alias_line}")
+    config["alias_setup_done"] = True
+    save_config(config)
+
+ensure_alias_setup()
+
+class DialogCancelled(Exception):
+    """Raised when the user cancels or presses ESC in a dialog."""
+
+
+def format_command(command: Sequence[str]) -> str:
+    """Render a command list as a shell-friendly string."""
+
+    return " ".join(command)
+
+
+def run_command(command: Sequence[str], dry_run: bool = False, ui: 'DialogUI' = None) -> None:
+    """Execute a command list, respecting dry-run mode. If ui is provided and dry-run, show in dialog."""
+    printable = format_command(command)
+    if dry_run:
+        if ui is not None:
+            ui.msgbox(f"[DRY-RUN]\n$ {printable}")
+        else:
+            print(f"[pipeline-sh-client] $ {printable}")
+            print("(dry-run) Skipping execution.")
+        return
+    print(f"[pipeline-sh-client] $ {printable}")
+    subprocess.run(command, check=True)
+
+
+def ensure_exists(path: Path, description: str) -> None:
+    """Exit with a clear error message if the provided path is missing."""
+
+    if not path.exists():
+        raise FileNotFoundError(f"{description} not found: {path}")
+
+
+def queue_hpc_install(extra_args: Iterable[str], dry_run: bool) -> None:
+    """Queue the HPC install job through ``scripts/hpc/install.sh``."""
+
+    install_script = PROJECT_DIR / "scripts" / "hpc" / "install.sh"
+    ensure_exists(install_script, "Install launcher script")
+    command = [str(install_script), *extra_args]
+    run_command(command, dry_run=dry_run)
+
+def install_dependencies(pip_command: str, dry_run: bool) -> None:
+    """Install project dependencies as described in the spec, from the project root."""
+    project_root = PROJECT_DIR
+    pyproject = project_root / "pyproject.toml"
+    if not pyproject.exists():
+        raise FileNotFoundError(f"pyproject.toml not found in {project_root}")
+
+    commands = [
+        [pip_command, "install", "--upgrade", "pip"],
+        [pip_command, "install", "-e", ".[dev]"],
+    ]
+
+    for command in commands:
+        run_command(command, dry_run=dry_run if dry_run else False) if dry_run else subprocess.run(command, cwd=str(project_root), check=True)
+
+def discover_install_slurm_scripts() -> List[str]:
+    """Discover install Slurm scripts under the slurms/ directory."""
+    slurms_dir =  SLURMS_DIR
+    candidates: List[str] = []
+    if slurms_dir.is_dir():
+        for path in sorted(slurms_dir.glob("*install*.slurm")):
+            candidates.append(str(path.relative_to(PROJECT_DIR)))
+    return candidates
+
+def discover_test_slurm_scripts() -> List[str]:
+    """Discover test Slurm scripts under the slurms/ directory."""
+    slurms_dir = SLURMS_DIR
+    candidates: List[str] = []
+    if slurms_dir.is_dir():
+        for path in sorted(slurms_dir.glob("*.slurm")):
+            candidates.append(str(path.relative_to(PROJECT_DIR)))
+    return candidates
+
+
+def download_assets(dry_run: bool) -> None:
+    """Download project assets from assets.yml."""
+    command = ["python", "scripts/download_assets.py"]
+    run_command(command, dry_run=dry_run)
+
+
+
+def build_pretrain_command(config: Path, datasets: Iterable[str], extra_args: Iterable[str]) -> List[str]:
+    """Construct the pretraining command using app.main (V-JEPA)."""
+    # if no config (e.g., empty string or ''), use the default config
+    command = ["python", "-m", "app.main"]
+    if config and Path(config).is_file():
+        command.extend(["--fname", str(config)])
+
+    for dataset in datasets:
+        command.extend(["--dataset", dataset])
+    command.extend(extra_args)
+    return command
+
+
+def build_rloclab_train_command(
+    task: str,
+    agent: str,
+    max_iterations: int | None,
+    num_envs: int | None,
+    headless: bool,
+    use_isaaclab_launcher: bool,
+    extra_args: Iterable[str],
+) -> List[str]:
+    """Construct an Isaac Lab / rloclab training command."""
+
+    if use_isaaclab_launcher:
+        command: List[str] = ["./isaaclab.sh", "-p", "scripts/rsl_rl/train.py"]
+    else:
+        command = ["python", "src/rloclab/scripts/rsl_rl/train.py"]
+
+    command.extend(["--task", task, "--agent", agent])
+    if max_iterations is not None:
+        command.extend(["--max_iterations", str(max_iterations)])
+    if num_envs is not None:
+        command.extend(["--num_envs", str(num_envs)])
+    if headless:
+        command.append("--headless")
+    command.extend(extra_args)
+    return command
+
+
+
+def generate_slurm_script(
+    output_path: Path,
+    command: Sequence[str],
+    job_name: str,
+    nodes: int,
+    cpus: int,
+    mem: str,
+    time: str,
+    gpus: str,
+    ext3_path: str,
+    sif_path: str,
+    account: str,
+    mail_user: str,
+    mail_type: str,
+    output_log: str,
+) -> None:
+    """Render the Slurm script using the provided command and template."""
+
+    # Ensure slurms directory exists
+    output_path = SLURMS_DIR / output_path.name if not output_path.is_absolute() else output_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_exists(SLURM_TEMPLATE, "Slurm template")
+    template = SLURM_TEMPLATE.read_text()
+
+    replacements: Dict[str, str] = {
+        "YourNameHere": job_name,
+        "--nodes=1": f"--nodes={nodes}",
+        "--cpus-per-task=2": f"--cpus-per-task={cpus}",
+        "--mem=64GB": f"--mem={mem}",
+        "--time=6:00:00": f"--time={time}",
+        "--gres=gpu:1": f"--gres={gpus}",
+        "YourEXT3PATH.ext3": ext3_path,
+        "YourSIFPATH.sif": sif_path,
+        "REPLACE THIS WITH YOUR COMMANDS": format_command(command),
+    }
+
+    if account:
+        replacements["##SBATCH --account=pr_000_tandon_advanced"] = f"#SBATCH --account={account}"
+    if mail_type:
+        replacements["##SBATCH --mail-type=END"] = f"#SBATCH --mail-type={mail_type}"
+    if mail_user:
+        replacements["##SBATCH --mail-user=your.email@nyu.edu"] = f"#SBATCH --mail-user={mail_user}"
+    if output_log:
+        replacements["##SBATCH --output=log/slurm-%j.out"] = f"#SBATCH --output={output_log}"
+
+    for needle, value in replacements.items():
+        template = template.replace(needle, value)
+
+    output_path.write_text(template)
+    print(f"Generated Slurm script at {output_path}")
+
+
+def submit_slurm(script_path: Path, dry_run: bool) -> None:
+    """Submit the generated script via sbatch if available."""
+
+    if not shutil.which("sbatch"):
+        raise FileNotFoundError("sbatch command not found in PATH; cannot submit job.")
+
+    run_command(["sbatch", str(script_path)], dry_run=dry_run)
+
+
+def handle_install(args: argparse.Namespace) -> None:
+    command_args: List[str] = []
+    if args.host:
+        command_args.extend(["--host", args.host])
+    if args.remote_project_dir:
+        command_args.extend(["--remote-project-dir", args.remote_project_dir])
+    if args.install_slurm:
+        command_args.extend(["--install-slurm", args.install_slurm])
+    command_args.extend(args.extra_args)
+    queue_hpc_install(command_args, dry_run=args.dry_run)
+
+
+def handle_download_assets(args: argparse.Namespace) -> None:
+    download_assets(dry_run=args.dry_run)
+
+def handle_test(args: argparse.Namespace) -> None:
+    command = ["pytest", "tests/"] + args.extra_args
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+def handle_world_model_dataset(args: argparse.Namespace) -> None:
+    command = [
+        "python", "scripts/world_model/make_toy_dataset.py",
+        "--out_dir", args.out_dir,
+        "--episodes", str(args.episodes),
+        "--steps", str(args.steps)
+    ] + args.extra_args
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+def handle_world_model_train(args: argparse.Namespace) -> None:
+    command = [
+        "python", "scripts/world_model/train_world_model.py",
+        "--data_dir", args.data_dir,
+        "--epochs", str(args.epochs),
+        "--batch_size", str(args.batch_size)
+    ]
+    if args.backbone:
+        command.extend(["--backbone", args.backbone])
+    if args.backbone_name:
+        command.extend(["--backbone_name", args.backbone_name])
+    if args.freeze_backbone:
+        command.append("--freeze_backbone")
+    command.extend(args.extra_args)
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+def handle_world_model_eval(args: argparse.Namespace) -> None:
+    command = [
+        "python", "scripts/world_model/eval_mpc.py",
+        "--ckpt", args.ckpt,
+    ] + args.extra_args
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+def handle_dino_demo(args: argparse.Namespace) -> None:
+    command = ["python", "src/world_model/dino_demo.py"]
+    if getattr(args, "config", None):
+        command.extend(["--config", args.config])
+    command.extend(args.extra_args)
+    run_command(command, dry_run=args.dry_run)
+    if getattr(args, "slurm_path", None):
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
+            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
+            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
+            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+
+def handle_pretrain(args: argparse.Namespace) -> None:
+    command = build_pretrain_command(Path(args.config), args.datasets, args.extra_args)
+    run_command(command, dry_run=args.dry_run)
+
+    if args.slurm_path:
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path,
+            command,
+            job_name=args.job_name,
+            nodes=args.nodes,
+            cpus=args.cpus,
+            mem=args.mem,
+            time=args.time,
+            gpus=args.gpus,
+            ext3_path=args.ext3_path,
+            sif_path=args.sif_path,
+            account=args.account,
+            mail_user=args.mail_user,
+            mail_type=args.mail_type,
+            output_log=args.output_log,
+        )
+
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+
+def handle_rloclab_train(args: argparse.Namespace) -> None:
+    train_script = PROJECT_DIR / "train.sh"
+    ensure_exists(train_script, "Train launcher script")
+
+    command = [str(train_script)]
+    if args.host:
+        command.extend(["--host", args.host])
+    if args.remote_project_dir:
+        command.extend(["--remote-project-dir", args.remote_project_dir])
+    if args.task:
+        command.extend(["--task-name", args.task])
+
+    train_args: List[str] = ["--agent", args.agent]
+    if args.max_iterations is not None:
+        train_args.extend(["--max_iterations", str(args.max_iterations)])
+    if args.num_envs is not None:
+        train_args.extend(["--num_envs", str(args.num_envs)])
+    if args.headless:
+        train_args.append("--headless")
+    train_args.extend(args.extra_args)
+
+    command.extend(train_args)
+    run_command(command, dry_run=args.dry_run)
+
+    if args.slurm_path:
+        slurm_path = Path(args.slurm_path)
+        generate_slurm_script(
+            slurm_path,
+            command,
+            job_name=args.job_name,
+            nodes=args.nodes,
+            cpus=args.cpus,
+            mem=args.mem,
+            time=args.time,
+            gpus=args.gpus,
+            ext3_path=args.ext3_path,
+            sif_path=args.sif_path,
+            account=args.account,
+            mail_user=args.mail_user,
+            mail_type=args.mail_type,
+            output_log=args.output_log,
+        )
+        if args.submit:
+            submit_slurm(slurm_path, dry_run=args.dry_run)
+
+
+def handle_curate_dataset(args: argparse.Namespace) -> None:
+    command = [
+        "python",
+        "scripts/hpc/helpers/curate_jepa_dataset.py",
+        "--input-root",
+        args.input_root,
+        "--output-manifest",
+        args.output_manifest,
+    ]
+    if args.extensions:
+        command.extend(["--extensions", *args.extensions])
+    if args.label is not None:
+        command.extend(["--label", str(args.label)])
+    if args.shuffle:
+        command.append("--shuffle")
+    if args.limit is not None:
+        command.extend(["--limit", str(args.limit)])
+    run_command(command, dry_run=args.dry_run)
+
+
+def handle_slurm(args: argparse.Namespace) -> None:
+    if not args.command:
+        raise ValueError("No command provided to embed in the Slurm script. Add arguments after --.")
+
+    output_path = args.output
+    if not output_path:
+        default_name = "job.slurm"
+        for part in reversed(args.command):
+            if part.endswith(".py"):
+                default_name = f"{Path(part).stem}.slurm"
+                break
+            elif not part.startswith("-") and part not in ("python", "python3"):
+                default_name = f"{part.split('.')[-1]}.slurm"
+                break
+        output_path = default_name
+
+    generate_slurm_script(
+        Path(output_path),
+        args.command,
+        job_name=args.job_name,
+        nodes=args.nodes,
+        cpus=args.cpus,
+        mem=args.mem,
+        time=args.time,
+        gpus=args.gpus,
+        ext3_path=args.ext3_path,
+        sif_path=args.sif_path,
+        account=args.account,
+        mail_user=args.mail_user,
+        mail_type=args.mail_type,
+        output_log=args.output_log,
+    )
+
+    if args.submit:
+        submit_slurm(Path(output_path), dry_run=args.dry_run)
+
+
+def handle_show(_: argparse.Namespace) -> None:
+    ui = DialogUI()
+    ui.markdownbox(ROOT / "README.md")
+
+def add_common_slurm_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--job-name", default="jepa-job", help="Job name for Slurm.")
+    parser.add_argument("--nodes", type=int, default=1, help="Number of nodes.")
+    parser.add_argument("--cpus", type=int, default=2, help="CPUs per task.")
+    parser.add_argument("--mem", default="64GB", help="Memory allocation.")
+    parser.add_argument("--time", default="6:00:00", help="Wall clock time (HH:MM:SS).")
+    parser.add_argument("--gpus", default="gpu:1", help="GPU resource string, e.g., gpu:1 or gpu:rtx8000:4.")
+    parser.add_argument("--ext3-path", default="YourEXT3PATH.ext3", help="Overlay EXT3 path for Singularity.")
+    parser.add_argument("--sif-path", default="YourSIFPATH.sif", help="SIF image path for Singularity.")
+    parser.add_argument("--account", help="Optional Slurm account directive.")
+    parser.add_argument("--mail-user", help="Optional Slurm notification email.")
+    parser.add_argument("--mail-type", help="Optional Slurm mail type (e.g., END, FAIL).")
+    parser.add_argument("--output-log", help="Optional Slurm output log path.")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--dry-run", action="store_true", help="Print commands without executing them.")
+
+    parser = argparse.ArgumentParser(description=__doc__, parents=[common])
+    subparsers = parser.add_subparsers(required=False)
+
+    ui_parser = subparsers.add_parser("ui", parents=[common], help="Launch the dialog-based UI (default).")
+    ui_parser.set_defaults(func=launch_dialog_ui)
+
+    install_parser = subparsers.add_parser("install", parents=[common], help="Queue HPC install job via scripts/install.sh.")
+    install_parser.add_argument("--host", default="burst", help="HPC login host used for ssh (default: burst).")
+    install_parser.add_argument(
+        "--pip-command",
+        default="pip",
+        help="Pip command to run (e.g., pip or pip3).",
+    )
+    install_parser.add_argument(
+        "--remote-project-dir",
+        help="Remote project directory containing scripts/hpc/install.slurm (default: ~/REPO_NAME).",
+        default=PROJECT_DIR.name
+    )
+    install_parser.add_argument(
+        "--install-slurm",
+        default="slurms/install.slurm",
+        help="Install Slurm script path relative to project root (default: slurms/install.slurm).",
+    )
+    install_parser.add_argument(
+        "extra_args",
+        nargs=argparse.REMAINDER,
+        help="Additional arguments forwarded to scripts/install.sh.",
+    )
+    install_parser.set_defaults(func=handle_install)
+
+    download_parser = subparsers.add_parser("download-assets", parents=[common], help="Download datasets and assets via assets.yml.")
+    download_parser.set_defaults(func=handle_download_assets)
+
+    test_parser = subparsers.add_parser("test", parents=[common], help="Run pytest suites.")
+    test_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional arguments for pytest.")
+    test_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    test_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(test_parser)
+    test_parser.set_defaults(func=handle_test)
+
+    wmd_parser = subparsers.add_parser("world-model-dataset", parents=[common], help="Generate toy dataset for world model.")
+    wmd_parser.add_argument("--out_dir", required=True, help="Output directory pattern.")
+    wmd_parser.add_argument("--episodes", type=int, default=200, help="Number of episodes.")
+    wmd_parser.add_argument("--steps", type=int, default=200, help="Steps per episode.")
+    wmd_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
+    wmd_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    wmd_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(wmd_parser)
+    wmd_parser.set_defaults(func=handle_world_model_dataset)
+
+    wmt_parser = subparsers.add_parser("world-model-train", parents=[common], help="Train the world model.")
+    wmt_parser.add_argument("--data_dir", required=True, help="Data directory with episode npz files.")
+    wmt_parser.add_argument("--epochs", type=int, default=20, help="Number of epochs.")
+    wmt_parser.add_argument("--batch_size", type=int, default=64, help="Batch size.")
+    wmt_parser.add_argument("--backbone", choices=["cnn", "dinov2", "vjepa2"], help="Backbone architecture.")
+    wmt_parser.add_argument("--backbone-name", help="Specific model variant for the backbone.")
+    wmt_parser.add_argument("--freeze-backbone", action="store_true", help="Freeze backbone weights.")
+    wmt_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
+    wmt_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    wmt_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(wmt_parser)
+    wmt_parser.set_defaults(func=handle_world_model_train)
+
+    wme_parser = subparsers.add_parser("world-model-eval", parents=[common], help="Evaluate the world model with MPC.")
+    wme_parser.add_argument("--ckpt", required=True, help="Path to model checkpoint.")
+    wme_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
+    wme_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    wme_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(wme_parser)
+    wme_parser.set_defaults(func=handle_world_model_eval)
+
+    dd_parser = subparsers.add_parser("dino-demo", parents=[common], help="Run DINO demo.")
+    dd_parser.add_argument("--config", help="Path to config yaml.")
+    dd_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
+    dd_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    dd_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(dd_parser)
+    dd_parser.set_defaults(func=handle_dino_demo)
+
+    pretrain_parser = subparsers.add_parser("pretrain", parents=[common], help="Launch pretraining locally or via Slurm.")
+    pretrain_parser.add_argument("--config", required=True, help="Path to the training config file.")
+    pretrain_parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=[],
+        help="Datasets to pass to the training script.",
+    )
+    pretrain_parser.add_argument(
+        "--extra-args",
+        nargs=argparse.REMAINDER,
+        default=[],
+        help="Additional arguments forwarded to the training command.",
+    )
+    pretrain_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    pretrain_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(pretrain_parser)
+    pretrain_parser.set_defaults(func=handle_pretrain)
+
+    rloclab_train_parser = subparsers.add_parser(
+        "rloclab-train",
+        parents=[common],
+        help="Queue Isaac Lab rloclab RL training on HPC via scripts/train.sh.",
+    )
+    rloclab_train_parser.add_argument("--host", default="burst", help="HPC login host used for ssh (default: burst).")
+    rloclab_train_parser.add_argument(
+        "--remote-project-dir",
+        help="Remote project directory containing scripts/hpc/train.slurm (default: ~/REPO_NAME).",
+    )
+    rloclab_train_parser.add_argument(
+        "--task",
+        default="Template-Rloclab-Go2-Direct-v0",
+        help="Isaac Lab task name (e.g., Template-Rloclab-Go2-Direct-v0 or Isaac-RLlab-F1Tenth-Drift-v0).",
+    )
+    rloclab_train_parser.add_argument(
+        "--agent",
+        default="rsl_rl_cfg_entry_point",
+        help="Agent configuration entry point for rloclab's train script.",
+    )
+    rloclab_train_parser.add_argument("--max-iterations", type=int, help="Optional max RL iterations.")
+    rloclab_train_parser.add_argument("--num-envs", type=int, help="Optional environment count.")
+    rloclab_train_parser.add_argument("--headless", action="store_true", help="Run the simulator headless.")
+    rloclab_train_parser.add_argument(
+        "--isaaclab-launcher",
+        action="store_true",
+        help="Use './isaaclab.sh -p scripts/rsl_rl/train.py' (run from src/rloclab).",
+    )
+    rloclab_train_parser.add_argument(
+        "--extra-args",
+        nargs=argparse.REMAINDER,
+        default=[],
+        help="Additional arguments forwarded to scripts/train.sh/train.slurm.",
+    )
+    rloclab_train_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
+    rloclab_train_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(rloclab_train_parser)
+    rloclab_train_parser.set_defaults(func=handle_rloclab_train)
+
+    curate_parser = subparsers.add_parser(
+        "curate-dataset",
+        parents=[common],
+        help="Curate a HPC-compatible manifest from video files.",
+    )
+    curate_parser.add_argument("--input-root", required=True, help="Directory to scan recursively for videos.")
+    curate_parser.add_argument("--output-manifest", required=True, help="Output CSV/txt manifest path.")
+    curate_parser.add_argument(
+        "--extensions",
+        nargs="+",
+        default=[".mp4", ".avi", ".mov", ".mkv"],
+        help="Video extensions to include.",
+    )
+    curate_parser.add_argument("--label", type=int, default=0, help="Label value written for each row.")
+    curate_parser.add_argument("--shuffle", action="store_true", help="Shuffle discovered files before writing.")
+    curate_parser.add_argument("--limit", type=int, help="Optional max number of samples.")
+    curate_parser.set_defaults(func=handle_curate_dataset)
+
+    slurm_parser = subparsers.add_parser(
+        "slurm", parents=[common], help="Generate a Slurm script for an arbitrary command."
+    )
+    slurm_parser.add_argument("--output", required=False, help="Where to write the Slurm script. Derived from command if omitted.")
+    slurm_parser.add_argument(
+        "command",
+        nargs=argparse.REMAINDER,
+        help="Command to execute inside the Slurm job (place after --).",
+    )
+    slurm_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
+    add_common_slurm_args(slurm_parser)
+    slurm_parser.set_defaults(func=handle_slurm)
+
+    spec_parser = subparsers.add_parser("show", parents=[common], help="Print the HPC readme file.")
+    spec_parser.set_defaults(func=handle_show)
+
+    return parser
+
+
+class DialogUI:
+    """Wrapper around the ``dialog`` binary."""
+
+    def __init__(self, dialog_bin: str = "dialog") -> None:
+        self.dialog_bin = dialog_bin
+        self.require_dialog()
+
+    def require_dialog(self) -> None:
+        if not shutil.which(self.dialog_bin):
+            raise FileNotFoundError(
+                "dialog binary not found. Install it (e.g., `apt-get install dialog`) and retry."
+            )
+
+    def _run(self, args: Sequence[str]) -> str:
+        command = [self.dialog_bin, "--clear", "--stdout", *args]
+        result = subprocess.run(command, text=True, capture_output=True)
+        if result.returncode in {1, 255}:
+            raise DialogCancelled()
+        return result.stdout.strip()
+
+    def menu(self, text: str, choices: Sequence[Tuple[str, str]]) -> str:
+        flat: List[str] = []
+        for tag, desc in choices:
+            flat.extend([tag, desc])
+        return self._run(["--menu", text, "20", "80", str(len(choices)), *flat])
+
+    def checklist(self, text: str, choices: Sequence[Tuple[str, str]], preselected: Sequence[str] = ()) -> List[str]:
+        flat: List[str] = []
+        selected = set(preselected)
+        for tag, desc in choices:
+            status = "on" if tag in selected else "off"
+            flat.extend([tag, desc, status])
+        raw = self._run(["--separate-output", "--checklist", text, "22", "90", str(len(choices)), *flat])
+        return [line for line in raw.splitlines() if line]
+
+    def inputbox(self, text: str, default: str = "") -> str:
+        return self._run(["--inputbox", text, "12", "80", default])
+
+    def yesno(self, text: str, default_no: bool = False) -> bool:
+        args = ["--yesno", text, "10", "70"]
+        if default_no:
+            args.append("--defaultno")
+        try:
+            self._run(args)
+            return True
+        except DialogCancelled:
+            return False
+
+    def msgbox(self, text: str) -> None:
+        try:
+            self._run(["--msgbox", text, "20", "80"])
+        except DialogCancelled:
+            pass
+
+    def textbox(self, path: Path) -> None:
+        try:
+            self._run(["--textbox", str(path), "24", "90"])
+        except DialogCancelled:
+            pass
+
+    def markdownbox(self, path: Path) -> None:
+        """Display a markdown file as plain text in a dialog textbox, stripping most formatting."""
+        try:
+            if not path.exists():
+                self.msgbox(f"File not found: {path}")
+                return
+            text = path.read_text(encoding="utf-8")
+            # Simple markdown to plain text: strip headings, code blocks, emphasis, links
+            import re
+            text = re.sub(r"^#+ ", "", text, flags=re.MULTILINE)  # Remove headings
+            text = re.sub(r"`([^`]*)`", r"\1", text)  # Inline code
+            text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)  # Bold
+            text = re.sub(r"\*([^*]+)\*", r"\1", text)  # Italic
+            text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)  # Images
+            text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)  # Links
+            # Remove code blocks (```)
+            text = re.sub(r"```[\s\S]*?```", "", text)
+            # Optionally truncate if too long
+            if len(text) > 20000:
+                text = text[:20000] + "\n... (truncated) ..."
+            # Write to a temp file for dialog textbox
+            import tempfile
+            with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
+                tmp.write(text)
+                tmp_path = tmp.name
+            try:
+                self._run(["--textbox", tmp_path, "24", "90"])
+            finally:
+                os.unlink(tmp_path)
+        except DialogCancelled:
+            pass
+
+    def run_programbox(self, title: str, command: str) -> None:
+        """Run a command and pipe its output to a dialog programbox."""
+        cmd = f"{command} | {self.dialog_bin} --title '{title}' --programbox 24 90"
+        try:
+            subprocess.run(cmd, shell=True, check=True)
+        except subprocess.CalledProcessError:
+            pass
+
+
+def prompt_slurm_parameters(ui: DialogUI) -> Dict[str, str | None]:
+    params: Dict[str, str | None] = {}
+    # Use config values as defaults if present
+    params["job_name"] = ui.inputbox("Job name", config.get("last_slurm_job_name", "jepa-job"))
+    params["nodes"] = ui.inputbox("Number of nodes", config.get("last_slurm_nodes", "1"))
+    params["cpus"] = ui.inputbox("CPUs per task", config.get("last_slurm_cpus", "2"))
+    params["mem"] = ui.inputbox("Memory (e.g., 64GB)", config.get("last_slurm_mem", "64GB"))
+    params["time"] = ui.inputbox("Wall time (HH:MM:SS)", config.get("last_slurm_time", "6:00:00"))
+    params["gpus"] = ui.inputbox("GPU string (e.g., gpu:1 or gpu:rtx8000:4)", config.get("last_slurm_gpus", "gpu:1"))
+    params["ext3_path"] = ui.inputbox("Overlay EXT3 path", config.get("last_slurm_ext3_path", "YourEXT3PATH.ext3"))
+    params["sif_path"] = ui.inputbox("SIF path", config.get("last_slurm_sif_path", "YourSIFPATH.sif"))
+    params["account"] = ui.inputbox("Account (optional)", config.get("last_slurm_account", ""))
+    params["mail_user"] = ui.inputbox("Notification email (optional)", config.get("last_slurm_mail_user", ""))
+    params["mail_type"] = ui.inputbox("Mail type (optional, e.g., END, FAIL)", config.get("last_slurm_mail_type", ""))
+    params["output_log"] = ui.inputbox("Output log path (optional)", config.get("last_slurm_output_log", ""))
+
+    # Save these values to config for next time
+    config["last_slurm_job_name"] = params["job_name"]
+    config["last_slurm_nodes"] = params["nodes"]
+    config["last_slurm_cpus"] = params["cpus"]
+    config["last_slurm_mem"] = params["mem"]
+    config["last_slurm_time"] = params["time"]
+    config["last_slurm_gpus"] = params["gpus"]
+    config["last_slurm_ext3_path"] = params["ext3_path"]
+    config["last_slurm_sif_path"] = params["sif_path"]
+    config["last_slurm_account"] = params["account"]
+    config["last_slurm_mail_user"] = params["mail_user"]
+    config["last_slurm_mail_type"] = params["mail_type"]
+    config["last_slurm_output_log"] = params["output_log"]
+    save_config(config)
+    return params
+
+
+def prompt_dataset_selection(ui: DialogUI) -> List[str]:
+    return ui.checklist("Select datasets", DATASET_CHOICES, preselected=["tsbpp/fall2025_deeplearning"])
+
+
+def prompt_install_slurm_selection(ui: DialogUI) -> str:
+    scripts = discover_install_slurm_scripts()
+    if not scripts:
+        raise FileNotFoundError("No install Slurm scripts found (pattern: *install*.slurm).")
+
+    default_script = config.get("last_install_slurm", "scripts/hpc/install.slurm")
+    ordered_scripts = list(scripts)
+    if default_script in ordered_scripts:
+        ordered_scripts.remove(default_script)
+        ordered_scripts.insert(0, default_script)
+
+    choices: List[Tuple[str, str]] = []
+    for script_path in ordered_scripts:
+        if script_path == default_script:
+            description = "Previously selected"
+        elif script_path == "scripts/hpc/install.slurm":
+            description = "Install script (default)"
+        else:
+            description = "Install script"
+        choices.append((script_path, description))
+
+    selected = ui.menu("Select an install Slurm script", choices)
+    config["last_install_slurm"] = selected
+    save_config(config)
+    return selected
+
+
+def prompt_dry_run(ui: DialogUI, config_key: str = None) -> bool:
+    # config_key: e.g. 'last_install_dry_run', 'last_download_dry_run', etc.
+    default = False
+    if config_key is not None:
+        default = bool(config.get(config_key, False))
+        print(f"User preference for {config_key}: {default}")
+    # If default is True, highlight 'Yes' (dry-run) by default; if False, highlight 'No' by default
+    result = ui.yesno("Enable dry-run (print commands only)?")
+    print(f"User selected dry-run: {result}")
+    # result is True if user selects 'Yes', False if 'No'
+    if config_key is not None:
+        config[config_key] = result
+        save_config(config)
+    print(f"[pipeline-py-client] Dry-run mode: {'enabled' if result else 'disabled'}")
+    return result
+
+
+def dialog_install(ui: DialogUI) -> None:
+    try:
+        selected_install_slurm = prompt_install_slurm_selection(ui)
+        dry_run = prompt_dry_run(ui, config_key="last_install_dry_run")
+    except DialogCancelled:
+        return
+    except Exception as exc:  # pragma: no cover - surfaced to the user
+        ui.msgbox(f"Could not load install Slurm scripts: {exc}")
+        return
+
+    command = [str(PROJECT_DIR / "install.sh"), "--install-slurm", selected_install_slurm]
+    if dry_run:
+        ui.msgbox("[DRY-RUN] The following command would be run:\n$ " + format_command(command))
+    else:
+        queue_hpc_install(["--install-slurm", selected_install_slurm], dry_run=False)
+
+
+def dialog_download_assets(ui: DialogUI) -> None:
+    try:
+        dry_run = prompt_dry_run(ui, config_key="last_download_dry_run")
+    except DialogCancelled:
+        return
+    try:
+        download_assets(dry_run=dry_run)
+    except Exception as exc:  # pragma: no cover - surfaced to the user
+        ui.msgbox(f"Download failed: {exc}")
+
+def prompt_interactive_slurm_selection(ui: DialogUI) -> str:
+    scripts = discover_test_slurm_scripts()
+    if not scripts:
+        raise FileNotFoundError("No Slurm scripts found in slurms/ directory.")
+
+    default_script = config.get("last_interactive_slurm", "scripts/hpc/slurms/ds_3001_interactive.slurm")
+    ordered_scripts = list(scripts)
+    if default_script in ordered_scripts:
+        ordered_scripts.remove(default_script)
+        ordered_scripts.insert(0, default_script)
+
+    choices: List[Tuple[str, str]] = []
+    for script_path in ordered_scripts:
+        if script_path == default_script:
+            description = "Previously selected"
+        else:
+            description = "Slurm script"
+        choices.append((script_path, description))
+
+    selected = ui.menu("Select a Slurm script to queue for interactive use", choices)
+    config["last_interactive_slurm"] = selected
+    save_config(config)
+    return selected
+
+def dialog_interactive(ui: DialogUI) -> None:
+    try:
+        selected_slurm = prompt_interactive_slurm_selection(ui)
+        dry_run = prompt_dry_run(ui, config_key="last_interactive_dry_run")
+    except DialogCancelled:
+        return
+    except Exception as exc:  # pragma: no cover
+        ui.msgbox(f"Could not load test Slurm scripts: {exc}")
+        return
+
+    command = ["sbatch", str(PROJECT_DIR / selected_slurm)]
+    if dry_run:
+        ui.msgbox("[DRY-RUN] The following command would be run:\n$ " + format_command(command))
+    else:
+        try:
+            run_command(command, dry_run=False, ui=ui)
+            ui.msgbox(f"Successfully queued Slurm job:\n{selected_slurm}")
+        except Exception as exc:
+            ui.msgbox(f"Failed to submit Slurm job: {exc}")
+
+def dialog_test(ui: DialogUI) -> None:
+    try:
+        extra_args_raw = ui.inputbox("Additional pytest args (space separated)", "")
+        extra_args = extra_args_raw.split() if extra_args_raw else []
+        dry_run = prompt_dry_run(ui, config_key="last_test_dry_run")
+    except DialogCancelled:
+        return
+
+    command = ["pytest", "tests/"] + extra_args
+    try:
+        run_command(command, dry_run=dry_run, ui=ui)
+    except Exception as exc:  # pragma: no cover
+        ui.msgbox(f"Tests failed: {exc}")
+        return
+
+    try:
+        if ui.yesno("Generate a Slurm script for this test run?", default_no=True):
+            params = prompt_slurm_parameters(ui)
+            slurm_path = Path(
+                ui.inputbox("Where should the Slurm script be written?", "test.slurm")
+            )
+            generate_slurm_script(
+                slurm_path,
+                command,
+                job_name=params["job_name"] or "jepa-test",
+                nodes=int(params["nodes"] or 1),
+                cpus=int(params["cpus"] or 2),
+                mem=params["mem"] or "64GB",
+                time=params["time"] or "1:00:00",
+                gpus=params["gpus"] or "gpu:1",
+                ext3_path=params["ext3_path"] or "YourEXT3PATH.ext3",
+                sif_path=params["sif_path"] or "YourSIFPATH.sif",
+                account=params.get("account"),
+                mail_user=params.get("mail_user"),
+                mail_type=params.get("mail_type"),
+                output_log=params.get("output_log"),
+            )
+            if ui.yesno("Submit with sbatch now?", default_no=False):
+                submit_slurm(slurm_path, dry_run=dry_run)
+    except DialogCancelled:
+        return
+    except Exception as exc:  # pragma: no cover
+        ui.msgbox(f"Slurm generation/submission failed: {exc}")
+
+
+def dialog_pretrain(ui: DialogUI) -> None:
+    import json
+    try:
+        # List config files in experiments/configs
+        configs_dir = CONFIGS_DIR
+        config_files = [f for f in configs_dir.iterdir() if f.is_file() and f.suffix == ".json"]
+        if not config_files:
+            ui.msgbox(f"No config files found in {configs_dir}")
+            return
+        config_choices = []
+
+        # default settings
+        default_config = "default (jepa.train.pretrain default settings)"
+        config_choices.append(("default", default_config))
+
+        for f in config_files:
+            desc = ""
+            try:
+                with open(f, "r") as fp:
+                    j = json.load(fp)
+                # Extract requested keys
+                dataset_name = j.get("data", {}).get("dataset_name")
+                image_size = j.get("data", {}).get("image_size")
+                model = j.get("model", {})
+                backbone = model.get("classification_backbone")
+                img_size = model.get("img_size")
+                num_class = model.get("classification_num_classes")
+                pretrained = model.get("classification_pretrained")
+                desc_items = []
+                if dataset_name:
+                    if len(str(dataset_name)) > 5:
+                        desc_items.append(str(dataset_name)[:5])
+                    else:
+                        desc_items.append(str(dataset_name))
+                if image_size: desc_items.append(f"{image_size}")
+                if backbone: desc_items.append(f"{backbone}")
+                if img_size: desc_items.append(f"{img_size}")
+                if num_class: desc_items.append(f"{num_class}")
+                if pretrained is not None: desc_items.append(f"{pretrained}")
+                if desc_items:
+                    desc += " [" + ", ".join(desc_items) + "]"
+            except Exception:
+                pass
+            config_choices.append((f.name.split(".")[0], desc))
+        selected_config = ui.menu("Select a config file\n" +
+                                    "d: dataset, m: model\n" +
+                                    "[d:name, d:img_size, m:backbone, m:img_size, m:num_class, m:pretrained]", 
+                                    config_choices)
+        config_path = configs_dir / selected_config
+        config_path = str(config_path) + ".json" if selected_config != "default" else ""
+
+        print(f"User selected config: {config_path}")
+        datasets = prompt_dataset_selection(ui)
+        extra_args_raw = ui.inputbox("Additional args (space separated, optional)", "")
+        extra_args = extra_args_raw.split() if extra_args_raw else []
+        dry_run = prompt_dry_run(ui, config_key="last_pretrain_dry_run")
+    except DialogCancelled:
+        return
+
+    config["last_pretrain_config"] = str(config_path)
+    config["last_pretrain_datasets"] = datasets
+    config["last_pretrain_extra_args"] = extra_args
+    save_config(config)
+
+    try:
+        command = build_pretrain_command(Path(config_path), datasets, extra_args)
+    except Exception as exc:  # pragma: no cover - surfaced to the user
+        ui.msgbox(f"Could not build pretraining command: {exc}")
+        return
+
+    try:
+        run_command(command, dry_run=dry_run, ui=ui)
+    except Exception as exc:  # pragma: no cover - surfaced to the user
+        ui.msgbox(f"Pretrain launch failed: {exc}")
+        return
+
+    try:
+        if ui.yesno("Generate a Slurm script for this pretrain run?", default_no=True):
+            params = prompt_slurm_parameters(ui)
+            slurm_path = Path(
+                ui.inputbox("Where should the Slurm script be written?", "pretrain.slurm")
+            )
+            generate_slurm_script(
+                slurm_path,
+                command,
+                job_name=params["job_name"] or "jepa-job",
+                nodes=int(params["nodes"] or 1),
+                cpus=int(params["cpus"] or 2),
+                mem=params["mem"] or "64GB",
+                time=params["time"] or "6:00:00",
+                gpus=params["gpus"] or "gpu:1",
+                ext3_path=params["ext3_path"] or "YourEXT3PATH.ext3",
+                sif_path=params["sif_path"] or "YourSIFPATH.sif",
+                account=params.get("account"),
+                mail_user=params.get("mail_user"),
+                mail_type=params.get("mail_type"),
+                output_log=params.get("output_log"),
+            )
+            if ui.yesno("Submit with sbatch now?", default_no=False):
+                submit_slurm(slurm_path, dry_run=dry_run)
+    except DialogCancelled:
+        return
+    except Exception as exc:  # pragma: no cover - surfaced to the user
+        ui.msgbox(f"Slurm generation/submission failed: {exc}")
+
+
+def dialog_slurm(ui: DialogUI) -> None:
+    try:
+        raw_command = ui.inputbox("Command to wrap (e.g., python -m jepa.datasets.download ...)")
+        if not raw_command:
+            ui.msgbox("No command provided. Returning to menu.")
+            return
+
+        cmd_parts = raw_command.split()
+        default_name = "job.slurm"
+        for part in reversed(cmd_parts):
+            if part.endswith(".py"):
+                default_name = f"{Path(part).stem}.slurm"
+                break
+            elif not part.startswith("-") and part.lower() not in ("python", "python3"):
+                default_name = f"{part.split('.')[-1]}.slurm"
+                break
+
+        params = prompt_slurm_parameters(ui)
+        slurm_path = Path(ui.inputbox("Where should the Slurm script be written?", default_name))
+        dry_run = False
+        # dry_run = prompt_dry_run(ui, config_key="last_slurm_dry_run")
+    except DialogCancelled:
+        return
+
+    try:
+        command = raw_command.split()
+        if dry_run:
+            ui.msgbox(f"[DRY-RUN] Would wrap this command in Slurm script:\n$ {' '.join(command)}")
+        generate_slurm_script(
+            slurm_path,
+            command,
+            job_name=params["job_name"] or "jepa-job",
+            nodes=int(params["nodes"] or 1),
+            cpus=int(params["cpus"] or 2),
+            mem=params["mem"] or "64GB",
+            time=params["time"] or "6:00:00",
+            gpus=params["gpus"] or "gpu:1",
+            ext3_path=params["ext3_path"] or "YourEXT3PATH.ext3",
+            sif_path=params["sif_path"] or "YourSIFPATH.sif",
+            account=params.get("account"),
+            mail_user=params.get("mail_user"),
+            mail_type=params.get("mail_type"),
+            output_log=params.get("output_log"),
+        )
+        if ui.yesno("Submit with sbatch now?", default_no=True):
+            submit_slurm(slurm_path, dry_run=dry_run)
+    except Exception as exc:  # pragma: no cover - surfaced to the user
+        ui.msgbox(f"Slurm generation/submission failed: {exc}")
+def dialog_monitor(ui: DialogUI) -> None:
+    user = os.environ.get("USER", "")
+
+    def check_exit() -> bool:
+        dr, dw, de = select.select([sys.stdin], [], [], 1.0)
+        if dr:
+            c = sys.stdin.read(1)
+            if c == '\x1b' or c == 'q': # Esc or 'q'
+                return True
+        return False
+
+    old_settings = termios.tcgetattr(sys.stdin)
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        while True:
+            result = subprocess.run(["squeue", "-u", user], capture_output=True, text=True)
+            # Clear screen and move cursor to top-left (ANSI)
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.write(f"=== Monitoring jobs for {user} (Press ESC or 'q' to exit) ===\n\n")
+            sys.stdout.write(result.stdout)
+            sys.stdout.flush()
+            if check_exit():
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        # Clear one last time to leave a clean state
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
+
+def dialog_world_model_dataset(ui: DialogUI) -> None:
+    try:
+        out_dir = ui.inputbox("Output directory", "data/toy")
+        episodes = ui.inputbox("Number of episodes", "200")
+        steps = ui.inputbox("Steps per episode", "200")
+        extra_args_raw = ui.inputbox("Additional args (optional)", "")
+        extra_args = extra_args_raw.split() if extra_args_raw else []
+        dry_run = prompt_dry_run(ui, config_key="last_wmd_dry_run")
+    except DialogCancelled:
+        return
+    
+    command = [
+        "python", "scripts/world_model/make_toy_dataset.py",
+        "--out_dir", out_dir,
+        "--episodes", episodes,
+        "--steps", steps
+    ] + extra_args
+    run_command(command, dry_run=dry_run, ui=ui)
+
+def dialog_world_model_train(ui: DialogUI) -> None:
+    try:
+        data_dir = ui.inputbox("Data directory", "data/toy")
+        epochs = ui.inputbox("Epochs", "20")
+        batch_size = ui.inputbox("Batch size", "64")
+        backbone = ui.menu("Select backbone", [("cnn", "CNN"), ("dinov2", "DINOv2"), ("vjepa2", "V-JEPA2")])
+        backbone_name = ui.inputbox("Backbone name (optional)", "dinov2_vits14")
+        freeze = ui.yesno("Freeze backbone weights?")
+        extra_args_raw = ui.inputbox("Additional args (optional)", "")
+        extra_args = extra_args_raw.split() if extra_args_raw else []
+        dry_run = prompt_dry_run(ui, config_key="last_wmt_dry_run")
+    except DialogCancelled:
+        return
+
+    command = [
+        "python", "scripts/world_model/train_world_model.py",
+        "--data_dir", data_dir,
+        "--epochs", epochs,
+        "--batch_size", batch_size,
+        "--backbone", backbone
+    ]
+    if backbone_name:
+        command.extend(["--backbone_name", backbone_name])
+    if freeze:
+        command.append("--freeze_backbone")
+    command.extend(extra_args)
+    run_command(command, dry_run=dry_run, ui=ui)
+
+def dialog_world_model_eval(ui: DialogUI) -> None:
+    try:
+        ckpt = ui.inputbox("Checkpoint path", "runs/latest.pt")
+        extra_args_raw = ui.inputbox("Additional args (optional)", "")
+        extra_args = extra_args_raw.split() if extra_args_raw else []
+        dry_run = prompt_dry_run(ui, config_key="last_wme_dry_run")
+    except DialogCancelled:
+        return
+    
+    command = [
+        "python", "scripts/world_model/eval_mpc.py",
+        "--ckpt", ckpt
+    ] + extra_args
+    run_command(command, dry_run=dry_run, ui=ui)
+
+def dialog_world_model(ui: DialogUI) -> None:
+    choices = (
+        ("dataset", "Generate toy dataset"),
+        ("train", "Train world model"),
+        ("eval", "Evaluate with MPC"),
+        ("back", "Back to main menu"),
+    )
+    while True:
+        try:
+            selection = ui.menu("World Model Management", choices)
+        except DialogCancelled:
+            break
+        
+        if selection == "dataset":
+            dialog_world_model_dataset(ui)
+        elif selection == "train":
+            dialog_world_model_train(ui)
+        elif selection == "eval":
+            dialog_world_model_eval(ui)
+        elif selection == "back":
+            break
+
+
+
+def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
+    ui = DialogUI()
+    choices: List[Tuple[str, str]] = [
+        ("install", "Queue install.slurm on HPC"),
+        ("download-assets", "Download datasets and assets via assets.yml"),
+        ("pretrain", "Launch pretraining and optional Slurm"),
+        ("world-model", "Manage world model (Dataset, Train, Eval)"),
+        ("test", "Run tests (pytest) and optional Slurm"),
+        ("interactive", "Queue an interactive Slurm job"),
+        ("slurm", "Generate a Slurm script for any command"),
+        ("monitor", "Monitor queued and running jobs (watch squeue)"),
+        ("help", "Show project README.md as help"),
+        ("quit", "Exit"),
+    ]
+
+    handlers: Dict[str, Callable[[DialogUI], None]] = {
+        "install": dialog_install,
+        "test": dialog_test,
+        "interactive": dialog_interactive,
+        "pretrain": dialog_pretrain,
+        "download-assets": dialog_download_assets,
+        "slurm": dialog_slurm,
+        "monitor": dialog_monitor,
+        "help": lambda ui: (
+            ui.markdownbox(ROOT / "README.md")
+            if (ROOT / "README.md").exists()
+            else ui.msgbox("README.md not found.")
+        ),
+        "quit": lambda ui: None, # Handled by the loop break
+    }
+
+    while True:
+        try:
+            selection = ui.menu("HPC pipeline client", choices)
+        except DialogCancelled:
+            break
+
+        if selection == "quit":
+            break
+        else:
+            handlers[selection](ui)
+
+
+def parse_and_run(argv: Sequence[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    parser = build_parser()
+    if not argv:
+        launch_dialog_ui()
+        return
+
+    args = parser.parse_args(list(argv))
+    if hasattr(args, "func"):
+        args.func(args)
+    else:
+        launch_dialog_ui()
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parse_and_run(argv)
+
+
+if __name__ == "__main__":
+    main()

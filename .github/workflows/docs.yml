@@ -1,0 +1,51 @@
+name: docs
+
+on:
+  push:
+    branches: [devel]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Force HTTPS for submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "org-16943930@github.com:"
+      - name: Initialize submodules (skip Overleaf)
+        run: |
+          git submodule update --init --recursive external/vjepa2
+          git submodule update --init --recursive external/dino
+      - name: Setup environment
+        run: |
+          bash scripts/python_setup.sh
+          source .venv/bin/activate
+          uv pip install -e .[docs]
+      - name: Clean Docs
+        run: |
+          source .venv/bin/activate
+          rm -rf docs/_build docs/_autosummary docs/api docs/technical_reference
+      - name: Build docs
+        run: |
+          source .venv/bin/activate
+          sphinx-build -W -b html docs docs/_build/html
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-html
+          path: docs/_build/html
+      - name: Deploy to GitHub Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/devel'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs/_build/html

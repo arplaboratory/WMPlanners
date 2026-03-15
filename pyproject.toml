@@ -3,9 +3,9 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "python-project"
-version = "0.1.0"
-description = "Placeholder"
+name = "cjepa"
+version = "1.0.0"
+description = "Learning World Models Continuously from Embodied Experience"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -15,30 +15,68 @@ authors = [
 dependencies = [
   "numpy>=1.23",
   "scipy>=1.10",
-  "matplotlib>=3.7"
+  "matplotlib>=3.7",
+  "torch>=2.0",
+  "torchvision>=0.15",
+  "opencv-python>=4.5",
+  "pillow>=9.0",
+  "pyyaml>=6.0",
+  "scikit-learn",
+  "pandas",
+  "tqdm",
+  "timm",
+  "transformers",
+  "h5py",
+  "einops",
+  "beartype",
+  "braceexpand",
+  "webdataset",
+  "ftfy",
+  "datasets"
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8",
+  "pytest-cov>=5",
+  "pylint>=3.2",
   "ruff>=0.5",
   "mypy>=1.8",
-  "ipykernel>=6.29"
+  "typeguard",
+  "ipykernel>=6.29",
+  "setuptools",
+]
+video = [
+  "decord>=0.6"
 ]
 docs = [
   "sphinx>=7.2",
   "myst-nb>=1.1",
   "sphinx-book-theme>=1.1",
   "nbsphinx>=0.9",
-  "jupytext>=1.15"
+  "jupytext>=1.15",
+  "sphinxcontrib-bibtex",
+  "sphinx-autoapi",
+  "sphinxcontrib-mermaid"
 ]
 
+[project.scripts]
+cjepa = "cjepa.cli:main"
+dino = "world_model.dino_demo:main"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/python_project"]
+packages = [
+  "src/cjepa",
+  "src/world_model",
+  "src/models",
+  "src/wm_datasets",
+  "src/utils"
+]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-ra"
+testpaths = ["tests"]
 
 [tool.ruff]
 select = ["E", "F", "I", "UP", "B"]
@@ -47,4 +85,4 @@ line-length = 88
 [tool.mypy]
 python_version = "3.9"
 strict = true
-packages = ["python_project"]
+packages = ["cjepa", "world_model"]

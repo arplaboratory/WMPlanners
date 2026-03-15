@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches: [devel]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Force HTTPS for submodules
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "org-16943930@github.com:"
+      - name: Initialize submodules (skip Overleaf)
+        run: |
+          git submodule update --init --recursive external/vjepa2
+          git submodule update --init --recursive external/dino
+      - name: Setup environment using script
+        run: |
+          bash scripts/python_setup.sh
+      - name: Run pytest
+        env:
+          PYTHONPATH: .:${{ github.workspace }}/external/vjepa2:${{ github.workspace }}/external/dino
+        run: |
+          mkdir -p reports
+          source .venv/bin/activate
+          pytest --junitxml=reports/pytest-junit.xml
+      - name: Upload test report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: reports/pytest-junit.xml
