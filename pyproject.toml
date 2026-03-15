@@ -31,7 +31,8 @@ dependencies = [
   "beartype",
   "braceexpand",
   "webdataset",
-  "ftfy"
+  "ftfy",
+  "datasets"
 ]
 
 [project.optional-dependencies]
@@ -66,7 +67,7 @@ packages = [
   "src/cjepa",
   "src/world_model",
   "src/models",
-  "src/datasets",
+  "src/wm_datasets",
   "src/utils"
 ]
 

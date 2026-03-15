@@ -43,7 +43,9 @@ def main():
     data_dir = config["data"]["data_dir"]
     # imports that depend on project structure
     from world_model.backbones import create_model
-    from datasets.datasets import build_dataloader
+    from wm_datasets.datasets import build_dataloader
+    from wm_datasets.pairdataset import PairDataset
+    from wm_datasets.datasample import VideoSample
 
     # choose model
     model_cfg = config["model"]
