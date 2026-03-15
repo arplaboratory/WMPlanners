@@ -2,8 +2,8 @@ import pytest
 import yaml
 import os
 from pathlib import Path
-from datasets.pairdataset import PairDataset
-from datasets.datasample import VideoSample
+from wm_datasets.pairdataset import PairDataset
+from wm_datasets.datasample import VideoSample
 
 
 def load_test_config():

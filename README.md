@@ -101,25 +101,32 @@ export PATH="$HOME/.local/bin:$PATH"
 ---
 </details>
 
-### Setup Python workspace
-> The bundled V-JEPA 2 project in `external/vjepa2` targets Linux environments like
-> Ubuntu 24.04 and commonly requires CUDA + multi-GPU for full-scale training.
+### Setup Python workspace (Recommended)
+The easiest way to set up the environment and all external dependencies (DINOv2, V-JEPA2) is using the provided setup script. This requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
-python3.11 -m venv .ds3001_env
-source .ds3001_env/bin/activate
-```
-or (using **uv**)
-```bash
-uv venv .ds3001 --python 3.11
-source .ds3001/bin/activate
+# This will create a .venv, install project dependencies, 
+# and set up DINOv2/V-JEPA2 in editable mode.
+bash scripts/python_setup.sh
+
+# Activate the environment
+source .venv/bin/activate
 ```
 
-### Install dependencies
+### Manual Setup (Alternative)
+If you prefer to set up the environment manually:
+
+```bash
+uv venv .venv --python 3.11
+source .venv/bin/activate
+```
+
 ```bash
 pip install pip --upgrade
 # V-JEPA2 runtime dependencies
 pip install -r external/vjepa2/requirements.txt
+# DINOv2 runtime dependencies
+pip install -r external/dino/requirements.txt
 
 # Project dependencies
 pip install -e .[dev,docs]

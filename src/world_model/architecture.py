@@ -53,12 +53,15 @@ class WorldModel(nn.Module):
         # vision backbone
         bkw = backbone_kwargs or {}
         if backbone is None or backbone == "cnn":
-            self.vision: nn.Module = VisionEncoder(in_ch=bkw.get("in_ch", 4), z_dim=z_vis_dim)
+            in_ch = bkw.get("in_ch", 4)
+            self.vision: nn.Module = VisionEncoder(in_ch=in_ch, z_dim=z_vis_dim)
             self._vis_dim = z_vis_dim
+            self._vis_in_ch = in_ch
         else:
             bundle: ModelBundle = create_backbone(backbone, **bkw)
             self.vision = bundle.model
             self._vis_dim = bundle.feature_dim or z_vis_dim
+            self._vis_in_ch = bkw.get("in_ch", 3)  # Pretrained backbones default to 3
             # Adapt feature dim to z_vis_dim if they differ
             if self._vis_dim != z_vis_dim:
                 self.vision_proj = nn.Linear(self._vis_dim, z_vis_dim)
@@ -95,7 +98,10 @@ class WorldModel(nn.Module):
             odom: ``(B, D_odom)``.
             imu: ``(B, D_imu)``.
         """
-        x = torch.cat([rgb, depth], dim=1)
+        if self._vis_in_ch == 4:
+            x = torch.cat([rgb, depth], dim=1)
+        else:
+            x = rgb
         z_vis = self.vision(x)
         if hasattr(self, "vision_proj"):
             z_vis = self.vision_proj(z_vis)

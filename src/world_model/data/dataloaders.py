@@ -5,6 +5,7 @@ from typing import Dict, Optional, List, Tuple
 import numpy as np
 import torch
 from torch.utils.data import Dataset
+import torchvision.transforms as T
 
 from .types import SampleBatch
 
@@ -22,19 +23,29 @@ class NPZEpisodeDataset(Dataset):
       action: (T,D_act) float32
       collision: (T,) float32 [optional]
     """
-    def __init__(self, data_dir: str, window: int = 16, stride: int = 1):
+    def __init__(self, data_dir: str, window: int = 16, stride: int = 1, img_size: Optional[int] = None):
         self.data_dir = data_dir
         self.window = window
         self.stride = stride
+        self.img_size = img_size
         self.files = sorted([os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith('.npz')])
         if not self.files:
             raise FileNotFoundError(f"No .npz episode files found in: {data_dir}")
+
+        self._transform = None
+        if img_size is not None:
+            self._transform = T.Compose([
+                T.ToPILImage(),
+                T.Resize((img_size, img_size)),
+                T.ToTensor(),
+            ])
 
         # Light scan for shapes
         ex = np.load(self.files[0])
         self.has_depth = 'depth' in ex
         self.has_collision = 'collision' in ex
-        self.H, self.W = ex['rgb'].shape[1], ex['rgb'].shape[2]
+        self.H = img_size if img_size is not None else ex['rgb'].shape[1]
+        self.W = img_size if img_size is not None else ex['rgb'].shape[2]
         self.D_imu = ex['imu'].shape[-1]
         self.D_odom = ex['odom'].shape[-1]
         self.D_act = ex['action'].shape[-1]
@@ -45,18 +56,35 @@ class NPZEpisodeDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
         ep = np.load(self.files[idx])
         rgb = ep['rgb']  # (T,H,W,3) uint8
-        T = rgb.shape[0]
-        if T < self.window + 1:
-            raise ValueError(f"Episode too short: {self.files[idx]} with T={T}")
+        T_len = rgb.shape[0]
+        if T_len < self.window + 1:
+            raise ValueError(f"Episode too short: {self.files[idx]} with T={T_len}")
 
         # pick a random start
-        start = np.random.randint(0, T - self.window)
+        start = np.random.randint(0, T_len - self.window)
         sl = slice(start, start + self.window)
 
         out = {}
-        out['rgb'] = rgb[sl]  # (W,H,...)
+        if self._transform is not None:
+            # Resize frame by frame
+            rgb_resized = []
+            for frame in rgb[sl]:
+                # ToPILImage expects (H,W,C)
+                rgb_resized.append(self._transform(frame).permute(1, 2, 0).numpy()) # back to (H,W,3) for collation
+            out['rgb'] = np.stack(rgb_resized)
+        else:
+            out['rgb'] = rgb[sl]  # (T,H,W,3)
+
         if 'depth' in ep:
-            out['depth'] = _as_float32(ep['depth'][sl])
+            depth = _as_float32(ep['depth'][sl])
+            if self.img_size is not None:
+                # Simple resize for depth (nearest)
+                import torch.nn.functional as F
+                depth_t = torch.from_numpy(depth).unsqueeze(1) # (T,1,H,W)
+                depth_t = F.interpolate(depth_t, size=(self.img_size, self.img_size), mode='nearest')
+                out['depth'] = depth_t.squeeze(1).numpy()
+            else:
+                out['depth'] = depth
         else:
             out['depth'] = np.zeros((self.window, self.H, self.W), dtype=np.float32)
 
