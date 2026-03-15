@@ -1,3 +1,4 @@
+(hpc-guide)=
 # HPC Guide
 
 This guide provides technical details for running the `cjepa` project on NYU HPC (Torch and Burst clusters).
