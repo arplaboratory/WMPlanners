@@ -247,7 +247,7 @@ else
 fi
 
 echo "[NODE] Verifying image: ${APPTAINER_IMAGE}"
-singularity exec --nv --containall \
+singularity exec --nv --no-home \
   -B ${SCRATCH_TMP}:/tmp:rw \
   -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
