@@ -26,6 +26,7 @@ set -euo pipefail
 PROJECT_NAME="rloclab"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
 SIF_IMAGE="/scratch/$USER/isaac-sim_ds3001.sif"
+SANDBOX_DIR="/scratch/$USER/isaac_container"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
 
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
@@ -39,7 +40,7 @@ DOCKER_USER_HOME="/root"
 NODE_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
 # Use a persistent scratch-backed cache root so pip/builds don't exhaust node-local /tmp
 # Must match ds_3001_install.slurm so the pre-warmed pip/kit caches are reused
-CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
+CACHE_ROOT="/scratch/$USER/singularity-cache"
 mkdir -p \
   "${CACHE_ROOT}/cache/kit" \
   "${CACHE_ROOT}/cache/ov" \
@@ -52,12 +53,9 @@ mkdir -p \
   "${CACHE_ROOT}/documents" \
   "${CACHE_ROOT}/kit-data"
 
+# keep logs dir
 mkdir -p "${PERSISTENT_LOGS_DIR}"
 touch "${PERSISTENT_LOGS_DIR}/.keep"
-
-# Venv must match ds_3001_install.slurm — reuse the pre-built environment
-VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
-mkdir -p "${VENV_DIR}"
 
 # Scratch-backed tmp for builds and apptainer cache
 SCRATCH_TMP="/scratch/$USER/tmp"
@@ -88,8 +86,17 @@ WHEELED_ASSETS_DATA_DIR="${RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR:-${RUN_DIR}/src/Wh
 export WANDB_PROJECT="${PROJECT_NAME}"
 export WANDB_RUN_NAME="${EXPERIMENT_NAME}_${SLURM_JOB_ID}"
 
+# Prefer baked SIF; fall back to sandbox directory if SIF not yet built
+if [ -f "${SIF_IMAGE}" ]; then
+  APPTAINER_IMAGE="${SIF_IMAGE}"
+elif [ -d "${SANDBOX_DIR}" ]; then
+  echo "[NODE] SIF not found; using sandbox at ${SANDBOX_DIR}"
+  APPTAINER_IMAGE="${SANDBOX_DIR}"
+else
+  echo "[NODE] ERROR: neither SIF (${SIF_IMAGE}) nor sandbox (${SANDBOX_DIR}) found." >&2; exit 1
+fi
+
 CMD="--nv --containall \
-  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -104,6 +111,7 @@ CMD="--nv --containall \
   -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
   -B ${PERSISTENT_LOGS_DIR}:/workspace/isaaclab/logs:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
+  -B ${RUN_DIR}:/workspace/code:rw \
   --env WANDB_CACHE_DIR=${DOCKER_USER_HOME}/.cache/wandb \
   --env WANDB_CONFIG_DIR=${DOCKER_USER_HOME}/.config/wandb \
   --env WANDB_API_KEY=${WANDB_API_KEY:-} \
@@ -143,37 +151,28 @@ ls -la "${RUN_DIR}/scripts" || true
 
 singularity exec \
   $CMD \
-  --env VENV_DIR="$VENV_DIR" \
   --env ISAAC_ARGS="$ISAAC_ARGS" \
-  "${SIF_IMAGE}" bash -lc '
+  "${APPTAINER_IMAGE}" bash -lc '
 set -euo pipefail
 
-cd /workspace/isaaclab
+cd /workspace/isaaclab || true
 export ISAACLAB_PATH=/workspace/isaaclab
 
-# ---- Venv bootstrap (persists in scratch cache between runs) ----
-if [ ! -f "${VENV_DIR}/bin/activate" ]; then
-  echo "[APPTAINER] Creating venv at ${VENV_DIR}..."
-  /isaac-sim/python.sh -m venv "${VENV_DIR}" --system-site-packages
-fi
-source "${VENV_DIR}/bin/activate"
-export PYTHONPATH="/workspace/run/src:${PYTHONPATH:-}"
+# Ensure PYTHON can see mounted project code and isaaclab
+export PYTHONPATH="/workspace/code/src:/workspace/isaaclab:${PYTHONPATH:-}"
 
 echo "[APPTAINER] /tmp usage:"; df -h /tmp || true
-echo "[APPTAINER] venv: $(which python)"
-echo "[APPTAINER] listing /workspace/run:"
-ls -la /workspace/run || true
+echo "[APPTAINER] python: $(which python)"
+echo "[APPTAINER] listing /workspace/code:"
+ls -la /workspace/code || true
 echo "[APPTAINER] checking for train script:"
-ls -la /workspace/run/scripts/rl || true
-
-echo "[APPTAINER] installing /workspace/run into venv..."
-pip install -e /workspace/run
+ls -la /workspace/code/scripts/rl || true
 
 echo "[APPTAINER] TASK_NAME=${TASK_NAME}"
 echo "[APPTAINER] AGENT_NAME=${AGENT_NAME}"
 echo "[APPTAINER] ISAAC_ARGS=${ISAAC_ARGS}"
 
-/isaac-sim/python.sh /workspace/run/scripts/rl/wheeledlab_rl/scripts/train_rl.py \
+python /workspace/code/scripts/rl/wheeledlab_rl/scripts/train_rl.py \
   --task="${TASK_NAME}" \
   --agent="${AGENT_NAME}" \
   --headless \

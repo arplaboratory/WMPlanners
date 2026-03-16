@@ -91,6 +91,7 @@ CMD="--nv --containall \
   -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
   -B ${PERSISTENT_LOGS_DIR}:/workspace/worldmodel/logs:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
+  -B ${RUN_DIR}:/workspace/code:rw \
   --env WANDB_CACHE_DIR=${DOCKER_USER_HOME}/.cache/wandb \
   --env WANDB_CONFIG_DIR=${DOCKER_USER_HOME}/.config/wandb \
   --env WANDB_API_KEY=${WANDB_API_KEY:-} \
@@ -123,6 +124,8 @@ ls -la "${RUN_DIR}" || true
 
 echo "[NODE] listing RUN_DIR/scripts path before singularity exec:"
 ls -la "${RUN_DIR}/scripts" || true
+echo "[NODE] listing /workspace/code before singularity exec (host):"
+ls -la "${RUN_DIR}" || true
 
 singularity exec \
   $CMD \

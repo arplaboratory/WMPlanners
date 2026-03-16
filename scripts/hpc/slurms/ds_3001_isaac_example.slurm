@@ -24,6 +24,7 @@ set -euo pipefail
 PROJECT_NAME="rloclab"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
 SIF_IMAGE="/scratch/$USER/isaac-sim_ds3001.sif"
+SANDBOX_DIR="/scratch/$USER/isaac_container"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
 
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
@@ -33,7 +34,7 @@ DOCKER_ISAACSIM_ROOT_PATH="/isaac-sim"
 DOCKER_USER_HOME="/root"
 
 # Must match ds_3001_install.slurm so pre-warmed caches are reused
-CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
+CACHE_ROOT="/scratch/$USER/singularity-cache"
 SCRATCH_TMP="/scratch/$USER/tmp"
 mkdir -p "${SCRATCH_TMP}"
 mkdir -p \
@@ -48,11 +49,8 @@ mkdir -p \
   "${CACHE_ROOT}/documents" \
   "${CACHE_ROOT}/kit-data"
 
+# keep logs dir
 mkdir -p "${PERSISTENT_LOGS_DIR}"
-
-# Must match ds_3001_install.slurm — reuse the pre-built environment
-VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
-mkdir -p "${VENV_DIR}"
 
 export APPTAINER_TMPDIR="${SCRATCH_TMP}"
 export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
@@ -76,8 +74,17 @@ echo "    http://localhost:8211/streaming/webrtc-demo/"
 echo ""
 echo "=========================================================================="
 
+# Prefer baked SIF; fall back to sandbox directory if SIF not yet built
+if [ -f "${SIF_IMAGE}" ]; then
+  APPTAINER_IMAGE="${SIF_IMAGE}"
+elif [ -d "${SANDBOX_DIR}" ]; then
+  echo "[NODE] SIF not found; using sandbox at ${SANDBOX_DIR}"
+  APPTAINER_IMAGE="${SANDBOX_DIR}"
+else
+  echo "[NODE] ERROR: neither SIF (${SIF_IMAGE}) nor sandbox (${SANDBOX_DIR}) found." >&2; exit 1
+fi
+
 CMD="--nv --containall \
-  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -92,6 +99,7 @@ CMD="--nv --containall \
   -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
   -B ${PERSISTENT_LOGS_DIR}:/workspace/isaaclab/logs:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
+  -B ${RUN_DIR}:/workspace/code:rw \
   -B ${SCRATCH_TMP}:/tmp:rw \
   -B ${SCRATCH_TMP}:/var/tmp:rw \
   --env WANDB_CACHE_DIR=${DOCKER_USER_HOME}/.cache/wandb \
@@ -104,12 +112,11 @@ CMD="--nv --containall \
   cat > "${SCRATCH_TMP}/isaac_import_check.sh" <<'SH'
 #!/bin/bash
 set -euo pipefail
-source "${VENV_DIR}/bin/activate"
 export ISAACLAB_PATH=/workspace/isaaclab
-export PYTHONPATH="/workspace/isaaclab:${PYTHONPATH:-}"
+export PYTHONPATH="/workspace/isaaclab:/workspace/code:${PYTHONPATH:-}"
 echo "[APPTAINER] listing /workspace/isaaclab inside container:"
 ls -la /workspace/isaaclab || true
-echo "[APPTAINER] trying to import isaaclab inside venv (will not fail job):"
+echo "[APPTAINER] trying to import isaaclab inside container (will not fail job):"
 python - <<'PYCODE'
 import importlib, sys, traceback
 try:
@@ -123,28 +130,15 @@ SH
 
   singularity exec \
   $CMD \
-  --env VENV_DIR="$VENV_DIR" \
-  "${SIF_IMAGE}" bash -lc '
+  "${APPTAINER_IMAGE}" bash -lc '
 set -euo pipefail
 
 echo "[APPTAINER] /tmp usage:"; df -h /tmp || true
 
 export ISAACLAB_PATH=/workspace/isaaclab
 
-# ---- Venv bootstrap (persists in scratch cache between runs) ----
-if [ ! -f "${VENV_DIR}/bin/activate" ]; then
-  echo "[APPTAINER] Creating venv at ${VENV_DIR}..."
-  /isaac-sim/python.sh -m venv "${VENV_DIR}" --system-site-packages
-fi
-source "${VENV_DIR}/bin/activate"
-
-# Ensure Python can import the isaaclab package from the mounted workspace
-export PYTHONPATH="/workspace/isaaclab:${PYTHONPATH:-}"
-
-if [ -d /workspace/run ]; then
-  echo "[APPTAINER] Installing /workspace/run into venv..."
-  pip install -e /workspace/run || true
-fi
+# Ensure Python can import the isaaclab package from the mounted workspace and code
+export PYTHONPATH="/workspace/isaaclab:/workspace/code:${PYTHONPATH:-}"
 
 # Run host-created import-check script (written to SCRATCH_TMP, bound to /tmp inside container)
 if [ -x /tmp/isaac_import_check.sh ]; then

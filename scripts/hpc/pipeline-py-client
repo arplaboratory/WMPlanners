@@ -51,7 +51,7 @@ CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
 SLURMS_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-SLURM_TEMPLATE = SLURMS_DIR / "sbatch_pretrain.slurm"
+SLURM_TEMPLATE = SLURMS_DIR / "base.slurm"
 DATASET_CHOICES: Tuple[Tuple[str, str], ...] = (
     ("cifar100", "CIFAR100"),
     ("tsbpp/fall2025_deeplearning", "tsbpp/fall2025_deeplearning"),

@@ -26,6 +26,7 @@ set -euo pipefail
 PROJECT_NAME="ds_ga_3001"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
 SIF_IMAGE="/scratch/$USER/isaac-sim_ds3001.sif"
+SANDBOX_DIR="/scratch/$USER/isaac_container"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
 
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
@@ -37,7 +38,7 @@ DOCKER_USER_HOME="/root"
 
 # Node-local cache & execution
 # Must match ds_3001_install.slurm so pre-warmed caches are reused
-CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
+CACHE_ROOT="/scratch/$USER/singularity-cache"
 SCRATCH_TMP="/scratch/$USER/tmp"
 mkdir -p "${SCRATCH_TMP}"
 mkdir -p \
@@ -52,19 +53,25 @@ mkdir -p \
   "${CACHE_ROOT}/documents" \
   "${CACHE_ROOT}/kit-data"
 
+# keep logs dir
 mkdir -p "${PERSISTENT_LOGS_DIR}"
 touch "${PERSISTENT_LOGS_DIR}/.keep"
-
-# Must match ds_3001_install.slurm — reuse the pre-built environment
-VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
-mkdir -p "${VENV_DIR}"
 
 # Prefer scratch-backed tmp for apptainer/singularity scratch
 export APPTAINER_TMPDIR="${SCRATCH_TMP}"
 export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
 
+# Prefer baked SIF; fall back to sandbox directory if SIF not yet built
+if [ -f "${SIF_IMAGE}" ]; then
+  APPTAINER_IMAGE="${SIF_IMAGE}"
+elif [ -d "${SANDBOX_DIR}" ]; then
+  echo "[NODE] SIF not found; using sandbox at ${SANDBOX_DIR}"
+  APPTAINER_IMAGE="${SANDBOX_DIR}"
+else
+  echo "[NODE] ERROR: neither SIF (${SIF_IMAGE}) nor sandbox (${SANDBOX_DIR}) found." >&2; exit 1
+fi
+
 CMD="--nv --containall \
-  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -79,6 +86,7 @@ CMD="--nv --containall \
   -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
   -B ${PERSISTENT_LOGS_DIR}:/workspace/isaaclab/logs:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
+  -B ${RUN_DIR}:/workspace/code:rw \
   -B ${SCRATCH_TMP}:/tmp:rw \
   -B ${SCRATCH_TMP}:/var/tmp:rw"
 
@@ -86,20 +94,20 @@ echo "[remote] CMD to run: $CMD"
 
 singularity exec \
   $CMD \
-  "${SIF_IMAGE}" bash -lc '
+  "${APPTAINER_IMAGE}" bash -lc '
 set -euo pipefail
 
 export ISAACLAB_PATH=/workspace/isaaclab
-export PYTHONPATH="/workspace/run/src:${PYTHONPATH:-}"
+export PYTHONPATH="/workspace/code/src:/workspace/isaaclab:${PYTHONPATH:-}"
 
 echo "[test] /tmp usage:"; df -h /tmp || true
 
 echo "[test] Verifying core packages..."
-/isaac-sim/python.sh -c "import torch; print('PyTorch ' + torch.__version__ + ' | CUDA: ' + str(torch.cuda.is_available()))"
-/isaac-sim/python.sh -c "import numpy; print('NumPy ' + numpy.__version__)"
+python -c "import torch; print('PyTorch ' + torch.__version__ + ' | CUDA: ' + str(torch.cuda.is_available()))"
+python -c "import numpy; print('NumPy ' + numpy.__version__)"
 
 echo "[test] Running PyTest suite..."
-/isaac-sim/python.sh -m pytest /workspace/run/tests/ -v
+python -m pytest /workspace/code/tests/ -v
 
 echo "[test] All tests completed!"
 '
