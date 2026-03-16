@@ -1,35 +1,144 @@
-(building-sif)=
 # Building the Custom SIF Locally
 
 This guide documents how to manually reproduce the custom Isaac Sim Singularity image
 (`isaac-sim_ds3001.sif`). 
 
+## Installing Singularity on Ubuntu
+
+<details>
+<summary><strong>Click for full Singularity installation instructions</strong></summary>
+
+---
+
+The recommended distribution is **SingularityCE** (Community Edition), maintained by
+Sylabs.  The steps below install it from the official Sylabs APT repository and
+configure fakeroot so you can build SIF images without root.
+
+### Install Dependencies
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential \
+  libseccomp-dev \
+  pkg-config \
+  uidmap \
+  squashfs-tools \
+  fuse2fs \
+  fuse-overlayfs \
+  fakeroot \
+  cryptsetup \
+  curl wget git \
+  libfuse-dev \
+  libfuse3-dev \
+  libglib2.0-dev \
+  zlib1g-dev \
+  libsubid-dev
+```
+
+:::{note}
+`libfuse-dev` and `libfuse3-dev` provide the FUSE headers required to build
+`squashfuse` during the SingularityCE build.  Without them, `./mconfig` exits
+with an error and no `Makefile` is generated, causing the subsequent `make` calls
+to fail with *"No targets specified"*.
+:::
+
+### Install Go (required to build SingularityCE from source)
+
+SingularityCE is written in Go.  Check the [SingularityCE release page](https://github.com/sylabs/singularity/releases)
+for the minimum required Go version, then install it:
+
+```bash
+export GOVERSION=1.25.6   # adjust to match required version
+wget "https://dl.google.com/go/go${GOVERSION}.linux-amd64.tar.gz"
+sudo tar -C /usr/local -xzf "go${GOVERSION}.linux-amd64.tar.gz"
+echo 'export PATH="/usr/local/go/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+go version
+```
+
+### Build and Install SingularityCE
+
+```bash
+export SINGULARITY_VERSION=4.4.0   # check releases for latest stable
+wget "https://github.com/sylabs/singularity/releases/download/v${SINGULARITY_VERSION}/singularity-ce-${SINGULARITY_VERSION}.tar.gz"
+tar -xzf "singularity-ce-${SINGULARITY_VERSION}.tar.gz"
+cd "singularity-ce-${SINGULARITY_VERSION}"
+
+./mconfig
+# mconfig must exit 0 and print "Makefile written to builddir/Makefile" before continuing.
+# If it reports "libsubid headers are required", either:
+#   (a) install the missing package:  sudo apt-get install -y libsubid-dev  (recommended)
+#   (b) disable the feature:          ./mconfig --without-libsubid
+# Without libsubid, Singularity still works but won't honor NSS subid configuration.
+make -C builddir
+sudo make -C builddir install
+```
+
+Verify:
+
+```bash
+singularity --version
+```
+
+### Configure Fakeroot
+
+Fakeroot lets you build SIF images as a non-root user by mapping your UID/GID inside
+the container to a sub-range of IDs.
+
+```bash
+# Add subuid/subgid mappings for your user (run as root or with sudo)
+sudo singularity config fakeroot --add "$USER"
+
+# Confirm entries were written
+grep "$USER" /etc/subuid /etc/subgid
+```
+
+Each file should contain a line like:
+
+```
+<username>:100000:65536
+```
+
+If `singularity config fakeroot` is unavailable on your version, add the entries
+manually:
+
+```bash
+echo "${USER}:100000:65536" | sudo tee -a /etc/subuid
+echo "${USER}:100000:65536" | sudo tee -a /etc/subgid
+```
+
+:::{note}
+If you prefer **Apptainer** (the Linux Foundation fork), the commands are identical —
+just replace `singularity` with `apptainer` throughout this guide.  Install via:
+`sudo apt-get install -y apptainer` on Ubuntu 22.04+ or from the
+[Apptainer releases page](https://github.com/apptainer/apptainer/releases).
+:::
+
+</details>
+
 ## Prerequisites
 
-- Singularity installed (≥ 3.8 recommended) with fakeroot configured:
-  your username must have entries in `/etc/subuid` and `/etc/subgid`.
-- The base Isaac Sim SIF (`isaac-sim_5.1.0.sif`). See
-  [Obtaining the Base SIF](#obtaining-the-base-sif) below for how to pull it from NVIDIA NGC.
-- Sufficient disk space: expect **> 100 GB** for the base image, sandbox, and final SIF.
-- The project repository cloned locally.
-- IsaacLab cloned (step 2 below).
+1. [Singularity CE](https://github.com/sylabs/singularity/releases) (≥ 3.8) with fakeroot configured
+2. The base Isaac Sim SIF (`isaac-sim_5.1.0.sif`) — see [Obtaining the Base SIF](#obtaining-the-base-sif)
+3. **> 100 GB** free disk space (base image + sandbox + final SIF)
+4. This repository cloned locally
+5. IsaacLab cloned (Step 2 below)
+
+<details>
+<summary><strong>Click for instructions on installing prerequisites</strong></summary>
+
+---
+
+See [Installing Singularity on Ubuntu](#installing-singularity) above for the full
+Singularity installation and fakeroot setup walkthrough.
+
+</details>
 
 (obtaining-the-base-sif)=
 ## Obtaining the Base SIF
 
-The base image must be pulled from the [NVIDIA NGC](https://ngc.nvidia.com) container
-registry, which requires a free NGC account and API key.
-
-1. Generate an API key at **ngc.nvidia.com → Account → Setup → Generate API Key**.
-
-2. Authenticate Singularity against the registry (the username is the literal string
-   `$oauthtoken`, not a shell variable):
-
-   ```bash
-   singularity remote login --username '$oauthtoken' --password <YOUR_NGC_API_KEY> docker://nvcr.io
-   ```
-
-3. Pull the image:
+### Pull the image:
 
    ```bash
    singularity pull isaac-sim_5.1.0.sif docker://nvcr.io/nvidia/isaac-sim:5.1.0
@@ -37,14 +146,6 @@ registry, which requires a free NGC account and API key.
 
    This produces `isaac-sim_5.1.0.sif` directly in the current directory.
    Move it to `$HOME` or whichever path you set for `SIF_IMAGE` in Step 1.
-
-:::{note}
-Alternatively, if you already have the image on HPC scratch, transfer it with `rsync`:
-
-```bash
-rsync -aP <netid>@login.torch.hpc.nyu.edu:/scratch/<netid>/isaac-sim_5.1.0.sif "$HOME/"
-```
-:::
 
 ## Step 1 — Set Local Variables
 
@@ -55,7 +156,7 @@ export SIF_IMAGE="$HOME/isaac-sim_5.1.0.sif"
 export BUILT_SIF="$HOME/isaac-sim_ds3001.sif"
 export SANDBOX_DIR="$HOME/isaac_container"
 export ISAACLAB_DIR="$HOME/IsaacLab"
-export PROJECT_ROOT="/path/to/ds_ga_3001"   # adjust to your clone location
+export PROJECT_ROOT="/path/to/ds_ga_3001"   # adjust to local clone
 export SCRATCH_TMP="$HOME/tmp"
 mkdir -p "$SCRATCH_TMP"
 ```
