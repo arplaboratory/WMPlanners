@@ -112,6 +112,7 @@ $PYTHON_EXE -m pip install --no-cache-dir uv
 
 if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
   echo "[SANDBOX] Fixing DINO requirements..."
+  sed -i '/cuml-cu11/d' external/dino/requirements.txt
   sed -i "/xformers==0.0.18/d" "$PROJECT_ROOT/external/dino/requirements.txt"
   sed -i "s/torch==2.0.0/torch>=2.0/g" "$PROJECT_ROOT/external/dino/requirements.txt"
   sed -i "s/torchvision==0.15.0/torchvision>=0.15/g" "$PROJECT_ROOT/external/dino/requirements.txt"

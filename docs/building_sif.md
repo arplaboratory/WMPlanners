@@ -1,18 +1,26 @@
 # Building the Custom SIF Locally
 
-This guide documents how to manually reproduce the custom Isaac Sim Singularity image
-(`isaac-sim_ds3001.sif`). 
+This guide documents how to manually reproduce the custom Isaac Sim Apptainer image
+(`isaac-sim_ds3001.sif`).
 
-## Installing Singularity on Ubuntu
+## Installing Apptainer on Ubuntu
 
 <details>
-<summary><strong>Click for full Singularity installation instructions</strong></summary>
+<summary><strong>Click to expand installation instructions</strong></summary>
 
----
+## Prerequisites
 
-The recommended distribution is **SingularityCE** (Community Edition), maintained by
-Sylabs.  The steps below install it from the official Sylabs APT repository and
-configure fakeroot so you can build SIF images without root.
+1. [Apptainer](https://github.com/apptainer/apptainer/releases) (≥ 1.0) with fakeroot configured — see [Installing Apptainer on Ubuntu](#installing-apptainer-on-ubuntu) above
+2. The base Isaac Sim SIF (`isaac-sim_5.1.0.sif`) — see [Obtaining the Base SIF](#obtaining-the-base-sif)
+3. **> 100 GB** free disk space (base image + sandbox + final SIF)
+4. This repository cloned locally
+5. IsaacLab cloned (Step 2 below)
+
+The recommended distribution for HPC and cluster workflows is **Apptainer** (the
+Linux Foundation fork of Singularity). The steps below cover installing Apptainer
+and configuring fakeroot so you can build SIF images without root. If you still
+prefer SingularityCE, most commands shown here are interchangeable by replacing
+`apptainer` with `singularity`.
 
 ### Install Dependencies
 
@@ -36,16 +44,14 @@ sudo apt-get install -y \
   libsubid-dev
 ```
 
-:::{note}
 `libfuse-dev` and `libfuse3-dev` provide the FUSE headers required to build
-`squashfuse` during the SingularityCE build.  Without them, `./mconfig` exits
+`squashfuse` during the Apptainer source build.  Without them, `./mconfig` exits
 with an error and no `Makefile` is generated, causing the subsequent `make` calls
 to fail with *"No targets specified"*.
-:::
 
-### Install Go (required to build SingularityCE from source)
+### Install Go (required to build Apptainer from source)
 
-SingularityCE is written in Go.  Check the [SingularityCE release page](https://github.com/sylabs/singularity/releases)
+Apptainer is written in Go.  Check the [Apptainer release page](https://github.com/apptainer/apptainer/releases)
 for the minimum required Go version, then install it:
 
 ```bash
@@ -57,20 +63,16 @@ source ~/.bashrc
 go version
 ```
 
-### Build and Install SingularityCE
+### Build and Install Apptainer
 
 ```bash
-export SINGULARITY_VERSION=4.4.0   # check releases for latest stable
-wget "https://github.com/sylabs/singularity/releases/download/v${SINGULARITY_VERSION}/singularity-ce-${SINGULARITY_VERSION}.tar.gz"
-tar -xzf "singularity-ce-${SINGULARITY_VERSION}.tar.gz"
-cd "singularity-ce-${SINGULARITY_VERSION}"
+# Clone and check out the latest stable tag
+git clone https://github.com/apptainer/apptainer.git
+cd apptainer
+git fetch --tags
+git checkout "$(git describe --tags --abbrev=0)"
 
-./mconfig
-# mconfig must exit 0 and print "Makefile written to builddir/Makefile" before continuing.
-# If it reports "libsubid headers are required", either:
-#   (a) install the missing package:  sudo apt-get install -y libsubid-dev  (recommended)
-#   (b) disable the feature:          ./mconfig --without-libsubid
-# Without libsubid, Singularity still works but won't honor NSS subid configuration.
+./mconfig --with-suid
 make -C builddir
 sudo make -C builddir install
 ```
@@ -78,17 +80,19 @@ sudo make -C builddir install
 Verify:
 
 ```bash
-singularity --version
+apptainer --version
 ```
 
 ### Configure Fakeroot
 
-Fakeroot lets you build SIF images as a non-root user by mapping your UID/GID inside
-the container to a sub-range of IDs.
+Fakeroot lets you build SIF images as a non-root user by mapping your UID/GID
+inside the container to a sub-range of IDs. Apptainer uses the standard
+`/etc/subuid` and `/etc/subgid` mappings.
 
 ```bash
 # Add subuid/subgid mappings for your user (run as root or with sudo)
-sudo singularity config fakeroot --add "$USER"
+echo "${USER}:100000:65536" | sudo tee -a /etc/subuid
+echo "${USER}:100000:65536" | sudo tee -a /etc/subgid
 
 # Confirm entries were written
 grep "$USER" /etc/subuid /etc/subgid
@@ -100,52 +104,34 @@ Each file should contain a line like:
 <username>:100000:65536
 ```
 
-If `singularity config fakeroot` is unavailable on your version, add the entries
-manually:
-
-```bash
-echo "${USER}:100000:65536" | sudo tee -a /etc/subuid
-echo "${USER}:100000:65536" | sudo tee -a /etc/subgid
-```
-
-:::{note}
-If you prefer **Apptainer** (the Linux Foundation fork), the commands are identical —
-just replace `singularity` with `apptainer` throughout this guide.  Install via:
-`sudo apt-get install -y apptainer` on Ubuntu 22.04+ or from the
-[Apptainer releases page](https://github.com/apptainer/apptainer/releases).
-:::
-
 </details>
 
-## Prerequisites
-
-1. [Singularity CE](https://github.com/sylabs/singularity/releases) (≥ 3.8) with fakeroot configured
-2. The base Isaac Sim SIF (`isaac-sim_5.1.0.sif`) — see [Obtaining the Base SIF](#obtaining-the-base-sif)
-3. **> 100 GB** free disk space (base image + sandbox + final SIF)
-4. This repository cloned locally
-5. IsaacLab cloned (Step 2 below)
-
-<details>
-<summary><strong>Click for instructions on installing prerequisites</strong></summary>
-
----
-
-See [Installing Singularity on Ubuntu](#installing-singularity) above for the full
-Singularity installation and fakeroot setup walkthrough.
-
-</details>
-
-(obtaining-the-base-sif)=
 ## Obtaining the Base SIF
 
-### Pull the image:
+### Pull the image
 
-   ```bash
-   singularity pull isaac-sim_5.1.0.sif docker://nvcr.io/nvidia/isaac-sim:5.1.0
-   ```
+Apptainer stages the squashfs build in `$TMPDIR`, which defaults to `/tmp` — a
+**tmpfs** (RAM-backed) filesystem with a size limit typically equal to half your RAM.
+For the ~20 GB Isaac Sim image this will exhaust `/tmp` regardless of how much disk
+space you have.  Always redirect temp directories to real disk before pulling:
 
-   This produces `isaac-sim_5.1.0.sif` directly in the current directory.
-   Move it to `$HOME` or whichever path you set for `SIF_IMAGE` in Step 1.
+```bash
+export TMPDIR="$HOME/tmp"
+export APPTAINER_TMPDIR="$HOME/tmp"
+export APPTAINER_CACHEDIR="$HOME/apptainer-cache"
+unset SINGULARITY_CACHEDIR
+mkdir -p "$TMPDIR" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
+apptainer pull isaac-sim_5.1.0.sif docker://nvcr.io/nvidia/isaac-sim:5.1.0
+```
+
+You can confirm `/tmp` is tmpfs and see its current size limit with:
+
+```bash
+df -h /tmp
+```
+
+This produces `isaac-sim_5.1.0.sif` in the current directory.
+Move it to `$HOME` or whichever path you set for `SIF_IMAGE` in Step 1.
 
 ## Step 1 — Set Local Variables
 
@@ -156,9 +142,17 @@ export SIF_IMAGE="$HOME/isaac-sim_5.1.0.sif"
 export BUILT_SIF="$HOME/isaac-sim_ds3001.sif"
 export SANDBOX_DIR="$HOME/isaac_container"
 export ISAACLAB_DIR="$HOME/IsaacLab"
+```
+```bash
 export PROJECT_ROOT="/path/to/ds_ga_3001"   # adjust to local clone
+```
+```bash
 export SCRATCH_TMP="$HOME/tmp"
-mkdir -p "$SCRATCH_TMP"
+export TMPDIR="$SCRATCH_TMP"
+export APPTAINER_TMPDIR="$SCRATCH_TMP"
+export APPTAINER_CACHEDIR="$HOME/apptainer-cache"
+unset SINGULARITY_CACHEDIR
+mkdir -p "$SCRATCH_TMP" "$APPTAINER_CACHEDIR"
 ```
 
 ## Step 2 — Clone IsaacLab
@@ -172,78 +166,162 @@ git clone https://github.com/isaac-sim/IsaacLab.git "$ISAACLAB_DIR"
 Extract the base SIF into a writable sandbox directory:
 
 ```bash
-singularity build --sandbox "$SANDBOX_DIR" "$SIF_IMAGE"
+apptainer build --sandbox "$SANDBOX_DIR" "$SIF_IMAGE"
 ```
 
 This may take several minutes depending on image size.
 
 ## Step 4 — Install Packages into the Sandbox
 
-Run the project install script inside the writable sandbox.  This replicates the
-`singularity exec --writable` block from `install.slurm`:
+With `--writable`, Apptainer cannot auto-create bind mount destinations. Create
+them inside the sandbox first:
 
 ```bash
-singularity exec --writable --no-home \
+mkdir -p "$SANDBOX_DIR/workspace/isaaclab" "$SANDBOX_DIR/workspace/run"
+```
+
+If you need to patch `external/dino/requirements.txt` (removing pinned
+`xformers==0.0.18` and forcing `torch>=2.0`), do so before running the block above,
+or include the `sed` commands from `install.slurm` inside the heredoc.
+
+```bash
+apptainer exec --writable --no-home \
   -B "$SCRATCH_TMP":/tmp:rw \
   -B "$ISAACLAB_DIR":/workspace/isaaclab:rw \
   -B "$PROJECT_ROOT":/workspace/run:rw \
   "$SANDBOX_DIR" bash -c '
 set -euo pipefail
-export PYTHON_EXE="/isaac-sim/kit/python/bin/python3"
-export PROJECT_ROOT="/workspace/run"
+PYTHON_EXE="/isaac-sim/kit/python/bin/python3"
+
+export TMPDIR=/tmp
+export UV_CACHE_DIR=/tmp/uv-cache
 export UV_LINK_MODE=copy
+export PATH="/isaac-sim/kit/python/bin:$PATH"
 
 $PYTHON_EXE -m pip install --no-cache-dir uv
 
-# Install the project and Isaac Lab sub-packages
-$PYTHON_EXE -m uv pip install --python "$PYTHON_EXE" --no-cache-dir -e "$PROJECT_ROOT"
+$PYTHON_EXE -m uv pip install --python "$PYTHON_EXE" --no-cache-dir -e "/workspace/run[dev]" || \
+  $PYTHON_EXE -m uv pip install --python "$PYTHON_EXE" --no-cache-dir -e "/workspace/run" || \
+  # Fallback: if uv-based install fails, try plain pip editable install
+  $PYTHON_EXE -m pip install --no-cache-dir -e "/workspace/run" || \
+  echo "Warning: failed to install /workspace/run; continuing"
 
 for pkg in isaaclab isaaclab_assets isaaclab_tasks isaaclab_rl; do
   target="/workspace/isaaclab/source/${pkg}"
-  [ -d "$target" ] && $PYTHON_EXE -m uv pip install --python "$PYTHON_EXE" \
-    --no-cache-dir -e "$target" || true
+  [ -d "$target" ] && $PYTHON_EXE -m uv pip install --python "$PYTHON_EXE" --no-cache-dir -e "$target" || true
 done
 
-bash "$PROJECT_ROOT/scripts/install_externals.sh"
+for d in /workspace/run/external/*; do
+  if [ -d "$d" ]; then
+    if [ -f "$d/pyproject.toml" ] || [ -f "$d/setup.py" ] || [ -f "$d/setup.cfg" ]; then
+      echo "Installing external: $d"
+      (cd "$d" && $PYTHON_EXE -m pip install --no-cache-dir -e .) || echo "Install failed for $d (continuing)"
+    else
+      echo "Skipping (not a Python package): $d"
+    fi
+  fi
+done
 '
 ```
 
-:::{note}
-If you need to patch `external/dino/requirements.txt` (removing pinned
-`xformers==0.0.18` and forcing `torch>=2.0`), do so before running the block above,
-or include the `sed` commands from `install.slurm` inside the heredoc.
-:::
+## Running Tests Inside the Sandbox (bind caches)
 
-## Step 5 — Convert Sandbox to SIF (with fakeroot)
+When running `pytest` or other workflows that write large caches or temporary files,
+the sandbox overlay can be very small. Bind a host scratch directory into the
+container for `/tmp` and redirect caches so tests don't run out of space.
 
-Unlike the HPC environment, fakeroot should work on a properly configured local machine:
+Example (run from your host shell):
+
+```bash
+apptainer exec --nv --containall \
+  -B "$SCRATCH_TMP":/tmp:rw \
+  -B "$CACHE_ROOT/kit-data":/isaac-sim/kit/data:rw \
+  -B "$CACHE_ROOT/cache/kit":/isaac-sim/kit/cache:rw \
+  -B "$CACHE_ROOT/cache/pip":/root/.cache/pip:rw \
+  -B "$ISAACLAB_DIR":/workspace/isaaclab:ro \
+  -B "$PROJECT_ROOT":/workspace/run:rw \
+  "$SANDBOX_DIR" bash -c '
+export TMPDIR=/tmp
+export XDG_CACHE_HOME=/tmp/.cache
+export TORCH_HOME=/tmp/.cache/torch
+export HF_HOME=/tmp/.cache/huggingface
+mkdir -p /tmp/.cache /tmp/.cache/torch
+cd /workspace/run
+/isaac-sim/kit/python/bin/python3 -m pytest -q -vv
+'
+```
+
+This pattern mirrors what the SLURM job scripts do on HPC: bind a node-local
+scratch and point `TMPDIR`, `XDG_CACHE_HOME`, and `TORCH_HOME` there so packages
+and models can be downloaded into fast, large local storage instead of the
+container overlay.
+
+```
+
+## Step 5 — Convert Sandbox to SIF
 
 ```bash
 export TMPDIR="$SCRATCH_TMP"
-export SINGULARITY_TMPDIR="$SCRATCH_TMP"
+export APPTAINER_TMPDIR="$SCRATCH_TMP"
 
-singularity build --fakeroot "$BUILT_SIF" "$SANDBOX_DIR"
+apptainer build "$BUILT_SIF" "$SANDBOX_DIR"
 ```
-
-If `--fakeroot` fails, verify your subuid/subgid mappings:
-
-```bash
-grep "$(whoami)" /etc/subuid /etc/subgid
-```
-
-Each file should contain a line like `<username>:100000:65536`.
 
 ## Step 6 — Verify the Image
 
+Set up node-local cache directories (mirrors what the SLURM scripts do on the cluster):
+
 ```bash
-singularity exec --nv --no-home \
+USER_HOME="/root"
+CACHE_ROOT="$SCRATCH_TMP/docker-isaac-sim"
+mkdir -p \
+  "$CACHE_ROOT/kit-data" \
+  "$CACHE_ROOT/cache/kit" \
+  "$CACHE_ROOT/cache/ov" \
+  "$CACHE_ROOT/cache/pip" \
+  "$CACHE_ROOT/cache/glcache" \
+  "$CACHE_ROOT/cache/computecache" \
+  "$CACHE_ROOT/logs" \
+  "$CACHE_ROOT/data"
+```
+
+Import Test
+
+```bash
+apptainer exec --nv --containall \
+  -B "$CACHE_ROOT/kit-data":/isaac-sim/kit/data:rw \
+  -B "$CACHE_ROOT/cache/kit":/isaac-sim/kit/cache:rw \
+  -B "$CACHE_ROOT/cache/ov":${USER_HOME}/.cache/ov:rw \
+  -B "$CACHE_ROOT/cache/pip":${USER_HOME}/.cache/pip:rw \
+  -B "$CACHE_ROOT/cache/glcache":${USER_HOME}/.cache/nvidia/GLCache:rw \
+  -B "$CACHE_ROOT/cache/computecache":${USER_HOME}/.nv/ComputeCache:rw \
+  -B "$CACHE_ROOT/logs":${USER_HOME}/.nvidia-omniverse/logs:rw \
+  -B "$CACHE_ROOT/data":${USER_HOME}/.local/share/ov/data:rw \
   -B "$ISAACLAB_DIR":/workspace/isaaclab:rw \
   -B "$PROJECT_ROOT":/workspace/run:rw \
   "$BUILT_SIF" /isaac-sim/kit/python/bin/python3 -c \
   "import torch, isaaclab; print('[verify] torch', torch.__version__, '| isaaclab', isaaclab.__file__)"
 ```
+`--containall` blocks all automatic mounts (home dir, CWD, default bind paths), making this test representative of the HPC SLURM environment. Every path the container needs must be explicitly bound.
 
 A successful run prints something like:
+
+Running w/ WebRTC
+
+```bash
+apptainer exec --nv --containall \
+  -B "$CACHE_ROOT/kit-data":/isaac-sim/kit/data:rw \
+  -B "$CACHE_ROOT/cache/kit":/isaac-sim/kit/cache:rw \
+  -B "$CACHE_ROOT/cache/ov":${USER_HOME}/.cache/ov:rw \
+  -B "$CACHE_ROOT/cache/pip":${USER_HOME}/.cache/pip:rw \
+  -B "$CACHE_ROOT/cache/glcache":${USER_HOME}/.cache/nvidia/GLCache:rw \
+  -B "$CACHE_ROOT/cache/computecache":${USER_HOME}/.nv/ComputeCache:rw \
+  -B "$CACHE_ROOT/logs":${USER_HOME}/.nvidia-omniverse/logs:rw \
+  -B "$CACHE_ROOT/data":${USER_HOME}/.local/share/ov/data:rw \
+  "$BUILT_SIF" /isaac-sim/isaac-sim.streaming.sh --allow-root
+```
+
+Download the WebRTC client from [here](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/download.html). 
 
 ```
 [verify] torch 2.x.x+cu12x | isaaclab /workspace/isaaclab/source/isaaclab/isaaclab/__init__.py
@@ -257,21 +335,16 @@ Once the SIF is verified, remove the sandbox to reclaim inodes and disk space:
 rm -rf "$SANDBOX_DIR"
 ```
 
-## Transferring the SIF to HPC
-
-After building locally you can transfer the SIF to HPC scratch with `rsync`:
-
-```bash
-rsync -aP "$BUILT_SIF" <netid>@greene.hpc.nyu.edu:/scratch/<netid>/isaac-sim_ds3001.sif
-```
-
-The SLURM run scripts expect the image at `/scratch/$USER/isaac-sim_ds3001.sif`.
-
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `permission denied` on `/isaac-sim/...` inside container | `--containall` flag active | Use `--no-home` instead |
-| `fakeroot: no valid mapping entry` | Missing subuid/subgid | Add entries to `/etc/subuid` and `/etc/subgid` and run `singularity config fakeroot --add <user>` |
-| Build fails with `/tmp` full | Node-local `/tmp` too small | Point `TMPDIR` and `SINGULARITY_TMPDIR` to a larger scratch directory |
+| `ERROR: Failed to create container process: Operation not permitted` | Apptainer built without `--with-suid`; user-namespace extraction blocked by kernel | Rebuild Apptainer with `./mconfig --with-suid && make -C builddir && sudo make -C builddir install` |
+| `ERROR: Failed to create mount namespace: mount namespace requires privileges` | `--fakeroot` flag used on a suid-install; the two privilege modes conflict | Remove `--fakeroot` — with `starter-suid` installed, run `apptainer build "$BUILT_SIF" "$SANDBOX_DIR"` with no extra flags |
+| `WARNING: SINGULARITY_CACHEDIR and APPTAINER_CACHEDIR have different values` | Old `SINGULARITY_CACHEDIR` env var still set from a previous shell session | Add `unset SINGULARITY_CACHEDIR` before `apptainer` commands, or remove it from `~/.bashrc` / `~/.zshrc` |
+| `destination /workspace/... doesn't exist in container` | `--writable` can't auto-create bind mount targets | Run `mkdir -p "$SANDBOX_DIR/workspace/isaaclab" "$SANDBOX_DIR/workspace/run"` before `apptainer exec` |
+| `permission denied` on `/isaac-sim/...` inside container | `--containall` not set, default bind points interfering | Use `--containall` and explicitly bind every path the container needs via `-B` |
+| `fakeroot: no valid mapping entry` | Missing subuid/subgid | Add entries to `/etc/subuid` and `/etc/subgid` (see Configure Fakeroot section above) |
+| `No space left on device` during `pull` or `build` | `/tmp` is a size-limited tmpfs (RAM-backed), not your disk | Set `TMPDIR`, `APPTAINER_TMPDIR`, and `APPTAINER_CACHEDIR` to a path on real disk (e.g. `$HOME/tmp`) |
+| Build fails with `/tmp` full | Node-local `/tmp` too small | Point `TMPDIR` and `APPTAINER_TMPDIR` to a larger scratch directory |
 | SIF skipped on re-run | Old SIF still present | Delete `/scratch/$USER/isaac-sim_ds3001.sif` before resubmitting |

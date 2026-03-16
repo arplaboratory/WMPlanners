@@ -125,9 +125,6 @@ export PATH="${SCRIPTDIR}:/usr/local/bin:${PATH}"
 export UV_PYTHON="$PYTHON_EXE"
 echo "[CONTAINER] uv: $(command -v uv 2>/dev/null || echo 'not found on PATH')"
 
-# -----------------------------------------------
-# Patch DINO requirements (idempotent sed)
-# -----------------------------------------------
 if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
   echo "[CONTAINER] Patching DINO requirements..."
   sed -i '/xformers==0.0.18/d'                        "$PROJECT_ROOT/external/dino/requirements.txt"
@@ -137,22 +134,12 @@ if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
 fi
 
 # -----------------------------------------------
-# Install main project in editable mode
-# scripts/python_setup.sh is not used here because it creates a standalone
-# venv with uv venv --python 3.11, which Isaac Sim's runtime won't see.
-# Instead we install directly against Isaac Sim's Python via uv.
-# install_externals.sh IS reused below — it just calls uv pip install -e .
-# and respects UV_PYTHON set above.
-# -----------------------------------------------
 echo "[CONTAINER] Installing cjepa project (editable, with dev extras)..."
 "$PYTHON_EXE" -m uv pip install --python "$PYTHON_EXE" --no-cache-dir \
   -e "${PROJECT_ROOT}[dev]" || \
 "$PYTHON_EXE" -m uv pip install --python "$PYTHON_EXE" --no-cache-dir \
   -e "${PROJECT_ROOT}"
 
-# -----------------------------------------------
-# Install IsaacLab sub-packages (editable)
-# -----------------------------------------------
 for pkg in isaaclab isaaclab_assets isaaclab_tasks isaaclab_rl; do
   target="/workspace/isaaclab/source/${pkg}"
   if [ -d "$target" ] && ( [ -f "$target/pyproject.toml" ] || [ -f "$target/setup.py" ] ); then
@@ -164,16 +151,9 @@ for pkg in isaaclab isaaclab_assets isaaclab_tasks isaaclab_rl; do
   fi
 done
 
-# -----------------------------------------------
-# Install external packages (dino, vjepa2) via install_externals.sh
-# UV_PYTHON is already exported so uv targets Isaac Sim's Python
-# -----------------------------------------------
 echo "[CONTAINER] Running install_externals.sh..."
 bash "$PROJECT_ROOT/scripts/install_externals.sh"
 
-# -----------------------------------------------
-# Verify
-# -----------------------------------------------
 echo "[CONTAINER] Verifying..."
 "$PYTHON_EXE" - <<'PY'
 import sys

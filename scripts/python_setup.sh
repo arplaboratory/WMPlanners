@@ -28,31 +28,39 @@ while :; do
     esac
 done
 
-echo "========================================="
 echo "Setting up environment in $VENV_PATH..."
-echo "========================================="
 
-# Check if uv is installed
-if ! command -v uv >/dev/null 2>&1; then
-    echo "Error: 'uv' is not installed. Please install it first: https://github.com/astral-sh/uv"
-    exit 1
+if command -v uv >/dev/null 2>&1; then
+    CREATE_VENV_WITH_UV=true
+else
+    CREATE_VENV_WITH_UV=false
 fi
 
-# 1. Create virtual environment
 if [ ! -d "$VENV_PATH" ]; then
-    echo "Creating virtual environment with Python 3.11..."
-    uv venv "$VENV_PATH" --python 3.11 || exit 1
+    echo "Creating virtual environment"
+    PYTHON_EXEC="$(command -v python3.11 || command -v python3)"
+    if [ -z "$PYTHON_EXEC" ]; then
+        echo "Error: no suitable python binary found (python3.11 or python3). Install one or install 'uv' to control the venv creation."
+        exit 1
+    fi
+    if [ "$CREATE_VENV_WITH_UV" = true ]; then
+        uv venv "$VENV_PATH" --python "$PYTHON_EXEC" || exit 1
+    else
+        "$PYTHON_EXEC" -m venv "$VENV_PATH" || exit 1
+    fi
 fi
 
 # Activate environment
 . "$VENV_PATH/bin/activate"
 
-# 2. Install main project and dependencies
-echo "Installing project dependencies (including dev)..."
+echo "Upgrading pip/setuptools/wheel and installing uv into the venv"
+python -m pip install --upgrade pip setuptools wheel || exit 1
+python -m pip install --upgrade uv || exit 1
+
+echo "Installing project dependencies"
 cd "$PROJECT_ROOT" || exit 1
 uv pip install -e ".[dev]" || exit 1
 
-# 3. Install external packages (DINOv2, V-JEPA2)
 if [ "$INSTALL_EXTERNALS" = true ]; then
     # Patch for Python 3.11 and dependency compatibility:
     # - xformers==0.0.18 is not supported on 3.11.
@@ -68,10 +76,11 @@ if [ "$INSTALL_EXTERNALS" = true ]; then
         sed -i '/cuml-cu11/d' "$PROJECT_ROOT/external/dino/requirements.txt"
     fi
 
-    bash "$PROJECT_ROOT/scripts/install_externals.sh" || exit 1
+    export PYTHON_CMD="$VENV_PATH/bin/python3"
+    export PATH="$VENV_PATH/bin:$PATH"
+    PYTHON_CMD="$PYTHON_CMD" PATH="$PATH" bash "$PROJECT_ROOT/scripts/install_externals.sh" || exit 1
 fi
 
-# 4. Initialize .env file
 echo "Initializing .env file..."
 DOTENV="$PROJECT_ROOT/.env"
 
@@ -83,8 +92,6 @@ else
     echo ".env file already exists"
 fi
 
-echo "========================================="
 echo "Setup complete!"
 echo "To activate the environment: source $VENV_PATH/bin/activate"
 echo "To source environment variables: set -a; source .env; set +a"
-echo "========================================="
