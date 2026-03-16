@@ -1,6 +1,5 @@
-### Deprecated since we're not caching venv in /scratch
-
 #!/bin/bash
+# Run scripts use: --overlay /scratch/$USER/my_env.ext3:ro
 
 #SBATCH --requeue
 #SBATCH --nodes=1
@@ -24,11 +23,10 @@ if [ -d IsaacLab/.git ]; then
   cd IsaacLab
   if ! git diff --quiet || ! git diff --cached --quiet; then
     STASH_FILE="../isaaclab_stash_$(date +%Y%m%d_%H%M%S).patch"
-    echo "[NODE] Local changes detected, stashing and saving to $STASH_FILE"
+    echo "[NODE] Local changes detected, stashing to $STASH_FILE"
     git stash push -u -m "Auto-stash before update on $(date)"
     git stash show -p > "$STASH_FILE" || echo "[WARN] No diff to save in stash."
   fi
-  # Fetch and fast-forward only
   git fetch origin
   git merge --ff-only origin/$(git rev-parse --abbrev-ref HEAD)
   cd ..
@@ -37,27 +35,17 @@ else
   git clone https://github.com/isaac-sim/IsaacLab.git
 fi
 
-# -------------------------------
-# Project workspace bootstrap
-# -------------------------------
-PROJECT_NAME="ds_ga_3001"
+# -----------------------------------------------
+# Paths
+# -----------------------------------------------
+SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"      # base image, never modified
+OVERLAY_FILE="/scratch/$USER/my_env.ext3"             # persistent writable layer
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
-SIF_IMAGE="/scratch/$USER/isaac-sim_ds3001.sif"
-
-mkdir -p "${HOME}/.config"
-
-# -------------------------------
-# Set cluster paths based on submission context
-# -------------------------------
 RUN_DIR="${SLURM_SUBMIT_DIR}"
-PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
-PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
 
-# Isaac Sim container paths
 DOCKER_ISAACSIM_ROOT_PATH="/isaac-sim"
 DOCKER_USER_HOME="/root"
 
-# Node-local cache & execution
 CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
 mkdir -p \
   "${CACHE_ROOT}/cache/kit" \
@@ -71,84 +59,149 @@ mkdir -p \
   "${CACHE_ROOT}/documents" \
   "${CACHE_ROOT}/kit-data"
 
+PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
 mkdir -p "${PERSISTENT_LOGS_DIR}"
 touch "${PERSISTENT_LOGS_DIR}/.keep"
-
-# Python envs
-VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
-mkdir -p "${VENV_DIR}"
-
-BUILD_TMP="/scratch/$USER/pip_build_tmp"
-mkdir -p "$BUILD_TMP"
 
 SCRATCH_TMP="/scratch/$USER/tmp"
 mkdir -p "${SCRATCH_TMP}"
 export APPTAINER_TMPDIR="${SCRATCH_TMP}"
 export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
-export ISAAC_ARGS="$*"
+mkdir -p "${HOME}/.config"
 
-echo "[NODE] ISAAC_ARGS=${ISAAC_ARGS}"
+# -----------------------------------------------
+# Create overlay if it doesn't exist
+# -----------------------------------------------
+if [ ! -f "${OVERLAY_FILE}" ]; then
+  echo "[NODE] Creating overlay at ${OVERLAY_FILE} ..."
+  rsync -aP /share/apps/overlay-fs-ext3/overlay-50G-10M.ext3.gz /scratch/$USER/
+  gunzip /scratch/$USER/overlay-50G-10M.ext3.gz
+  mv /scratch/$USER/overlay-50G-10M.ext3 "${OVERLAY_FILE}"
+  echo "[NODE] Overlay created."
+else
+  echo "[NODE] Overlay already exists at ${OVERLAY_FILE}"
+fi
 
-# Execute with GPU and required binds
-CMD="--nv --containall \
-  -B ${VENV_DIR}:${VENV_DIR}:rw \
-  -B ${BUILD_TMP}:/tmp:rw \
-  -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
-  -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
-  -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
-  -B ${CACHE_ROOT}/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \
-  -B ${CACHE_ROOT}/cache/glcache:${DOCKER_USER_HOME}/.cache/nvidia/GLCache:rw \
-  -B ${CACHE_ROOT}/cache/computecache:${DOCKER_USER_HOME}/.nv/ComputeCache:rw \
-  -B ${CACHE_ROOT}/logs:${DOCKER_USER_HOME}/.nvidia-omniverse/logs:rw \
-  -B ${CACHE_ROOT}/data:${DOCKER_USER_HOME}/.local/share/ov/data:rw \
-  -B ${CACHE_ROOT}/documents:${DOCKER_USER_HOME}/Documents:rw \
-  -B ${CACHE_ROOT}/cache/wandb:${DOCKER_USER_HOME}/.cache/wandb:rw \
-  -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
-  -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
-  -B ${PERSISTENT_LOGS_DIR}:/workspace/isaaclab/logs:rw \
-  -B ${RUN_DIR}:/workspace/run:rw \
-  "
+echo "[NODE] Installing into overlay: ${OVERLAY_FILE}"
 
-echo "[NODE] CMD to run: $CMD"
-
-singularity exec \
-  $CMD \
-  --env ISAAC_ARGS="$ISAAC_ARGS" \
-  --env VENV_DIR="$VENV_DIR" \
-  --env TMPDIR="/tmp" \
-  "${SIF_IMAGE}" bash -lc '
+# -----------------------------------------------
+# Run install inside container
+#   --no-home     : avoids --containall UID-mapping bug that breaks /isaac-sim access
+#   --overlay :rw : writes packages into ext3 layer; persists after container exits
+# -----------------------------------------------
+singularity exec --nv --no-home \
+  --overlay "${OVERLAY_FILE}:rw" \
+  -B "${SCRATCH_TMP}":/tmp:rw \
+  -B "${CACHE_ROOT}/kit-data":"${DOCKER_ISAACSIM_ROOT_PATH}"/kit/data:rw \
+  -B "${CACHE_ROOT}/cache/kit":"${DOCKER_ISAACSIM_ROOT_PATH}"/kit/cache:rw \
+  -B "${CACHE_ROOT}/cache/ov":"${DOCKER_USER_HOME}"/.cache/ov:rw \
+  -B "${CACHE_ROOT}/cache/pip":"${DOCKER_USER_HOME}"/.cache/pip:rw \
+  -B "${CACHE_ROOT}/cache/glcache":"${DOCKER_USER_HOME}"/.cache/nvidia/GLCache:rw \
+  -B "${CACHE_ROOT}/cache/computecache":"${DOCKER_USER_HOME}"/.nv/ComputeCache:rw \
+  -B "${CACHE_ROOT}/logs":"${DOCKER_USER_HOME}"/.nvidia-omniverse/logs:rw \
+  -B "${CACHE_ROOT}/data":"${DOCKER_USER_HOME}"/.local/share/ov/data:rw \
+  -B "${CACHE_ROOT}/documents":"${DOCKER_USER_HOME}"/Documents:rw \
+  -B "${CACHE_ROOT}/cache/wandb":"${DOCKER_USER_HOME}"/.cache/wandb:rw \
+  -B "${HOME}/.config":"${DOCKER_USER_HOME}"/.config:rw \
+  -B "${ISAACLAB_DIR}":/workspace/isaaclab:rw \
+  -B "${PERSISTENT_LOGS_DIR}":/workspace/isaaclab/logs:rw \
+  -B "${RUN_DIR}":/workspace/run:rw \
+  "${SIF_IMAGE}" bash -s <<'SCRIPT'
 set -euo pipefail
 
-if [ ! -d "${VENV_DIR}/bin" ]; then
-    echo "[APPTAINER] Creating venv with Python"
-    /isaac-sim/python.sh -m venv ${VENV_DIR} --system-site-packages
+PYTHON_EXE="/isaac-sim/kit/python/bin/python3"
+PROJECT_ROOT="/workspace/run"
+export UV_LINK_MODE=copy   # avoid hardlink-across-filesystem errors
+
+# -----------------------------------------------
+# Install uv into the overlay
+# -----------------------------------------------
+echo "[CONTAINER] Installing uv..."
+"$PYTHON_EXE" -m pip install --no-cache-dir uv
+
+# Add uv's script dir to PATH so install_externals.sh can find it
+SCRIPTDIR="$("$PYTHON_EXE" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
+export PATH="${SCRIPTDIR}:/usr/local/bin:${PATH}"
+export UV_PYTHON="$PYTHON_EXE"
+echo "[CONTAINER] uv: $(command -v uv 2>/dev/null || echo 'not found on PATH')"
+
+# -----------------------------------------------
+# Patch DINO requirements (idempotent sed)
+# -----------------------------------------------
+if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
+  echo "[CONTAINER] Patching DINO requirements..."
+  sed -i '/xformers==0.0.18/d'                        "$PROJECT_ROOT/external/dino/requirements.txt"
+  sed -i 's/torch==2.0.0/torch>=2.0/g'               "$PROJECT_ROOT/external/dino/requirements.txt"
+  sed -i 's/torchvision==0.15.0/torchvision>=0.15/g' "$PROJECT_ROOT/external/dino/requirements.txt"
+  sed -i '/--extra-index-url/d'                       "$PROJECT_ROOT/external/dino/requirements.txt"
 fi
-source "${VENV_DIR}/bin/activate"
 
-cd /workspace/isaaclab
-export ISAACLAB_PATH=/workspace/isaaclab
+# -----------------------------------------------
+# Install main project in editable mode
+# scripts/python_setup.sh is not used here because it creates a standalone
+# venv with uv venv --python 3.11, which Isaac Sim's runtime won't see.
+# Instead we install directly against Isaac Sim's Python via uv.
+# install_externals.sh IS reused below — it just calls uv pip install -e .
+# and respects UV_PYTHON set above.
+# -----------------------------------------------
+echo "[CONTAINER] Installing cjepa project (editable, with dev extras)..."
+"$PYTHON_EXE" -m uv pip install --python "$PYTHON_EXE" --no-cache-dir \
+  -e "${PROJECT_ROOT}[dev]" || \
+"$PYTHON_EXE" -m uv pip install --python "$PYTHON_EXE" --no-cache-dir \
+  -e "${PROJECT_ROOT}"
 
-# Ensure the local package is installed in the container Python
+# -----------------------------------------------
+# Install IsaacLab sub-packages (editable)
+# -----------------------------------------------
+for pkg in isaaclab isaaclab_assets isaaclab_tasks isaaclab_rl; do
+  target="/workspace/isaaclab/source/${pkg}"
+  if [ -d "$target" ] && ( [ -f "$target/pyproject.toml" ] || [ -f "$target/setup.py" ] ); then
+    echo "[CONTAINER] Installing $pkg..."
+    "$PYTHON_EXE" -m uv pip install --python "$PYTHON_EXE" --no-cache-dir -e "$target" || \
+      echo "[WARN] Install of $pkg failed, continuing."
+  else
+    echo "[CONTAINER] Skipping $pkg — not found or not a Python project"
+  fi
+done
 
-echo "[APPTAINER] Disk space inside container:"
-df -h /tmp
-df -h ${VENV_DIR}
+# -----------------------------------------------
+# Install external packages (dino, vjepa2) via install_externals.sh
+# UV_PYTHON is already exported so uv targets Isaac Sim's Python
+# -----------------------------------------------
+echo "[CONTAINER] Running install_externals.sh..."
+bash "$PROJECT_ROOT/scripts/install_externals.sh"
 
-pip install --upgrade pip
-pip install -e /workspace/run[dev]
+# -----------------------------------------------
+# Verify
+# -----------------------------------------------
+echo "[CONTAINER] Verifying..."
+"$PYTHON_EXE" - <<'PY'
+import sys
+print("python", sys.version.split()[0])
+try:
+    import torch
+    print("torch", torch.__version__, "| CUDA:", torch.cuda.is_available())
+except Exception as e:
+    print("[WARN] torch:", e)
+try:
+    import numpy
+    print("numpy", numpy.__version__)
+except Exception as e:
+    print("[WARN] numpy:", e)
+try:
+    import isaaclab
+    print("isaaclab ->", isaaclab.__file__)
+except Exception as e:
+    print("[WARN] isaaclab:", e)
+try:
+    import cjepa
+    print("cjepa ->", cjepa.__file__)
+except Exception as e:
+    print("[WARN] cjepa:", e)
+PY
 
-echo "Using: $(which python)"
-echo "[APPTAINER] ISAAC_ARGS=${ISAAC_ARGS}"
+echo "[CONTAINER] Install complete."
+SCRIPT
 
-# -------------------------------------------------------------
-# Post-Install Verification Tests
-# -------------------------------------------------------------
-echo "[APPTAINER] Verifying core packages..."
-python -c "import torch; print(\"PyTorch \" + torch.__version__ + \" | CUDA Available: \" + str(torch.cuda.is_available()))"
-python -c "import numpy; print(\"NumPy \" + numpy.__version__)"
-
-# echo "[APPTAINER] Running PyTest suite..."
-# python -m pytest /workspace/run/tests/ -v
-
-echo "[APPTAINER] Environment successfully built and verified!"
-'
+echo "[NODE] Done."
+echo "[NODE] Add to your run scripts: --overlay ${OVERLAY_FILE}:ro"
