@@ -18,6 +18,7 @@ notebooks/getting_started
 world_model_training
 rl_training
 hpc_guide
+building_sif
 pipeline_client
 logging
 data_pipeline
