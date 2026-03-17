@@ -10,3 +10,5 @@ source .venv/bin/activate
 ```
 
 This will handle `uv` installation, submodule initialization, and dependency resolution automatically.
+
+For building a SIF, see the [Building SIF guide](building_sif.md).

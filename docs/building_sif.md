@@ -124,12 +124,6 @@ mkdir -p "$TMPDIR" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 apptainer pull isaac-sim_5.1.0.sif docker://nvcr.io/nvidia/isaac-sim:5.1.0
 ```
 
-You can confirm `/tmp` is tmpfs and see its current size limit with:
-
-```bash
-df -h /tmp
-```
-
 This produces `isaac-sim_5.1.0.sif` in the current directory.
 Move it to `$HOME` or whichever path you set for `SIF_IMAGE` in Step 1.
 
@@ -142,17 +136,13 @@ export SIF_IMAGE="$HOME/isaac-sim_5.1.0.sif"
 export BUILT_SIF="$HOME/isaac-sim_ds3001.sif"
 export SANDBOX_DIR="$HOME/isaac_container"
 export ISAACLAB_DIR="$HOME/IsaacLab"
-```
-```bash
-export PROJECT_ROOT="/path/to/ds_ga_3001"   # adjust to local clone
-```
-```bash
 export SCRATCH_TMP="$HOME/tmp"
 export TMPDIR="$SCRATCH_TMP"
 export APPTAINER_TMPDIR="$SCRATCH_TMP"
 export APPTAINER_CACHEDIR="$HOME/apptainer-cache"
 unset SINGULARITY_CACHEDIR
 mkdir -p "$SCRATCH_TMP" "$APPTAINER_CACHEDIR"
+export PROJECT_ROOT="/path/to/ds_ga_3001"   # adjust to local clone
 ```
 
 ## Step 2 — Clone IsaacLab
@@ -177,12 +167,57 @@ With `--writable`, Apptainer cannot auto-create bind mount destinations. Create
 them inside the sandbox first:
 
 ```bash
-mkdir -p "$SANDBOX_DIR/workspace/isaaclab" "$SANDBOX_DIR/workspace/run"
+mkdir -p "$SANDBOX_DIR/workspace/isaaclab" \
+         "$SANDBOX_DIR/workspace/run" \
+         "$SANDBOX_DIR/opt/venvs"
 ```
 
-If you need to patch `external/dino/requirements.txt` (removing pinned
-`xformers==0.0.18` and forcing `torch>=2.0`), do so before running the block above,
-or include the `sed` commands from `install.slurm` inside the heredoc.
+Patching external submodules
+
+```bash
+sed -i '/xformers==0.0.18/d' "$PROJECT_ROOT/external/dino/requirements.txt"
+sed -i 's/torch==2.0.0/torch>=2.0/g' "$PROJECT_ROOT/external/dino/requirements.txt"
+sed -i 's/torchvision==0.15.0/torchvision>=0.15/g' "$PROJECT_ROOT/external/dino/requirements.txt"
+sed -i '/--extra-index-url/d' "$PROJECT_ROOT/external/dino/requirements.txt"
+sed -i '/cuml-cu11/d' "$PROJECT_ROOT/external/dino/requirements.txt"
+```
+
+Install core packages into sandbox (kit Python, system-level)
+
+```bash
+apptainer exec --writable \
+  -B "$SCRATCH_TMP":/tmp:rw \
+  -B "$ISAACLAB_DIR":/workspace/isaaclab:rw \
+  -B "$PROJECT_ROOT":/workspace/run:rw \
+  "$SANDBOX_DIR" bash -c '
+set -euo pipefail
+PYKIT="/isaac-sim/kit/python/bin/python3"
+export TMPDIR=/tmp UV_CACHE_DIR=/tmp/uv-cache UV_LINK_MODE=copy
+export PATH="/isaac-sim/kit/python/bin:$PATH"
+
+$PYKIT -m pip install --no-cache-dir uv
+
+for pkg in isaaclab isaaclab_assets isaaclab_tasks isaaclab_rl; do
+  target="/workspace/isaaclab/source/${pkg}"
+  [ -d "$target" ] && $PYKIT -m uv pip install --python "$PYKIT" --no-cache-dir -e "$target" || true
+done
+'
+```
+
+Create venvs and install project + externals
+
+```bash
+chmod +x "$PROJECT_ROOT/scripts/create_venvs_in_sandbox.sh"
+
+"$PROJECT_ROOT/scripts/create_venvs_in_sandbox.sh" \
+  --sandbox "$SANDBOX_DIR" \
+  --project "$PROJECT_ROOT" \
+  --fakeroot \
+  --install-runtime \
+  --install-train
+  ```
+
+Deprecated: 
 
 ```bash
 apptainer exec --writable --no-home \
