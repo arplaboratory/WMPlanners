@@ -105,36 +105,42 @@ create_venv() {
 create_venv "$RUNTIME_NAME"
 create_venv "$TRAIN_NAME"
 
+# Ensure uv is available in the kit python (we will use the kit's uv to install into venvs)
+if ! "$PYKIT" -c "import importlib; importlib.import_module('uv')" >/dev/null 2>&1; then
+  echo "uv not found in kit python; installing uv into $PYKIT"
+  "$PYKIT" -m pip install --upgrade uv || {
+    echo "Failed to install uv into kit python; aborting" >&2
+    exit 1
+  }
+fi
+
 if [[ "${INSTALL_RUNTIME_PACKAGES:-false}" = "true" ]]; then
   echo "Installing runtime packages into /opt/venvs/$RUNTIME_NAME"
-  source "/opt/venvs/$RUNTIME_NAME/bin/activate"
-  python -m pip install --no-cache-dir cjepa || echo "cjepa install failed (continuing)"
-  deactivate
+  RUNTIME_PY="/opt/venvs/${RUNTIME_NAME}/bin/python"
+  echo "Installing cjepa into runtime venv via kit uv: $PYKIT"
+  "$PYKIT" -m uv pip install --python "$RUNTIME_PY" cjepa
 fi
 
 if [[ "${INSTALL_TRAIN_PACKAGES:-false}" = "true" ]]; then
   echo "Installing training packages into /opt/venvs/$TRAIN_NAME"
-  source "/opt/venvs/$TRAIN_NAME/bin/activate"
-  # pin numpy to 1.26 for Isaac Sim compatibility
-  python -m pip install --no-cache-dir "numpy~=1.26.0"
+  TRAIN_PY="/opt/venvs/${TRAIN_NAME}/bin/python"
+  echo "Installing numpy into train venv via kit uv: $PYKIT"
+  "$PYKIT" -m uv pip install --python "$TRAIN_PY" "numpy~=1.26.0"
   # if project was bound to /workspace/run, install it editable
   if [[ -d /workspace/run ]]; then
-    python -m pip install --no-cache-dir -e /workspace/run || echo "project install failed (continuing)"
+    echo "Installing project editable into train venv via kit uv"
+    "$PYKIT" -m uv pip install --python "$TRAIN_PY" -e /workspace/run
   fi
-    # Install common training externals if present (dino, vjepa2).
-    for ext in dino vjepa2; do
-      if [[ -d /workspace/run/external/$ext ]]; then
-        echo "Installing external $ext into train venv"
-        (cd /workspace/run/external/$ext && python -m pip install --no-cache-dir -e .) || {
-          echo "Install $ext failed; retrying with --no-deps"
-          (cd /workspace/run/external/$ext && python -m pip install --no-deps --no-cache-dir -e .) || echo "Install $ext failed (continuing)"
-        }
-      fi
-    done
+  # Install common training externals if present (dino, vjepa2).
+  for ext in dino vjepa2; do
+    if [[ -d /workspace/run/external/$ext ]]; then
+      echo "Installing external $ext into train venv"
+      (cd /workspace/run/external/$ext && "$PYKIT" -m uv pip install --python "$TRAIN_PY" -e .)
+    fi
+  done
 
-    # verify installed packages and report conflicts
-    python -m pip check || echo "pip check reported issues (see above)"
-  deactivate
+  # verify installed packages and report conflicts in the train venv
+  "$TRAIN_PY" -m pip check
 fi
 
 # create a small wrapper to start Isaac with the runtime venv prefixed
