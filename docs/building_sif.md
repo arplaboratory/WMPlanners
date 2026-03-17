@@ -108,50 +108,65 @@ Each file should contain a line like:
 
 ## Obtaining the Base SIF
 
-### Pull the image
-
 Apptainer stages the squashfs build in `$TMPDIR`, which defaults to `/tmp` — a
 **tmpfs** (RAM-backed) filesystem with a size limit typically equal to half your RAM.
 For the ~20 GB Isaac Sim image this will exhaust `/tmp` regardless of how much disk
 space you have.  Always redirect temp directories to real disk before pulling:
 
+## Housekeeping — set temp directories to real disk and create cache dirs:
+
+Open your terminal and save these to `.envs` or run them in your shell before building:
+
 ```bash
 export TMPDIR="$HOME/tmp"
-export APPTAINER_TMPDIR="$HOME/tmp"
+export SCRATCH_TMP=$TMPDIR
+export APPTAINER_TMPDIR=$TMPDIR
 export APPTAINER_CACHEDIR="$HOME/apptainer-cache"
-unset SINGULARITY_CACHEDIR
-mkdir -p "$TMPDIR" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
-apptainer pull isaac-sim_5.1.0.sif docker://nvcr.io/nvidia/isaac-sim:5.1.0
-```
-
-This produces `isaac-sim_5.1.0.sif` in the current directory.
-Move it to `$HOME` or whichever path you set for `SIF_IMAGE` in Step 1.
-
-## Step 1 — Set Local Variables
-
-Open a terminal and export paths that match your local layout:
-
-```bash
 export SIF_IMAGE="$HOME/isaac-sim_5.1.0.sif"
 export BUILT_SIF="$HOME/isaac-sim_ds3001.sif"
 export SANDBOX_DIR="$HOME/isaac_container"
 export ISAACLAB_DIR="$HOME/IsaacLab"
-export SCRATCH_TMP="$HOME/tmp"
 export TMPDIR="$SCRATCH_TMP"
-export APPTAINER_TMPDIR="$SCRATCH_TMP"
-export APPTAINER_CACHEDIR="$HOME/apptainer-cache"
-unset SINGULARITY_CACHEDIR
-mkdir -p "$SCRATCH_TMP" "$APPTAINER_CACHEDIR"
 export PROJECT_ROOT="/path/to/ds_ga_3001"   # adjust to local clone
+export USER_HOME="/root"
+export CACHE_ROOT="$SCRATCH_TMP/docker-isaac-sim"
+unset SINGULARITY_CACHEDIR
 ```
 
-## Step 2 — Clone IsaacLab
+Create your temp and cache directories.
+
+```bash
+mkdir -p \
+  "$TMPDIR" \
+  "$APPTAINER_TMPDIR" \
+  "$APPTAINER_CACHEDIR" \
+  "$SCRATCH_TMP" \
+  "$CACHE_ROOT/kit-data" \
+  "$CACHE_ROOT/cache/kit" \
+  "$CACHE_ROOT/cache/ov" \
+  "$CACHE_ROOT/cache/pip" \
+  "$CACHE_ROOT/cache/glcache" \
+  "$CACHE_ROOT/cache/computecache" \
+  "$CACHE_ROOT/logs" \
+  "$CACHE_ROOT/data"
+```
+
+### Pull the image
+
+```bash
+apptainer pull isaac-sim_5.1.0.sif docker://nvcr.io/nvidia/isaac-sim:5.1.0
+```
+
+This produces `isaac-sim_5.1.0.sif` in the current directory.
+Move it to `$HOME` or whichever path you set for `SIF_IMAGE`.
+
+## Clone IsaacLab
 
 ```bash
 git clone https://github.com/isaac-sim/IsaacLab.git "$ISAACLAB_DIR"
 ```
 
-## Step 3 — Build the Sandbox
+## Build the Sandbox
 
 Extract the base SIF into a writable sandbox directory:
 
@@ -161,7 +176,7 @@ apptainer build --sandbox "$SANDBOX_DIR" "$SIF_IMAGE"
 
 This may take several minutes depending on image size.
 
-## Step 4 — Install Packages into the Sandbox
+## Install Packages into the Sandbox
 
 With `--writable`, Apptainer cannot auto-create bind mount destinations. Create
 them inside the sandbox first:
@@ -207,56 +222,11 @@ done
 Create venvs and install project + externals
 
 ```bash
-chmod +x "$PROJECT_ROOT/scripts/create_venvs_in_sandbox.sh"
-
-"$PROJECT_ROOT/scripts/create_venvs_in_sandbox.sh" \
+  "$PROJECT_ROOT/scripts/create_venvs_in_sandbox.sh" \
   --sandbox "$SANDBOX_DIR" \
   --project "$PROJECT_ROOT" \
-  --fakeroot \
   --install-runtime \
   --install-train
-  ```
-
-Deprecated: 
-
-```bash
-apptainer exec --writable --no-home \
-  -B "$SCRATCH_TMP":/tmp:rw \
-  -B "$ISAACLAB_DIR":/workspace/isaaclab:rw \
-  -B "$PROJECT_ROOT":/workspace/run:rw \
-  "$SANDBOX_DIR" bash -c '
-set -euo pipefail
-PYTHON_EXE="/isaac-sim/kit/python/bin/python3"
-
-export TMPDIR=/tmp
-export UV_CACHE_DIR=/tmp/uv-cache
-export UV_LINK_MODE=copy
-export PATH="/isaac-sim/kit/python/bin:$PATH"
-
-$PYTHON_EXE -m pip install --no-cache-dir uv
-
-$PYTHON_EXE -m uv pip install --python "$PYTHON_EXE" --no-cache-dir -e "/workspace/run[dev]" || \
-  $PYTHON_EXE -m uv pip install --python "$PYTHON_EXE" --no-cache-dir -e "/workspace/run" || \
-  # Fallback: if uv-based install fails, try plain pip editable install
-  $PYTHON_EXE -m pip install --no-cache-dir -e "/workspace/run" || \
-  echo "Warning: failed to install /workspace/run; continuing"
-
-for pkg in isaaclab isaaclab_assets isaaclab_tasks isaaclab_rl; do
-  target="/workspace/isaaclab/source/${pkg}"
-  [ -d "$target" ] && $PYTHON_EXE -m uv pip install --python "$PYTHON_EXE" --no-cache-dir -e "$target" || true
-done
-
-for d in /workspace/run/external/*; do
-  if [ -d "$d" ]; then
-    if [ -f "$d/pyproject.toml" ] || [ -f "$d/setup.py" ] || [ -f "$d/setup.cfg" ]; then
-      echo "Installing external: $d"
-      (cd "$d" && $PYTHON_EXE -m pip install --no-cache-dir -e .) || echo "Install failed for $d (continuing)"
-    else
-      echo "Skipping (not a Python package): $d"
-    fi
-  fi
-done
-'
 ```
 
 ## Running Tests Inside the Sandbox (bind caches)
@@ -286,39 +256,13 @@ cd /workspace/run
 '
 ```
 
-This pattern mirrors what the SLURM job scripts do on HPC: bind a node-local
-scratch and point `TMPDIR`, `XDG_CACHE_HOME`, and `TORCH_HOME` there so packages
-and models can be downloaded into fast, large local storage instead of the
-container overlay.
-
-```
-
-## Step 5 — Convert Sandbox to SIF
+## Convert Sandbox to SIF
 
 ```bash
-export TMPDIR="$SCRATCH_TMP"
-export APPTAINER_TMPDIR="$SCRATCH_TMP"
-
 apptainer build "$BUILT_SIF" "$SANDBOX_DIR"
 ```
 
-## Step 6 — Verify the Image
-
-Set up node-local cache directories (mirrors what the SLURM scripts do on the cluster):
-
-```bash
-USER_HOME="/root"
-CACHE_ROOT="$SCRATCH_TMP/docker-isaac-sim"
-mkdir -p \
-  "$CACHE_ROOT/kit-data" \
-  "$CACHE_ROOT/cache/kit" \
-  "$CACHE_ROOT/cache/ov" \
-  "$CACHE_ROOT/cache/pip" \
-  "$CACHE_ROOT/cache/glcache" \
-  "$CACHE_ROOT/cache/computecache" \
-  "$CACHE_ROOT/logs" \
-  "$CACHE_ROOT/data"
-```
+## Verify the Image
 
 Import Test
 
@@ -362,24 +306,10 @@ Download the WebRTC client from [here](https://docs.isaacsim.omniverse.nvidia.co
 [verify] torch 2.x.x+cu12x | isaaclab /workspace/isaaclab/source/isaaclab/isaaclab/__init__.py
 ```
 
-## Step 7 — Clean Up the Sandbox
+## Clean Up the Sandbox
 
 Once the SIF is verified, remove the sandbox to reclaim inodes and disk space:
 
 ```bash
 rm -rf "$SANDBOX_DIR"
 ```
-
-## Troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `ERROR: Failed to create container process: Operation not permitted` | Apptainer built without `--with-suid`; user-namespace extraction blocked by kernel | Rebuild Apptainer with `./mconfig --with-suid && make -C builddir && sudo make -C builddir install` |
-| `ERROR: Failed to create mount namespace: mount namespace requires privileges` | `--fakeroot` flag used on a suid-install; the two privilege modes conflict | Remove `--fakeroot` — with `starter-suid` installed, run `apptainer build "$BUILT_SIF" "$SANDBOX_DIR"` with no extra flags |
-| `WARNING: SINGULARITY_CACHEDIR and APPTAINER_CACHEDIR have different values` | Old `SINGULARITY_CACHEDIR` env var still set from a previous shell session | Add `unset SINGULARITY_CACHEDIR` before `apptainer` commands, or remove it from `~/.bashrc` / `~/.zshrc` |
-| `destination /workspace/... doesn't exist in container` | `--writable` can't auto-create bind mount targets | Run `mkdir -p "$SANDBOX_DIR/workspace/isaaclab" "$SANDBOX_DIR/workspace/run"` before `apptainer exec` |
-| `permission denied` on `/isaac-sim/...` inside container | `--containall` not set, default bind points interfering | Use `--containall` and explicitly bind every path the container needs via `-B` |
-| `fakeroot: no valid mapping entry` | Missing subuid/subgid | Add entries to `/etc/subuid` and `/etc/subgid` (see Configure Fakeroot section above) |
-| `No space left on device` during `pull` or `build` | `/tmp` is a size-limited tmpfs (RAM-backed), not your disk | Set `TMPDIR`, `APPTAINER_TMPDIR`, and `APPTAINER_CACHEDIR` to a path on real disk (e.g. `$HOME/tmp`) |
-| Build fails with `/tmp` full | Node-local `/tmp` too small | Point `TMPDIR` and `APPTAINER_TMPDIR` to a larger scratch directory |
-| SIF skipped on re-run | Old SIF still present | Delete `/scratch/$USER/isaac-sim_ds3001.sif` before resubmitting |

@@ -77,6 +77,8 @@ fi
 echo "Creating venvs inside sandbox: $SANDBOX_DIR"
 echo "Kit python inside container: $KIT_PYTHON"
 
+export INSTALL_RUNTIME_PACKAGES INSTALL_TRAIN_PACKAGES RUNTIME_NAME TRAIN_NAME KIT_PYTHON
+
 apptainer exec "${APPTAINER_ARGS[@]}" "${BIND_PROJECT[@]}" "$SANDBOX_DIR" bash -s <<'INNER'
 set -euo pipefail
 PYKIT="${KIT_PYTHON:-/isaac-sim/kit/python/bin/python3}"
