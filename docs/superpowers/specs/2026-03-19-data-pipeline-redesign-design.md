@@ -21,10 +21,11 @@ The current data pipeline has two issues:
 ## Design Decisions
 
 - **Separate models per robot** — no cross-robot action space alignment. Each robot's config maps its native sensors/actions to the standard NPZ keys.
-- **Nearest-neighbor sync** — simple, sufficient given image framerate is the bottleneck.
+- **Nearest-neighbor sync** — simple, sufficient given image framerate is the bottleneck. Max sync gap tolerance configurable via `--max-sync-gap-ms` (default: 100ms); frames exceeding this are zero-filled.
 - **YAML config with CLI overrides** — reusable configs, one-off flexibility.
-- **Staged pipeline** — each step is independently debuggable and rerunnable.
+- **Staged pipeline** — each step is independently debuggable and rerunnable. Each stage always writes from scratch to `--out_dir` (must be empty or new).
 - **Existing `data_pipeline/` preserved** — serves a different purpose (HF dataset curation). No deletions.
+- **`preprocess_race16.py` preserved** — serves as a standalone shortcut for the HuggingFace-hosted race16 dataset (download + extract + NPZ in one step). The new pipeline is for local MCAP bags. Both produce the same NPZ format consumed by `train_world_model.py`.
 
 ## Architecture
 
@@ -54,6 +55,7 @@ eval_mpc.py          --> MPC evaluation in learned latent space
 Location: `configs/robots/{robot_name}.yaml`
 
 ```yaml
+version: 1
 name: race16
 
 topics:
@@ -71,9 +73,12 @@ sensors:
   odom_dim: 13
 
 action:
-  source: position_cmd             # which topic to use as the action signal
-  dim: 14
+  source: position_cmd             # which topic key to use as the action signal
+  dim: 14                          # columns after timestamp_ns in the source CSV
+  # CSV filename is derived from the topic key: position_cmd -> position_cmd.csv
 ```
+
+**Action source mapping:** `action.source` refers to a key in `topics`. The extractor writes a CSV named `{topic_key}.csv` for each topic. `build_episodes.py` loads `{action.source}.csv` as the action signal.
 
 Loaded by `scripts/world_model/robot_config.py`:
 - `load_robot_config(name_or_path, cli_overrides=None) -> dict`
@@ -154,7 +159,7 @@ python -m scripts.world_model.build_episodes \
 
 **Reads `manifest.json`** to discover bags and robot config. No need to re-specify `--robot`.
 
-**Handles missing sensors:** If a CSV (e.g., depth, IMU) is absent, fills with zeros and logs a warning.
+**Handles missing sensors:** If a CSV (e.g., depth, IMU) is absent, fills with zeros and logs a warning. For present CSVs, if the nearest-neighbor sync gap exceeds `--max-sync-gap-ms` (default: 100ms), that frame's sensor reading is zero-filled and a warning is logged.
 
 **NPZ episode format (unchanged from current):**
 ```
@@ -193,7 +198,7 @@ python -m scripts.world_model.select_episodes \
 | Component | Dims | Source | Default Weight |
 |-----------|------|--------|----------------|
 | Action statistics | 2 * D_act | mean + std of action over the episode | 0.6 |
-| Odom delta | 6 | body-frame displacement start-to-end: dx, dy, dz, roll, pitch, yaw | 0.2 |
+| Odom delta | 6 | body-frame displacement start-to-end: dx, dy, dz, ax, ay, az (axis-angle rotation, consistent with `odom_delta.py`) | 0.2 |
 | Visual summary | D_vis | depends on `--encoder` | 0.2 |
 
 **Visual encoder options (`--encoder`):**
@@ -202,7 +207,7 @@ python -m scripts.world_model.select_episodes \
 - `dinov2`: DINOv2 CLS token averaged over 4 evenly-spaced frames. 384-dim. Requires `external/dino`.
 - `vjepa2`: V-JEPA2 spatiotemporal embedding of the full clip. Richest but slowest. Requires `external/vjepa2`.
 
-When `--encoder none`, visual weight is redistributed to dynamics (action stats get 0.8, odom delta gets 0.2).
+When `--encoder none`, visual weight is redistributed proportionally to preserve the 3:1 action-to-odom ratio (action stats get 0.75, odom delta gets 0.25).
 
 **Selection algorithm:**
 1. Load all episodes, compute per-episode descriptors.
@@ -221,7 +226,9 @@ data/race16_selected/
   metadata.json           # inherited from source + selection params
 ```
 
-### 5. Shared Utility: `robot_config.py`
+### 5. Shared Utilities
+
+#### `robot_config.py`
 
 Location: `scripts/world_model/robot_config.py`
 
@@ -241,6 +248,24 @@ def apply_overrides(config: dict, overrides: dict) -> dict:
 
 Used by `extract_dataset.py` and `build_episodes.py`. The `select_episodes.py` reads metadata.json which already contains the resolved config.
 
+#### `sync_utils.py`
+
+Location: `scripts/world_model/sync_utils.py`
+
+Shared time-synchronization logic, factored out of `preprocess_race16.py` and `build_episodes.py`:
+
+```python
+def nearest_merge(
+    target_ts: np.ndarray,
+    src_df: pd.DataFrame,
+    max_gap_ns: int | None = None,
+) -> np.ndarray:
+    """Nearest-neighbor merge with optional max-gap zero-fill."""
+    ...
+```
+
+Both `preprocess_race16.py` and `build_episodes.py` import from here instead of duplicating the function.
+
 ## Files Changed
 
 | File | Change |
@@ -255,6 +280,7 @@ Used by `extract_dataset.py` and `build_episodes.py`. The `select_episodes.py` r
 | `configs/robots/race16.yaml` | Race16 drone topic/sensor config |
 | `scripts/world_model/select_episodes.py` | Dynamics-weighted FPS episode selection |
 | `scripts/world_model/robot_config.py` | Shared YAML config loader with CLI override merging |
+| `scripts/world_model/sync_utils.py` | Shared `nearest_merge` with max-gap tolerance |
 
 ## Unchanged Files
 
@@ -264,3 +290,4 @@ Used by `extract_dataset.py` and `build_episodes.py`. The `select_episodes.py` r
 | `eval_mpc.py` | Already works with trained checkpoints |
 | `src/world_model/` | Architecture, trainer, backbones, dataloaders all unchanged |
 | `scripts/world_model/data_pipeline/` | Preserved — serves HF dataset curation purpose |
+| `scripts/world_model/preprocess_race16.py` | Preserved — standalone shortcut for HF-hosted race16 data. Will import `nearest_merge` from `sync_utils.py` instead of its local copy. |
