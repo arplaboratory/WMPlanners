@@ -30,7 +30,7 @@ def test_apply_overrides():
     cfg = {"topics": {"color": "/old"}, "action": {"dim": 14}}
     result = apply_overrides(cfg, {"topics.color": "/new", "action.dim": "6"})
     assert result["topics"]["color"] == "/new"
-    assert result["action"]["dim"] == "6"
+    assert result["action"]["dim"] == 6  # YAML parsing converts "6" → int 6
 
 def test_load_with_overrides():
     cfg = load_robot_config("race16", overrides={"topics.color": "/override/topic"})

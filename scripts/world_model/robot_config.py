@@ -47,7 +47,12 @@ def apply_overrides(cfg: dict, overrides: dict[str, str]) -> dict:
         d = cfg
         for part in parts[:-1]:
             d = d.setdefault(part, {})
-        d[parts[-1]] = value
+        # Parse value with YAML to preserve types (e.g., "6" → 6, "true" → True)
+        try:
+            parsed = yaml.safe_load(value)
+        except yaml.YAMLError:
+            parsed = value
+        d[parts[-1]] = parsed
     return cfg
 
 
