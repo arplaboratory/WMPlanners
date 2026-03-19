@@ -156,8 +156,15 @@ def build_episodes(
     min_speed: float = 0.1,
     max_sync_gap_ms: float = 100.0,
     idle_persistence: int = 10,
+    frame_skip: int = 1,
 ) -> dict:
-    """Build NPZ episodes from all bags in data_dir. Returns stats dict."""
+    """Build NPZ episodes from all bags in data_dir. Returns stats dict.
+
+    With frame_skip > 1, every Nth image frame is selected, reducing the
+    effective FPS and increasing episode temporal span.  Sensor readings
+    are synced to image timestamps *before* subsampling, so each selected
+    frame keeps its correctly paired sensor data.
+    """
     data_dir = Path(data_dir)
     out_path = Path(out_dir)
     os.makedirs(out_path, exist_ok=True)
@@ -277,23 +284,27 @@ def build_episodes(
         depth_paths = img_index["depth_path"].fillna("").values
 
         # ── 8. Slice episodes within each valid run ───────────────────────
+        # With frame_skip, each episode spans (episode_len * frame_skip) raw
+        # frames but only keeps every frame_skip-th one.  Stride is applied
+        # in raw-frame space so the user can control overlap independently.
+        raw_window = episode_len * frame_skip  # raw frames needed per episode
         bag_ep_count = 0
         for run_start, run_end in runs:
             run_len = run_end - run_start
-            if run_len < episode_len:
+            if run_len < raw_window:
                 continue
 
-            starts = range(run_start, run_end - episode_len + 1, stride)
+            starts = range(run_start, run_end - raw_window + 1, stride * frame_skip)
             for start in starts:
-                end = start + episode_len
-                sl = slice(start, end)
+                # Indices of the frames we actually keep
+                frame_indices = list(range(start, start + raw_window, frame_skip))
+                assert len(frame_indices) == episode_len
 
                 rgb = np.zeros((episode_len, img_size, img_size, 3), dtype=np.uint8)
                 depth = np.zeros((episode_len, img_size, img_size), dtype=np.float32)
 
                 ok = True
-                for t in range(episode_len):
-                    frame_idx = start + t
+                for t, frame_idx in enumerate(frame_indices):
                     try:
                         rgb[t] = _load_image(
                             _resolve_path(color_paths[frame_idx], bag_dir), img_sz
@@ -310,14 +321,16 @@ def build_episodes(
                 if not ok:
                     continue
 
+                # Sensor arrays: pick the same subsampled indices
+                idx_arr = np.array(frame_indices)
                 out_file = out_path / f"ep_{ep_count:05d}.npz"
                 np.savez_compressed(
                     str(out_file),
-                    rgb=rgb,                  # (T, H, W, 3) uint8
-                    depth=depth,              # (T, H, W) float32
-                    imu=imu_sync[sl],         # (T, D_imu) float32
-                    odom=odom_sync[sl],       # (T, D_odom) float32
-                    action=action_sync[sl],   # (T, D_act) float32
+                    rgb=rgb,                       # (T, H, W, 3) uint8
+                    depth=depth,                   # (T, H, W) float32
+                    imu=imu_sync[idx_arr],         # (T, D_imu) float32
+                    odom=odom_sync[idx_arr],       # (T, D_odom) float32
+                    action=action_sync[idx_arr],   # (T, D_act) float32
                 )
                 ep_count += 1
                 bag_ep_count += 1
@@ -341,6 +354,7 @@ def build_episodes(
             "episode_len": episode_len,
             "stride": stride,
             "img_size": img_size,
+            "frame_skip": frame_skip,
         },
     }
     meta_path = out_path / "metadata.json"
@@ -376,6 +390,8 @@ def main() -> None:
                     help="Max sensor sync gap in milliseconds (default: 100.0)")
     ap.add_argument("--idle_persistence", type=int, default=10,
                     help="Min consecutive slow frames to mark as idle (default: 10)")
+    ap.add_argument("--frame_skip", type=int, default=1,
+                    help="Take every Nth frame, reducing FPS (default: 1 = no skip)")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -389,6 +405,7 @@ def main() -> None:
         min_speed=args.min_speed,
         max_sync_gap_ms=args.max_sync_gap_ms,
         idle_persistence=args.idle_persistence,
+        frame_skip=args.frame_skip,
     )
     print(f"Wrote {stats['total_episodes']} episodes")
 
