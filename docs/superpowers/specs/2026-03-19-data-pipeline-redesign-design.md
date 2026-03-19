@@ -198,7 +198,7 @@ python -m scripts.world_model.select_episodes \
 | Component | Dims | Source | Default Weight |
 |-----------|------|--------|----------------|
 | Action statistics | 2 * D_act | mean + std of action over the episode | 0.6 |
-| Odom delta | 6 | body-frame displacement start-to-end: dx, dy, dz, ax, ay, az (axis-angle rotation, consistent with `odom_delta.py`) | 0.2 |
+| Odom delta | 6 | body-frame displacement start-to-end: dx, dy, dz, ax, ay, az (axis-angle rotation). Computed directly from first/last odom quaternion+position — NOT by summing consecutive deltas from `odom_delta.py` (which is geometrically incorrect for rotations). | 0.2 |
 | Visual summary | D_vis | depends on `--encoder` | 0.2 |
 
 **Visual encoder options (`--encoder`):**
@@ -260,7 +260,11 @@ def nearest_merge(
     src_df: pd.DataFrame,
     max_gap_ns: int | None = None,
 ) -> np.ndarray:
-    """Nearest-neighbor merge with optional max-gap zero-fill."""
+    """Nearest-neighbor merge with optional max-gap zero-fill.
+
+    Assumes src_df has a 'timestamp_ns' column. CLI --max-sync-gap-ms
+    is converted to nanoseconds by the caller before passing here.
+    """
     ...
 ```
 
