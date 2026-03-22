@@ -1,0 +1,20 @@
+version: 1
+name: race16
+
+topics:
+  color: /race16/cam1/color/image_raw/compressed
+  depth: /race16/cam1/aligned_depth_to_color/image_raw
+  imu: /race16/cam1/imu
+  odom: /race16/odom
+  position_cmd: /race16/position_cmd
+  so3_cmd: /race16/so3_cmd
+
+sensors:
+  color_encoding: compressed
+  depth_encoding: 16UC1
+  imu_dim: 10
+  odom_dim: 13
+
+action:
+  source: position_cmd
+  dim: 14
