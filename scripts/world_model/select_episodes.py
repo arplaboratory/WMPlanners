@@ -164,6 +164,10 @@ def select_episodes(
     selected_indices = _farthest_point_sampling(weighted, target_count)
 
     # 7. Create out_dir and copy/symlink selected episodes
+    #    Remove stale episodes from a previous run first.
+    if os.path.isdir(out_dir):
+        for old in glob.glob(os.path.join(out_dir, "ep_*.npz")):
+            os.remove(old)
     os.makedirs(out_dir, exist_ok=True)
     for new_idx, src_idx in enumerate(selected_indices):
         src_path = os.path.join(data_dir, filenames[src_idx])
