@@ -1,0 +1,18 @@
+version: 1
+name: chinook
+
+topics:
+  color: /chinook/sensors/realsense/camera/color/image_raw/compressed
+  depth: /chinook/sensors/realsense/camera/aligned_depth_to_color/image_raw
+  imu: /chinook/sensors/ouster/imu
+  odom: /chinook/odometry/local
+
+sensors:
+  color_encoding: compressed
+  depth_encoding: 16UC1
+  imu_dim: 10
+  odom_dim: 13
+
+action:
+  source: odom
+  dim: 13

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""End-to-end data pipeline: MCAP bags → NPZ episodes → HuggingFace dataset.
+"""End-to-end data pipeline: MCAP or ROS1 bags → NPZ episodes → HuggingFace dataset.
 
 Stages:
-  0. Extract  — MCAP bags → sharded images + CSVs  (skip with --bags)
+  0. Extract  — MCAP or ROS1 bags → sharded images + CSVs  (skip with --bags)
   1. Build    — images + CSVs → fixed-length NPZ episodes
   2. Select   — FPS diversity selection on episodes
   3. Upload   — push selected episodes to Hugging Face Hub
@@ -38,7 +38,7 @@ def main() -> None:
 
     # --- Source (one of --mcap or --bags required) ---
     src = parser.add_mutually_exclusive_group(required=True)
-    src.add_argument("--mcap", nargs="+", help="MCAP bag file path(s) — runs extraction (Stage 0)")
+    src.add_argument("--mcap", nargs="+", help="MCAP or ROS1 bag file path(s) — runs extraction (Stage 0)")
     src.add_argument("--bags", help="Pre-extracted bags directory (has manifest.json) — skips Stage 0")
 
     # --- Stage 0: Extract options ---
@@ -75,10 +75,10 @@ def main() -> None:
     episodes_dir = os.path.join(args.output, "episodes")
     selected_dir = os.path.join(args.output, "selected")
 
-    # ── Stage 0: Extract MCAP bags ────────────────────────────────────────
+    # ── Stage 0: Extract bags ─────────────────────────────────────────────
     if args.mcap:
         print(f"\n{'='*60}")
-        print("[Stage 0] Extract MCAP bags")
+        print("[Stage 0] Extract bags (MCAP or ROS1)")
         print(f"{'='*60}")
         from .stage0_extract import run_stage0
         from scripts.world_model.robot_config import parse_overrides

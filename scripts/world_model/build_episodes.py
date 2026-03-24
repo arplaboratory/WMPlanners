@@ -210,7 +210,7 @@ def build_episodes(
             per_bag_counts[bag_name] = 0
             continue
 
-        odom_df = _load_csv("odometry.csv")
+        odom_df = _load_csv("odom.csv")
         imu_df = _load_csv("imu.csv")
         action_df = _load_csv(f"{action_source}.csv")
 

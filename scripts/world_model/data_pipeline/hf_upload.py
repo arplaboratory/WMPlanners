@@ -124,6 +124,7 @@ def run_hf_upload(
     print(f"[hf_upload] Saved {len(ds)} frames ({n_episodes} episodes) to {save_dir}")
 
     if repo_id:
+        repo_id = repo_id.strip("'\"")
         ds.push_to_hub(repo_id, private=private)
         print(f"[hf_upload] Pushed to https://huggingface.co/datasets/{repo_id}")
 

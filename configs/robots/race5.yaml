@@ -1,0 +1,15 @@
+version: 1
+name: race5
+
+topics:
+  color: /race5/cam1/color/image_raw/compressed
+  imu: /race5/cam1/imu
+
+sensors:
+  color_encoding: compressed
+  imu_dim: 10
+  odom_dim: 13
+
+action:
+  source: odom
+  dim: 13

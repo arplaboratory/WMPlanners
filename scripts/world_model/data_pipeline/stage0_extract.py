@@ -1,4 +1,4 @@
-"""Stage 0 -- Extract ROS2 MCAP bags into sharded dataset.
+"""Stage 0 -- Extract MCAP or ROS1 bags into sharded dataset.
 
 Thin wrapper around scripts.world_model.extract_dataset.
 """
@@ -19,7 +19,7 @@ def run_stage0(
     shard_size: int = 500,
     overrides: dict | None = None,
 ) -> list[str]:
-    """Extract MCAP bags into per-bag directories.
+    """Extract MCAP or ROS1 bags into per-bag directories.
 
     Returns list of per-bag output directory paths.
     """

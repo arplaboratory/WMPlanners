@@ -23,22 +23,31 @@ from sklearn.preprocessing import StandardScaler
 # Descriptor helpers
 # ---------------------------------------------------------------------------
 
-def compute_episode_odom_delta(odom: np.ndarray) -> np.ndarray:
+def compute_episode_odom_delta(odom: np.ndarray) -> np.ndarray | None:
     """Compute start-to-end body-frame displacement from odom array.
 
     odom: (T, D_odom) where first 7 cols are pos_x,y,z, orient_x,y,z,w.
     Returns: (6,) array [dx, dy, dz, ax, ay, az] in body frame (axis-angle rotation).
+             Returns None if start/end quaternions are invalid (zero norm).
     """
     pos_start, pos_end = odom[0, :3], odom[-1, :3]
     quat_start = odom[0, 3:7]  # (x, y, z, w) — scipy format
     quat_end = odom[-1, 3:7]
-    r_start = Rotation.from_quat(quat_start)
-    r_end = Rotation.from_quat(quat_end)
-    dp_world = pos_end - pos_start
-    dp_body = r_start.inv().apply(dp_world)
-    r_delta = r_start.inv() * r_end
-    axis_angle = r_delta.as_rotvec()
-    return np.concatenate([dp_body, axis_angle])
+
+    # Check for zero-norm quaternions which cause scipy.spatial.transform.Rotation to fail
+    if np.allclose(np.linalg.norm(quat_start), 0) or np.allclose(np.linalg.norm(quat_end), 0):
+        return None
+
+    try:
+        r_start = Rotation.from_quat(quat_start)
+        r_end = Rotation.from_quat(quat_end)
+        dp_world = pos_end - pos_start
+        dp_body = r_start.inv().apply(dp_world)
+        r_delta = r_start.inv() * r_end
+        axis_angle = r_delta.as_rotvec()
+        return np.concatenate([dp_body, axis_angle])
+    except ValueError:
+        return None
 
 
 def compute_descriptors(
@@ -65,6 +74,7 @@ def compute_descriptors(
 
     descriptors = []
     filenames = []
+    skipped = 0
     for fpath in files:
         data = np.load(fpath)
         action = data["action"]   # (T, D_act)
@@ -72,10 +82,21 @@ def compute_descriptors(
 
         action_stats = np.concatenate([action.mean(axis=0), action.std(axis=0)])  # (2*D_act,)
         odom_delta = compute_episode_odom_delta(odom)                             # (6,)
+
+        if odom_delta is None:
+            skipped += 1
+            continue
+
         descriptor = np.concatenate([action_stats, odom_delta])
 
         descriptors.append(descriptor)
         filenames.append(os.path.basename(fpath))
+
+    if skipped > 0:
+        print(f"Skipped {skipped} episodes due to invalid odom/quaternion data.")
+
+    if not descriptors:
+        raise ValueError(f"No valid episodes found in {data_dir!r} (all skipped).")
 
     return np.stack(descriptors, axis=0), filenames
 
