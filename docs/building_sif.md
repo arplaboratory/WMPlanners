@@ -285,6 +285,10 @@ apptainer exec --nv --containall \
 
 A successful run prints something like:
 
+```
+[verify] torch 2.x.x+cu12x | isaaclab /workspace/isaaclab/source/isaaclab/isaaclab/__init__.py
+```
+
 Running w/ WebRTC
 
 ```bash
@@ -302,14 +306,18 @@ apptainer exec --nv --containall \
 
 Download the WebRTC client from [here](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/download.html). 
 
-```
-[verify] torch 2.x.x+cu12x | isaaclab /workspace/isaaclab/source/isaaclab/isaaclab/__init__.py
-```
-
 ## Clean Up the Sandbox
 
 Once the SIF is verified, remove the sandbox to reclaim inodes and disk space:
 
 ```bash
 rm -rf "$SANDBOX_DIR"
+```
+
+## Troubleshooting
+
+Permission issues during apptainer build
+```bash
+sudo chmod 644 /usr/local/etc/apptainer/capability.json
+echo "{}" | sudo tee /usr/local/etc/apptainer/capability.json
 ```
