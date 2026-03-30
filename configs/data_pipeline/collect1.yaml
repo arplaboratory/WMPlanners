@@ -1,0 +1,8 @@
+# collect1 – curated training data
+# Subsamples frames and selects high-quality episodes for training.
+
+frame_skip: 6
+episode_len: 50
+stride: 50
+target_count: 5000
+push_to_hub: lquan9/collect1
