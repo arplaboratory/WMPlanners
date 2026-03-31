@@ -36,6 +36,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from rosbags.highlevel import AnyReader
+
 from scripts.world_model.robot_config import add_robot_args, load_robot_config, parse_overrides
 
 SHARD_SIZE = 500  # images per shard
@@ -162,7 +164,7 @@ def process_imu(msg, timestamp_ns: int, csv_mgr: CSVManager) -> None:
 
 
 def process_odom(msg, timestamp_ns: int, csv_mgr: CSVManager) -> None:
-    w = csv_mgr.get("odometry", ODOM_FIELDS)
+    w = csv_mgr.get("odom", ODOM_FIELDS)
     p = msg.pose.pose.position
     o = msg.pose.pose.orientation
     lv = msg.twist.twist.linear
@@ -208,15 +210,80 @@ def process_so3_cmd(msg, timestamp_ns: int, csv_mgr: CSVManager) -> None:
 # ---------------------------------------------------------------------------
 # Config-driven topic handler builder
 # ---------------------------------------------------------------------------
-def build_topic_handlers(config: dict) -> dict:
-    """Build a mapping from ROS topic string to handler info dict.
+def discover_topics(path: str) -> list[str]:
+    """Pre-scan bag to discover available topics."""
+    topics = []
+    if path.endswith(".bag"):
+        from rosbags.highlevel import AnyReader
+        from pathlib import Path
+        try:
+            with AnyReader([Path(path)]) as reader:
+                topics = [c.topic for c in reader.connections]
+        except Exception: pass
+    else:
+        from mcap.stream_reader import StreamReader
+        from mcap.records import Channel
+        try:
+            with open(path, "rb") as f:
+                reader = StreamReader(f, emit_chunks=True)
+                it = reader.records
+                while True:
+                    try:
+                        record = next(it)
+                    except StopIteration: break
+                    except Exception: continue
+                    if isinstance(record, Channel):
+                        if record.topic not in topics:
+                            topics.append(record.topic)
+        except Exception: pass
+    return topics
 
-    Returns:
-        {"/robot/topic": {"type": "color"|"depth"|"imu"|"odom"|<key>, "key": <topic_key>}, ...}
+
+def build_topic_handlers(config: dict, bag_path: str = None) -> dict:
+    """Build a mapping from ROS topic string to handler info dict.
+    
+    If bag_path is provided, attempts fuzzy matching for missing topics.
     """
     handlers: dict[str, dict] = {}
+    bag_topics = discover_topics(bag_path) if bag_path else []
+    
+    # Fallback suffixes for common sensors
+    FALLBACKS = {
+        "imu": ["/imu", "/imu/data", "/mavros/imu/data"],
+        "odom": ["/odom", "/local_position/odom", "/mavros/local_position/odom"],
+        "depth": ["/depth/image_raw", "/aligned_depth_to_color/image_raw", "/depth/image_rect_raw"],
+        "color": ["/color/image_raw/compressed", "/color/image_raw"],
+    }
+    
+    robot_name = config.get("name", "")
+
     for key, topic in config["topics"].items():
-        handlers[topic] = {"type": key, "key": key}
+        chosen_topic = None
+        if not bag_path or topic in bag_topics:
+            chosen_topic = topic
+        elif bag_topics:
+            # Try fuzzy matching
+            # 1. Look for robot-prefixed fallbacks
+            if key in FALLBACKS:
+                for suffix in FALLBACKS[key]:
+                    full = f"/{robot_name}{suffix}" if not suffix.startswith(f"/{robot_name}") else suffix
+                    if full in bag_topics:
+                        chosen_topic = full
+                        print(f"  [Fuzzy] Matched {key} -> {chosen_topic} (fallback)")
+                        break
+            # 2. Look for any topic ending in a common suffix if still not found
+            if not chosen_topic and key in FALLBACKS:
+                for suffix in FALLBACKS[key]:
+                    for bt in bag_topics:
+                        if bt.endswith(suffix):
+                            chosen_topic = bt
+                            print(f"  [Fuzzy] Matched {key} -> {chosen_topic} (approximate)")
+                            break
+                    if chosen_topic: break
+
+        if chosen_topic:
+            handlers[chosen_topic] = {"type": key, "key": key}
+    
     return handlers
 
 
@@ -235,6 +302,79 @@ def write_manifest(output_dir: str, config: dict, bags_info: list[dict]) -> None
 
 
 # ---------------------------------------------------------------------------
+# Format-specific message iterators
+# ---------------------------------------------------------------------------
+def iter_mcap_messages(path: str):
+    """Generator for MCAP (ROS2) messages using streaming reader to avoid summary/index errors
+    and handle corrupted chunks gracefully."""
+    from mcap.stream_reader import StreamReader, breakup_chunk
+    from mcap_ros2.decoder import DecoderFactory
+    from mcap.records import Schema, Channel, Message, Chunk
+    
+    decoder_factory = DecoderFactory()
+    channels: dict[int, Channel] = {}
+    schemas: dict[int, Schema] = {}
+    
+    def process_record(record):
+        nonlocal channels, schemas
+        if isinstance(record, Schema):
+            schemas[record.id] = record
+        elif isinstance(record, Channel):
+            channels[record.id] = record
+        elif isinstance(record, Message):
+            if record.channel_id not in channels:
+                return None
+            channel = channels[record.channel_id]
+            if channel.schema_id not in schemas:
+                return None
+            schema = schemas[channel.schema_id]
+            decoder = decoder_factory.decoder_for(channel.message_encoding, schema)
+            if not decoder:
+                return None
+            ros_msg = decoder(record.data)
+            return channel.topic, record.log_time, ros_msg
+        return None
+
+    with open(path, "rb") as f:
+        reader = StreamReader(f, emit_chunks=True)
+        it = reader.records
+        while True:
+            try:
+                record = next(it)
+            except StopIteration:
+                break
+            except Exception as e:
+                print(f"Warning: Top-level MCAP corruption detected: {e}. Stopping extraction for this file.")
+                break
+
+            if isinstance(record, Chunk):
+                try:
+                    for subrecord in breakup_chunk(record):
+                        res = process_record(subrecord)
+                        if res:
+                            yield res
+                except Exception as e:
+                    print(f"Warning: Skipping corrupted MCAP chunk: {e}")
+            else:
+                res = process_record(record)
+                if res:
+                    yield res
+
+
+def iter_rosbag_messages(path: str):
+    """Generator for ROS1 bag messages using rosbags library."""
+    from rosbags.highlevel import AnyReader
+    from pathlib import Path
+    with AnyReader([Path(path)]) as reader:
+        for connection, timestamp, rawdata in reader.messages():
+            try:
+                ros_msg = reader.deserialize(rawdata, connection.msgtype)
+                yield connection.topic, timestamp, ros_msg
+            except (AssertionError, Exception) as e:
+                print(f"Warning: Failed to deserialize ROS1 message on topic {connection.topic}: {e}. Skipping message.")
+
+
+# ---------------------------------------------------------------------------
 # Main extraction
 # ---------------------------------------------------------------------------
 def extract(mcap_path: str, output_dir: str, config: dict, shard_size: int = SHARD_SIZE) -> int:
@@ -249,16 +389,14 @@ def extract(mcap_path: str, output_dir: str, config: dict, shard_size: int = SHA
     Returns:
         Number of color frames extracted.
     """
-    from mcap.reader import make_reader
-    from mcap_ros2.decoder import DecoderFactory
-
     os.makedirs(output_dir, exist_ok=True)
     csv_mgr = CSVManager(output_dir)
     index_rows: list[dict] = []
     color_count = 0
     depth_count = 0
 
-    handlers = build_topic_handlers(config)
+    # Build topic handlers (with fuzzy matching if possible)
+    handlers = build_topic_handlers(config, bag_path=mcap_path)
     color_encoding = config.get("sensors", {}).get("color_encoding", "compressed")
 
     # Track unknown topics to warn only once
@@ -266,68 +404,68 @@ def extract(mcap_path: str, output_dir: str, config: dict, shard_size: int = SHA
 
     print(f"Extracting from {mcap_path} ...")
 
-    with open(mcap_path, "rb") as f:
-        reader = make_reader(f, decoder_factories=[DecoderFactory()])
-        for schema, channel, message, ros_msg in reader.iter_decoded_messages():
-            ts = message.log_time
-            topic = channel.topic
+    if str(mcap_path).endswith(".bag"):
+        msg_iterator = iter_rosbag_messages(mcap_path)
+    else:
+        msg_iterator = iter_mcap_messages(mcap_path)
 
-            if topic not in handlers:
-                continue
+    for topic, ts, ros_msg in msg_iterator:
+        if topic not in handlers:
+            continue
 
-            handler = handlers[topic]
-            htype = handler["type"]
+        handler = handlers[topic]
+        htype = handler["type"]
 
-            if htype == "color":
-                if color_encoding == "compressed":
-                    path = save_compressed_image(ros_msg, output_dir, color_count, shard_size)
-                else:
-                    # Raw Image message — encode to JPEG via OpenCV
-                    h, w = ros_msg.height, ros_msg.width
-                    raw = bytes(ros_msg.data)
-                    arr = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, -1)
-                    shard_id = color_count // shard_size
-                    shard_dir = os.path.join(output_dir, f"shard_{shard_id:04d}")
-                    os.makedirs(shard_dir, exist_ok=True)
-                    path = os.path.join(shard_dir, f"color_{color_count:06d}.jpg")
-                    cv2.imwrite(path, arr)
-                color_count += 1
-                index_rows.append({
-                    "frame_id": color_count - 1,
-                    "timestamp_ns": ts,
-                    "color_path": path,
-                    "depth_path": "",
-                })
-                if color_count % 1000 == 0:
-                    print(f"  Color frames: {color_count}")
-
-            elif htype == "depth":
-                path = save_depth_image(ros_msg, output_dir, depth_count, shard_size)
-                depth_count += 1
-                if index_rows and index_rows[-1]["depth_path"] == "":
-                    index_rows[-1]["depth_path"] = path
-                if depth_count % 1000 == 0:
-                    print(f"  Depth frames: {depth_count}")
-
-            elif htype == "imu":
-                process_imu(ros_msg, ts, csv_mgr)
-
-            elif htype == "odom":
-                process_odom(ros_msg, ts, csv_mgr)
-
-            elif htype == "position_cmd":
-                process_position_cmd(ros_msg, ts, csv_mgr)
-
-            elif htype == "so3_cmd":
-                process_so3_cmd(ros_msg, ts, csv_mgr)
-
+        if htype == "color":
+            if color_encoding == "compressed":
+                path = save_compressed_image(ros_msg, output_dir, color_count, shard_size)
             else:
-                if htype not in warned_topics:
-                    warnings.warn(
-                        f"No handler for topic key '{htype}' (topic: {topic}); skipping.",
-                        stacklevel=2,
-                    )
-                    warned_topics.add(htype)
+                # Raw Image message — encode to JPEG via OpenCV
+                h, w = ros_msg.height, ros_msg.width
+                raw = bytes(ros_msg.data)
+                arr = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, -1)
+                shard_id = color_count // shard_size
+                shard_dir = os.path.join(output_dir, f"shard_{shard_id:04d}")
+                os.makedirs(shard_dir, exist_ok=True)
+                path = os.path.join(shard_dir, f"color_{color_count:06d}.jpg")
+                cv2.imwrite(path, arr)
+            color_count += 1
+            index_rows.append({
+                "frame_id": color_count - 1,
+                "timestamp_ns": ts,
+                "color_path": path,
+                "depth_path": "",
+            })
+            if color_count % 1000 == 0:
+                print(f"  Color frames: {color_count}")
+
+        elif htype == "depth":
+            path = save_depth_image(ros_msg, output_dir, depth_count, shard_size)
+            depth_count += 1
+            if index_rows and index_rows[-1]["depth_path"] == "":
+                index_rows[-1]["depth_path"] = path
+            if depth_count % 1000 == 0:
+                print(f"  Depth frames: {depth_count}")
+
+        elif htype == "imu":
+            process_imu(ros_msg, ts, csv_mgr)
+
+        elif htype == "odom":
+            process_odom(ros_msg, ts, csv_mgr)
+
+        elif htype == "position_cmd":
+            process_position_cmd(ros_msg, ts, csv_mgr)
+
+        elif htype == "so3_cmd":
+            process_so3_cmd(ros_msg, ts, csv_mgr)
+
+        else:
+            if htype not in warned_topics:
+                warnings.warn(
+                    f"No handler for topic key '{htype}' (topic: {topic}); skipping.",
+                    stacklevel=2,
+                )
+                warned_topics.add(htype)
 
     # Write image index
     index_path = os.path.join(output_dir, "image_index.csv")

@@ -45,6 +45,7 @@ dev = [
   "typeguard",
   "ipykernel>=6.29",
   "setuptools",
+  "rosbags",
 ]
 video = [
   "decord>=0.6"

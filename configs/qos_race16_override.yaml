@@ -1,0 +1,12 @@
+/race16/odom:
+  reliability: reliable
+  depth: 10
+  history: keep_last
+/race16/cam1/color/image_raw/compressed:
+  reliability: reliable
+  depth: 10
+  history: keep_last
+/race16/cam1/aligned_depth_to_color/image_raw:
+  reliability: reliable
+  depth: 10
+  history: keep_last

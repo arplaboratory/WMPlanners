@@ -1,0 +1,8 @@
+# configs/data_pipeline/collect1_unfiltered.yaml
+frame_skip: 6
+episode_len: 50
+stride: 50
+min_speed: 0.0          # Disable idle filtering
+idle_persistence: 999999
+skip_select: true       # Disable diversity selection
+push_to_hub: lquan9/collect1_unfiltered
