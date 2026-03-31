@@ -10,6 +10,7 @@ DRY_RUN=0
 OUTPUT_PARENT="pipeline_out"
 MERGE=0
 HF_REPO=""
+HF_PRIVATE=0
 CONFIG_FILE=""
 
 usage() {
@@ -21,6 +22,7 @@ usage() {
     echo "  --output <dir>      Parent output directory (overrides config)"
     echo "  --merge             Merge all bags into a single dataset (default: false)"
     echo "  --push-to-hub <id>  Hugging Face Repo ID (overrides config)"
+    echo "  --private           Make Hugging Face repo private"
     echo "  -h, --help          Show this help message"
     echo ""
     echo "Example:"
@@ -54,6 +56,10 @@ while [[ $# -gt 0 ]]; do
         --push-to-hub)
             HF_REPO="$2"
             shift 2
+            ;;
+        --private)
+            HF_PRIVATE=1
+            shift
             ;;
         -h|--help)
             usage
@@ -140,6 +146,7 @@ export DRY_RUN
 export OUTPUT_PARENT
 export MERGE
 export HF_REPO
+export HF_PRIVATE
 export PIPELINE_ARGS
 
 # Process a single mcap file (Independent mode)
@@ -153,6 +160,9 @@ process_mcap_indep() {
     local hf_arg=""
     if [ -n "$HF_REPO" ]; then
         hf_arg="--push-to-hub \"$HF_REPO\""
+        if [ "$HF_PRIVATE" -eq 1 ]; then
+            hf_arg="$hf_arg --hf-private"
+        fi
     fi
 
     local cmd="python -m scripts.world_model.data_pipeline.run_pipeline \
@@ -231,6 +241,9 @@ if [ "$MERGE" -eq 1 ]; then
         hf_arg=""
         if [ -n "$HF_REPO" ]; then
             hf_arg="--push-to-hub \"$HF_REPO\""
+            if [ "$HF_PRIVATE" -eq 1 ]; then
+                hf_arg="$hf_arg --hf-private"
+            fi
         fi
         
         python -m scripts.world_model.data_pipeline.run_pipeline \
@@ -242,6 +255,9 @@ if [ "$MERGE" -eq 1 ]; then
         hf_arg=""
         if [ -n "$HF_REPO" ]; then
             hf_arg="--push-to-hub \"$HF_REPO\""
+            if [ "$HF_PRIVATE" -eq 1 ]; then
+                hf_arg="$hf_arg --hf-private"
+            fi
         fi
         final_cmd="python -m scripts.world_model.data_pipeline.run_pipeline --bags \"${MERGED_DIR}\" --output \"${OUTPUT_PARENT}\" $PIPELINE_ARGS $hf_arg"
         echo -e "\033[0;33m[DRY RUN]\033[0m Would merge manifests and run: $final_cmd"
