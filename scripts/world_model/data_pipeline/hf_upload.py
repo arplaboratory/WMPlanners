@@ -109,16 +109,13 @@ def run_hf_upload(
 
     features = Features(feature_dict)
 
-    # Collect all rows
-    rows = list(_iter_episode_frames(episodes_dir))
+    ds = Dataset.from_generator(
+        _iter_episode_frames,
+        gen_kwargs={"episodes_dir": episodes_dir},
+        features=features,
+        cache_dir=os.path.join(save_dir, ".cache"),
+    )
 
-    # Transpose list-of-dicts into dict-of-lists
-    columns: dict[str, list] = {key: [] for key in rows[0]}
-    for row in rows:
-        for key in columns:
-            columns[key].append(row[key])
-
-    ds = Dataset.from_dict(columns, features=features)
     ds.save_to_disk(save_dir)
     n_episodes = len(ep_files)
     print(f"[hf_upload] Saved {len(ds)} frames ({n_episodes} episodes) to {save_dir}")
