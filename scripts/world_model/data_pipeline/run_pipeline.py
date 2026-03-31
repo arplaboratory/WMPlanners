@@ -131,8 +131,9 @@ def main() -> None:
         print(f"\n{'='*60}")
         print("[Stage 3] Upload to Hugging Face")
         print(f"{'='*60}")
+        upload_dir = episodes_dir if args.skip_select else selected_dir
         run_hf_upload(
-            episodes_dir=selected_dir,
+            episodes_dir=upload_dir,
             repo_id=args.push_to_hub,
             private=args.hf_private,
         )
@@ -142,7 +143,7 @@ def main() -> None:
     print("[Pipeline complete]")
     print(f"  Extracted:  {data_dir}")
     print(f"  Episodes:   {episodes_dir}")
-    print(f"  Selected:   {selected_dir}")
+    print(f"  Selected:   {selected_dir if not args.skip_select else '<skipped>'}")
     if args.push_to_hub:
         print(f"  HF Hub:     https://huggingface.co/datasets/{args.push_to_hub}")
     print(f"{'='*60}")
