@@ -66,6 +66,7 @@ _build
 
 # Teleop Recorded Dataset
 /datasets/
+pipeline_out/
 
 # Docker history
 .isaac-lab-docker-history
