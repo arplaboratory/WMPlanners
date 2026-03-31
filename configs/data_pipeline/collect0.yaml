@@ -1,0 +1,12 @@
+# collect0 – raw data extraction (no filtering)
+# Captures all frames with minimal filtering for a complete raw dataset.
+
+episode_len: 50
+stride: 50
+frame_skip: 1
+img_size: 128
+min_speed: 0.0
+idle_persistence: 999999
+max_sync_gap_ms: 999999
+skip_select: true
+push_to_hub: lquan9/collect0
