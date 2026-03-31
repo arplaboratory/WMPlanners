@@ -259,7 +259,7 @@ def build_topic_handlers(config: dict, bag_path: str = None) -> dict:
 
     for key, topic in config["topics"].items():
         chosen_topic = None
-        if topic in bag_topics:
+        if not bag_path or topic in bag_topics:
             chosen_topic = topic
         elif bag_topics:
             # Try fuzzy matching

@@ -34,7 +34,7 @@ def _make_extracted_bag(bag_dir, n_frames=100, img_size=32):
         "color_path": color_paths, "depth_path": depth_paths,
     }).to_csv(os.path.join(bag_dir, "image_index.csv"), index=False)
 
-    # odometry.csv — moving at 1 m/s in x
+    # odom.csv — moving at 1 m/s in x
     pd.DataFrame({
         "timestamp_ns": ts, "pos_x": t_sec, "pos_y": np.zeros(n_frames),
         "pos_z": np.zeros(n_frames),
@@ -44,7 +44,7 @@ def _make_extracted_bag(bag_dir, n_frames=100, img_size=32):
         "linear_vel_z": np.zeros(n_frames),
         "angular_vel_x": np.zeros(n_frames), "angular_vel_y": np.zeros(n_frames),
         "angular_vel_z": np.zeros(n_frames),
-    }).to_csv(os.path.join(bag_dir, "odometry.csv"), index=False)
+    }).to_csv(os.path.join(bag_dir, "odom.csv"), index=False)
 
     # imu.csv
     pd.DataFrame({
@@ -114,7 +114,7 @@ class TestBuildEpisodes:
 
         _make_extracted_bag(bag_dir, n_frames=100, img_size=16)
         # Make all frames idle (zero velocity)
-        odom_path = os.path.join(bag_dir, "odometry.csv")
+        odom_path = os.path.join(bag_dir, "odom.csv")
         df = pd.read_csv(odom_path)
         df["linear_vel_x"] = 0.0
         df.to_csv(odom_path, index=False)
@@ -138,7 +138,7 @@ class TestBuildEpisodes:
         df.loc[50:, "timestamp_ns"] += 1_000_000_000
         df.to_csv(idx_path, index=False)
         # Also update odom/imu/action timestamps to match
-        for csv_name in ["odometry.csv", "imu.csv", "position_cmd.csv"]:
+        for csv_name in ["odom.csv", "imu.csv", "position_cmd.csv"]:
             csv_path = os.path.join(bag_dir, csv_name)
             sdf = pd.read_csv(csv_path)
             sdf.loc[50:, "timestamp_ns"] += 1_000_000_000
