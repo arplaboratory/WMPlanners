@@ -1,5 +1,7 @@
 #!/bin/bash
-# Run scripts use: --overlay /scratch/$USER/my_env.ext3:ro
+# DS-GA 3001 — Install venv for world model training
+# Uses Ubuntu 24.04 CUDA SIF on /scratch.
+# Run this ONCE before submitting any ds_3001_train_wm_*.slurm experiment.
 
 #SBATCH --requeue
 #SBATCH --nodes=1
@@ -16,172 +18,147 @@
 
 set -euo pipefail
 
-cd /scratch/$USER
-
-if [ -d IsaacLab/.git ]; then
-  echo "[NODE] IsaacLab exists, updating safely..."
-  cd IsaacLab
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    STASH_FILE="../isaaclab_stash_$(date +%Y%m%d_%H%M%S).patch"
-    echo "[NODE] Local changes detected, stashing to $STASH_FILE"
-    git stash push -u -m "Auto-stash before update on $(date)"
-    git stash show -p > "$STASH_FILE" || echo "[WARN] No diff to save in stash."
-  fi
-  git fetch origin
-  git merge --ff-only origin/$(git rev-parse --abbrev-ref HEAD)
-  cd ..
-else
-  echo "[NODE] Cloning IsaacLab..."
-  git clone https://github.com/isaac-sim/IsaacLab.git
-fi
+# Load user environment variables (e.g. HF_TOKEN)
+# shellcheck source=/dev/null
+[ -f "${HOME}/.envs" ] && source "${HOME}/.envs"
 
 # -----------------------------------------------
 # Paths
 # -----------------------------------------------
-SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"      # base image, never modified
-OVERLAY_FILE="/scratch/$USER/my_env.ext3"             # persistent writable layer
-ISAACLAB_DIR="/scratch/$USER/IsaacLab"
+SIF_IMAGE="/scratch/lq2146/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
 
-DOCKER_ISAACSIM_ROOT_PATH="/isaac-sim"
+PERSISTENT_CACHE_DIR="/scratch/$USER/world_model_cache"
 DOCKER_USER_HOME="/root"
-
-CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
-mkdir -p \
-  "${CACHE_ROOT}/cache/kit" \
-  "${CACHE_ROOT}/cache/ov" \
-  "${CACHE_ROOT}/cache/pip" \
-  "${CACHE_ROOT}/cache/glcache" \
-  "${CACHE_ROOT}/cache/computecache" \
-  "${CACHE_ROOT}/cache/wandb" \
-  "${CACHE_ROOT}/logs" \
-  "${CACHE_ROOT}/data" \
-  "${CACHE_ROOT}/documents" \
-  "${CACHE_ROOT}/kit-data"
-
-PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
-mkdir -p "${PERSISTENT_LOGS_DIR}"
-touch "${PERSISTENT_LOGS_DIR}/.keep"
-
 SCRATCH_TMP="/scratch/$USER/tmp"
-mkdir -p "${SCRATCH_TMP}"
+VENV_DIR="${PERSISTENT_CACHE_DIR}/venv"
+
+mkdir -p \
+  "${PERSISTENT_CACHE_DIR}" \
+  "${PERSISTENT_CACHE_DIR}/cache/pip" \
+  "${PERSISTENT_CACHE_DIR}/cache/wandb" \
+  "${PERSISTENT_CACHE_DIR}/cache/huggingface" \
+  "${VENV_DIR}" \
+  "${SCRATCH_TMP}"
+
 export APPTAINER_TMPDIR="${SCRATCH_TMP}"
 export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
 mkdir -p "${HOME}/.config"
 
-# -----------------------------------------------
-# Create overlay if it doesn't exist
-# -----------------------------------------------
-if [ ! -f "${OVERLAY_FILE}" ]; then
-  echo "[NODE] Creating overlay at ${OVERLAY_FILE} ..."
-  rsync -aP /share/apps/overlay-fs-ext3/overlay-50G-10M.ext3.gz /scratch/$USER/
-  gunzip /scratch/$USER/overlay-50G-10M.ext3.gz
-  mv /scratch/$USER/overlay-50G-10M.ext3 "${OVERLAY_FILE}"
-  echo "[NODE] Overlay created."
-else
-  echo "[NODE] Overlay already exists at ${OVERLAY_FILE}"
-fi
-
-echo "[NODE] Installing into overlay: ${OVERLAY_FILE}"
+echo "[NODE] SIF_IMAGE=${SIF_IMAGE}"
+echo "[NODE] RUN_DIR=${RUN_DIR}"
+echo "[NODE] VENV_DIR=${VENV_DIR}"
 
 # -----------------------------------------------
 # Run install inside container
-#   --no-home     : avoids --containall UID-mapping bug that breaks /isaac-sim access
-#   --overlay :rw : writes packages into ext3 layer; persists after container exits
 # -----------------------------------------------
-singularity exec --nv --no-home \
-  --overlay "${OVERLAY_FILE}:rw" \
-  -B "${SCRATCH_TMP}":/tmp:rw \
-  -B "${CACHE_ROOT}/kit-data":"${DOCKER_ISAACSIM_ROOT_PATH}"/kit/data:rw \
-  -B "${CACHE_ROOT}/cache/kit":"${DOCKER_ISAACSIM_ROOT_PATH}"/kit/cache:rw \
-  -B "${CACHE_ROOT}/cache/ov":"${DOCKER_USER_HOME}"/.cache/ov:rw \
-  -B "${CACHE_ROOT}/cache/pip":"${DOCKER_USER_HOME}"/.cache/pip:rw \
-  -B "${CACHE_ROOT}/cache/glcache":"${DOCKER_USER_HOME}"/.cache/nvidia/GLCache:rw \
-  -B "${CACHE_ROOT}/cache/computecache":"${DOCKER_USER_HOME}"/.nv/ComputeCache:rw \
-  -B "${CACHE_ROOT}/logs":"${DOCKER_USER_HOME}"/.nvidia-omniverse/logs:rw \
-  -B "${CACHE_ROOT}/data":"${DOCKER_USER_HOME}"/.local/share/ov/data:rw \
-  -B "${CACHE_ROOT}/documents":"${DOCKER_USER_HOME}"/Documents:rw \
-  -B "${CACHE_ROOT}/cache/wandb":"${DOCKER_USER_HOME}"/.cache/wandb:rw \
-  -B "${HOME}/.config":"${DOCKER_USER_HOME}"/.config:rw \
-  -B "${ISAACLAB_DIR}":/workspace/isaaclab:rw \
-  -B "${PERSISTENT_LOGS_DIR}":/workspace/isaaclab/logs:rw \
-  -B "${RUN_DIR}":/workspace/run:rw \
-  "${SIF_IMAGE}" bash -s <<'SCRIPT'
+singularity exec --nv --containall \
+  -B ${VENV_DIR}:${VENV_DIR}:rw \
+  -B ${PERSISTENT_CACHE_DIR}/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \
+  -B ${PERSISTENT_CACHE_DIR}/cache/huggingface:${DOCKER_USER_HOME}/.cache/huggingface:rw \
+  -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
+  -B ${RUN_DIR}:/workspace/run:rw \
+  -B ${SCRATCH_TMP}:/tmp:rw \
+  -B ${SCRATCH_TMP}:/var/tmp:rw \
+  --env APPTAINER_TMPDIR=${APPTAINER_TMPDIR} \
+  --env TMPDIR=${SCRATCH_TMP} \
+  --env PIP_CACHE_DIR=${DOCKER_USER_HOME}/.cache/pip \
+  --env HF_TOKEN=${HF_TOKEN:-} \
+  --env HF_HOME=${DOCKER_USER_HOME}/.cache/huggingface \
+  --env XDG_CACHE_HOME=${DOCKER_USER_HOME}/.cache \
+  --env VENV_DIR=${VENV_DIR} \
+  "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
-PYTHON_EXE="/isaac-sim/kit/python/bin/python3"
 PROJECT_ROOT="/workspace/run"
-export UV_LINK_MODE=copy   # avoid hardlink-across-filesystem errors
 
-# -----------------------------------------------
-# Install uv into the overlay
-# -----------------------------------------------
-echo "[CONTAINER] Installing uv..."
-"$PYTHON_EXE" -m pip install --no-cache-dir uv
+# ---- Create or reuse venv ----
+if [ ! -f "${VENV_DIR}/bin/activate" ]; then
+  echo "[APPTAINER] Creating venv at ${VENV_DIR}..."
+  python3 -m venv --without-pip "${VENV_DIR}" --system-site-packages
+  
+  echo "[APPTAINER] Bootstrapping pip..."
+  curl -sS https://bootstrap.pypa.io/get-pip.py | "${VENV_DIR}/bin/python3"
+else
+  echo "[APPTAINER] Reusing existing venv at ${VENV_DIR}"
+fi
+source "${VENV_DIR}/bin/activate"
 
-# Add uv's script dir to PATH so install_externals.sh can find it
-SCRIPTDIR="$("$PYTHON_EXE" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')"
-export PATH="${SCRIPTDIR}:/usr/local/bin:${PATH}"
-export UV_PYTHON="$PYTHON_EXE"
-echo "[CONTAINER] uv: $(command -v uv 2>/dev/null || echo 'not found on PATH')"
+echo "[APPTAINER] Python: $(which python) ($(python --version))"
 
+# ---- Upgrade pip ----
+pip install --upgrade pip setuptools wheel
+
+# ---- Patch DINO requirements if present ----
 if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
-  echo "[CONTAINER] Patching DINO requirements..."
-  sed -i '/xformers==0.0.18/d'                        "$PROJECT_ROOT/external/dino/requirements.txt"
-  sed -i 's/torch==2.0.0/torch>=2.0/g'               "$PROJECT_ROOT/external/dino/requirements.txt"
-  sed -i 's/torchvision==0.15.0/torchvision>=0.15/g' "$PROJECT_ROOT/external/dino/requirements.txt"
-  sed -i '/--extra-index-url/d'                       "$PROJECT_ROOT/external/dino/requirements.txt"
+  echo "[APPTAINER] Patching DINO requirements..."
+  sed -i "/xformers==0.0.18/d"                        "$PROJECT_ROOT/external/dino/requirements.txt"
+  sed -i "s/torch==2.0.0/torch>=2.0/g"               "$PROJECT_ROOT/external/dino/requirements.txt"
+  sed -i "s/torchvision==0.15.0/torchvision>=0.15/g" "$PROJECT_ROOT/external/dino/requirements.txt"
+  sed -i "/--extra-index-url/d"                       "$PROJECT_ROOT/external/dino/requirements.txt"
 fi
 
-# -----------------------------------------------
-echo "[CONTAINER] Installing cjepa project (editable, with dev extras)..."
-"$PYTHON_EXE" -m uv pip install --python "$PYTHON_EXE" --no-cache-dir \
-  -e "${PROJECT_ROOT}[dev]" || \
-"$PYTHON_EXE" -m uv pip install --python "$PYTHON_EXE" --no-cache-dir \
-  -e "${PROJECT_ROOT}"
+# ---- Install project (editable, with dev extras) ----
+echo "[APPTAINER] Installing cjepa project..."
+pip install -e "${PROJECT_ROOT}[dev]" || \
+  pip install -e "${PROJECT_ROOT}"
 
-for pkg in isaaclab isaaclab_assets isaaclab_tasks isaaclab_rl; do
-  target="/workspace/isaaclab/source/${pkg}"
-  if [ -d "$target" ] && ( [ -f "$target/pyproject.toml" ] || [ -f "$target/setup.py" ] ); then
-    echo "[CONTAINER] Installing $pkg..."
-    "$PYTHON_EXE" -m uv pip install --python "$PYTHON_EXE" --no-cache-dir -e "$target" || \
-      echo "[WARN] Install of $pkg failed, continuing."
-  else
-    echo "[CONTAINER] Skipping $pkg — not found or not a Python project"
-  fi
-done
+# ---- Install externals (DINO, V-JEPA2, etc.) ----
+if [ -f "$PROJECT_ROOT/scripts/install_externals.sh" ]; then
+  echo "[APPTAINER] Running install_externals.sh..."
+  bash "$PROJECT_ROOT/scripts/install_externals.sh"
+fi
 
-echo "[CONTAINER] Running install_externals.sh..."
-bash "$PROJECT_ROOT/scripts/install_externals.sh"
+# ---- Install wandb ----
+pip install wandb
 
-echo "[CONTAINER] Verifying..."
-"$PYTHON_EXE" - <<'PY'
+# ---- Verify installation ----
+echo ""
+echo "========== Installation Verification =========="
+python - <<PY
 import sys
-print("python", sys.version.split()[0])
+print(f"python {sys.version.split()[0]}")
+
 try:
     import torch
-    print("torch", torch.__version__, "| CUDA:", torch.cuda.is_available())
+    print(f"torch {torch.__version__} | CUDA: {torch.cuda.is_available()}")
 except Exception as e:
-    print("[WARN] torch:", e)
+    print(f"[WARN] torch: {e}")
+
 try:
     import numpy
-    print("numpy", numpy.__version__)
+    print(f"numpy {numpy.__version__}")
 except Exception as e:
-    print("[WARN] numpy:", e)
+    print(f"[WARN] numpy: {e}")
+
 try:
-    import isaaclab
-    print("isaaclab ->", isaaclab.__file__)
+    from world_model.architecture import WorldModel
+    print("world_model.architecture -> OK")
 except Exception as e:
-    print("[WARN] isaaclab:", e)
+    print(f"[WARN] world_model: {e}")
+
 try:
-    import cjepa
-    print("cjepa ->", cjepa.__file__)
+    from world_model.data import HFWindowDataset
+    print("world_model.data -> OK")
 except Exception as e:
-    print("[WARN] cjepa:", e)
+    print(f"[WARN] world_model.data: {e}")
+
+try:
+    import wandb
+    print(f"wandb {wandb.__version__}")
+except Exception as e:
+    print(f"[WARN] wandb: {e}")
+
+try:
+    import datasets
+    print(f"datasets {datasets.__version__}")
+except Exception as e:
+    print(f"[WARN] datasets: {e}")
 PY
 
-echo "[CONTAINER] Install complete."
-SCRIPT
+echo "========== Install complete =========="
+'
 
 echo "[NODE] Done."
-echo "[NODE] Add to your run scripts: --overlay ${OVERLAY_FILE}:ro"
+echo "[NODE] Venv installed at: ${VENV_DIR}"
+echo "[NODE] Training SLURM files will reuse this venv automatically."
