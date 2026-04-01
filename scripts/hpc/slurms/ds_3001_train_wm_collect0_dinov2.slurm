@@ -100,19 +100,14 @@ singularity exec \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
-# ---- Venv bootstrap (persists in scratch cache between runs) ----
+# ---- Activate venv (created by ds_3001_install.slurm) ----
 if [ ! -f "${VENV_DIR}/bin/activate" ]; then
-  echo "[APPTAINER] Creating venv at ${VENV_DIR}..."
-  python3 -m venv --without-pip "${VENV_DIR}" --system-site-packages
-  curl -sS https://bootstrap.pypa.io/get-pip.py | "${VENV_DIR}/bin/python3"
+  echo "[ERROR] Virtual environment not found at ${VENV_DIR}."
+  echo "Please run: sbatch scripts/hpc/slurms/ds_3001_install.slurm"
+  exit 1
 fi
 source "${VENV_DIR}/bin/activate"
 export PYTHONPATH="/workspace/run/src:${PYTHONPATH:-}"
-
-echo "[APPTAINER] venv: $(which python)"
-
-echo "[APPTAINER] installing /workspace/run into venv..."
-pip install -e /workspace/run
 
 echo "[APPTAINER] Starting experiment: ${EXPERIMENT_NAME}"
 
