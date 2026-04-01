@@ -89,6 +89,7 @@ def main():
     ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--out_dir', type=str, default='runs')
+    ap.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from (autodetects "latest.pt")')
     # Backbone configs
     ap.add_argument('--backbone', type=str, default='cnn', help='cnn, dinov2, or vjepa2')
     ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14', help='Specific model variant for the backbone')
@@ -170,11 +171,38 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon)
+    
+    # Auto-resume logic
+    start_epoch = 0
+    checkpoint_path = args.resume
+    if checkpoint_path is None:
+        # Check if latest.pt exists in out_dir
+        latest = os.path.join(args.out_dir, 'latest.pt')
+        if os.path.exists(latest):
+            checkpoint_path = latest
+            if main_process:
+                print(f"[RECOVERY] Found {latest}. Resuming automatically...")
 
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        if main_process:
+            print(f"Loading checkpoint: {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=args.device)
+        
+        # Load weights into the raw model
+        raw_model = model.module if isinstance(model, DDP) else model
+        raw_model.load_state_dict(ckpt['model'])
+        
+        if 'optimizer' in ckpt:
+            opt.load_state_dict(ckpt['optimizer'])
+        
+        start_epoch = ckpt.get('epoch', -1) + 1
+        if main_process:
+            print(f"Resuming from epoch {start_epoch}")
+    
     # Training loop
     t0 = time.time()
     step = 0
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         if sampler is not None:
             sampler.set_epoch(epoch)  # Ensure proper shuffling each epoch
 
@@ -216,6 +244,7 @@ def main():
             raw_model = model.module if isinstance(model, DDP) else model
             ckpt = {
                 'model': raw_model.state_dict(),
+                'optimizer': opt.state_dict(),
                 'epoch': epoch,
                 'args': vars(args),
             }
