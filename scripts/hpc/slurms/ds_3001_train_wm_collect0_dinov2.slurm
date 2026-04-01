@@ -6,11 +6,11 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=20GB
 #SBATCH --time=02:00:00
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --job-name=collect0_dinov2_exp
 #SBATCH --mail-type=END
 #SBATCH --account=ds_ga_3001_003-2026sp
-#SBATCH --partition=g2-standard-12
+#SBATCH --partition=c24m170-a100-2
 #SBATCH --output=../%x_%j.out
 #SBATCH --error=../%x_%j.err
 

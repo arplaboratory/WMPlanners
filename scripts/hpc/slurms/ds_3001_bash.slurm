@@ -6,11 +6,11 @@
 #SBATCH --mem=16GB
 #SBATCH --time=01:00:00
 #SBATCH --account=ds_ga_3001_003-2026sp
-#SBATCH --partition=interactive
+#SBATCH --partition=c24m170-a100-2
 #SBATCH --job-name=ds3001_bash
 #SBATCH --output=../%x_%j.out
 #SBATCH --error=../%x_%j.err
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 
 set -euo pipefail
 
