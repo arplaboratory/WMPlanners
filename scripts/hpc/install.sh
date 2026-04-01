@@ -6,8 +6,9 @@ PROJECT_ROOT="${PROJECT_ROOT:-${HOME}/ds_ga_3001}"
 REPO_NAME="$(basename -- "${PROJECT_ROOT}")"
 INSTALL_SLURM="${INSTALL_SLURM:-scripts/hpc/install.slurm}"
 SCRATCH_DIR="/scratch/lq2146" # this is where we get our sif files from
-ISAAC_SIF="isaac-sim_5.1.0.sif"
-RCLONE_SIF="rclone.sif"
+ISAAC_SIF="${ISAAC_SIF:-isaac-sim_5.1.0.sif}"
+CUDA_SIF="${CUDA_SIF:-cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif}"
+RCLONE_SIF="${RCLONE_SIF:-rclone.sif}"
 
 INSTALL_ARGS=()
 while [[ $# -gt 0 ]]; do
@@ -40,6 +41,11 @@ if [ ! -f "$SCRATCH_DIR/$ISAAC_SIF" ]; then
   exit 1
 fi
 
+if [ ! -f "$SCRATCH_DIR/$CUDA_SIF" ]; then
+  echo "[INFO] $CUDA_SIF not found in $SCRATCH_DIR. Exiting ..."
+  exit 1
+fi
+
 # if HPC_HOST is burst or from a different user, copy files over
 if [ "$HPC_HOST" = "burst" ] || [ "$USER" != "lq2146" ]; then
   rclone copy \
@@ -50,6 +56,9 @@ if [ "$HPC_HOST" = "burst" ] || [ "$USER" != "lq2146" ]; then
     ":sftp,host=${HPC_HOST},user=${USER}:${PROJECT_ROOT}"
   rclone copy \
     "${SCRATCH_DIR}/${ISAAC_SIF}" \
+    ":sftp,host=${HPC_HOST},user=${USER}:${SCRATCH_DIR}/"
+  rclone copy \
+    "${SCRATCH_DIR}/${CUDA_SIF}" \
     ":sftp,host=${HPC_HOST},user=${USER}:${SCRATCH_DIR}/"
 fi
 

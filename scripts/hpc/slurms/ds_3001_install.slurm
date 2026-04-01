@@ -1,200 +1,165 @@
 #!/bin/bash
+# DS-GA 3001 — Install venv for world model training
+# Uses Ubuntu 24.04 CUDA SIF on /scratch.
+# Run this ONCE before submitting any ds_3001_train_wm_*.slurm experiment.
 
 #SBATCH --requeue
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
+#SBATCH --gres=gpu:1
 #SBATCH --mem=20GB
 #SBATCH --time=01:00:00
+#SBATCH --job-name=ds3001_install
 #SBATCH --mail-type=END
 #SBATCH --account=ds_ga_3001_003-2026sp
-#SBATCH --partition=n2c48m24
-#SBATCH --output=../slurm_%j.out
-#SBATCH --error=../slurm_%j.err
+#SBATCH --partition=g2-standard-12
+#SBATCH --output=../%x_%j.out
+#SBATCH --error=../%x_%j.err
 
 set -euo pipefail
 
-cd /scratch/$USER
+# Load user environment variables (e.g. HF_TOKEN)
+# shellcheck source=/dev/null
+[ -f "${HOME}/.envs" ] && source "${HOME}/.envs"
 
-if [ -d IsaacLab/.git ]; then
-  echo "[INFO] IsaacLab exists, updating safely..."
-  cd IsaacLab
-  if ! git diff --quiet || ! git diff --cached --quiet; then
-    STASH_FILE="../isaaclab_stash_$(date +%Y%m%d_%H%M%S).patch"
-    echo "[INFO] Local changes detected, stashing and saving to $STASH_FILE"
-    git stash push -u -m "Auto-stash before update on $(date)"
-    git stash show -p > "$STASH_FILE" || echo "[WARN] No diff to save in stash."
-  fi
-  # Fetch and fast-forward only
-  git fetch origin
-  git merge --ff-only origin/$(git rev-parse --abbrev-ref HEAD)
-  cd ..
-else
-  echo "[INFO] Cloning IsaacLab..."
-  git clone https://github.com/isaac-sim/IsaacLab.git
-fi
+# -----------------------------------------------
+# Paths
+# -----------------------------------------------
+SIF_IMAGE="/scratch/lq2146/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif"
+RUN_DIR="${SLURM_SUBMIT_DIR}"
 
-# Run singularity check
-# -------------------------------
-# Project workspace bootstrap
-# -------------------------------
-PROJECT_NAME="ds_ga_3001"
-# REMOTE_HOST="${HPC_HOST:-burst}"
-LOCAL_PROJECT="${HOME}/${PROJECT_NAME}"
-REMOTE_PROJECT="${HOME}/${PROJECT_NAME}"
-ISAACLAB_DIR="/scratch/$USER/IsaacLab"
-SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
-RCLONE_SIF="/scratch/$USER/rclone.sif"
-REMOTE_CONFIG="${HOME}/.config"
-
-#scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${REMOTE_HOST}:${RCLONE_SIF}" "${RCLONE_SIF}"
-#singularity exec --bind "${LOCAL_PROJECT}" "${RCLONE_SIF}" \
-#  rclone copy \
-#  --sftp-host="${REMOTE_HOST}" \
-#  --sftp-user="${USER}" \
-#  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-#  --sftp-ask-password=false \
-#  --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-#  ":sftp:${REMOTE_PROJECT}/" \
-#  "${LOCAL_PROJECT}/"
-#
-#singularity exec --bind "${ISAACLAB_DIR}" "${RCLONE_SIF}" \
-#  rclone copy \
-#  --sftp-host="${REMOTE_HOST}" \
-#  --sftp-user="${USER}" \
-#  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-#  --sftp-ask-password=false \
-#  --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-#  ":sftp:${ISAACLAB_DIR}/" \
-#  "${ISAACLAB_DIR}/"
-
-if [ ! -d "${HOME}/.config" ]; then
-  mkdir -p "${HOME}/.config"
-fi
-
-#singularity exec --bind "${HOME}/.config" "${RCLONE_SIF}" \
-#  rclone copy \
-#  --sftp-host="${REMOTE_HOST}" \
-#  --sftp-user="${USER}" \
-#  --sftp-key-file="${HOME}/.ssh/id_rsa" \
-#  --sftp-ask-password=false \
-#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-#   ":sftp:${REMOTE_CONFIG}/" \
-#   "${HOME}/.config/"
-
-# singularity exec --bind "/scratch/${USER}" "${RCLONE_SIF}" \
-#   rclone copy \
-#   --sftp-host="${REMOTE_HOST}" \
-#   --sftp-user="${USER}" \
-#   --sftp-key-file="${HOME}/.ssh/id_rsa" \
-#   --sftp-ask-password=false \
-#   --sftp-ssh="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
-#   ":sftp:${SIF_IMAGE}" \
-#   "/scratch/${USER}/"
-
-# -------------------------------
-# Set cluster paths based on submission context
-# -------------------------------
-RUN_DIR="${SLURM_SUBMIT_DIR}"                    # run inside the mirrored project
-PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
-PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
-
-# Isaac Sim container paths
-DOCKER_ISAACSIM_ROOT_PATH="/isaac-sim"
+PERSISTENT_CACHE_DIR="/scratch/$USER/world_model_cache"
 DOCKER_USER_HOME="/root"
+SCRATCH_TMP="/scratch/$USER/tmp"
+VENV_DIR="${PERSISTENT_CACHE_DIR}/venv"
 
-# Node-local cache & execution
-NODE_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-CACHE_ROOT="/scratch/$USER/docker-isaac-sim-cache"
 mkdir -p \
-  "${CACHE_ROOT}/cache/kit" \
-  "${CACHE_ROOT}/cache/ov" \
-  "${CACHE_ROOT}/cache/pip" \
-  "${CACHE_ROOT}/cache/glcache" \
-  "${CACHE_ROOT}/cache/computecache" \
-  "${CACHE_ROOT}/cache/wandb" \
-  "${CACHE_ROOT}/logs" \
-  "${CACHE_ROOT}/data" \
-  "${CACHE_ROOT}/documents" \
-  "${CACHE_ROOT}/kit-data"
+  "${PERSISTENT_CACHE_DIR}" \
+  "${PERSISTENT_CACHE_DIR}/cache/pip" \
+  "${PERSISTENT_CACHE_DIR}/cache/wandb" \
+  "${PERSISTENT_CACHE_DIR}/cache/huggingface" \
+  "${PERSISTENT_CACHE_DIR}/cache/torch" \
+  "${VENV_DIR}" \
+  "${SCRATCH_TMP}"
 
-mkdir -p "${PERSISTENT_LOGS_DIR}"
-touch "${PERSISTENT_LOGS_DIR}/.keep"
+export APPTAINER_TMPDIR="${SCRATCH_TMP}"
+export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
+mkdir -p "${HOME}/.config"
 
-# Python envs
-VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
-mkdir -p "${VENV_DIR}"
+echo "[NODE] SIF_IMAGE=${SIF_IMAGE}"
+echo "[NODE] RUN_DIR=${RUN_DIR}"
+echo "[NODE] VENV_DIR=${VENV_DIR}"
 
-BUILD_TMP="/scratch/$USER/pip_build_tmp"
-mkdir -p "$BUILD_TMP"
-
-# Prefer node-local tmp for apptainer/singularity scratch
-export APPTAINER_TMPDIR="${NODE_TMP}"
-export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
-export ISAAC_ARGS="$*"
-
-echo "[remote] ISAAC_ARGS=${ISAAC_ARGS}"
-
-# Execute with GPU and required binds
-CMD="--nv --containall \
+# -----------------------------------------------
+# Run install inside container
+# -----------------------------------------------
+singularity exec --nv --containall \
   -B ${VENV_DIR}:${VENV_DIR}:rw \
-  -B ${BUILD_TMP}:/tmp:rw \
-  -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
-  -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
-  -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
-  -B ${CACHE_ROOT}/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \
-  -B ${CACHE_ROOT}/cache/glcache:${DOCKER_USER_HOME}/.cache/nvidia/GLCache:rw \
-  -B ${CACHE_ROOT}/cache/computecache:${DOCKER_USER_HOME}/.nv/ComputeCache:rw \
-  -B ${CACHE_ROOT}/logs:${DOCKER_USER_HOME}/.nvidia-omniverse/logs:rw \
-  -B ${CACHE_ROOT}/data:${DOCKER_USER_HOME}/.local/share/ov/data:rw \
-  -B ${CACHE_ROOT}/documents:${DOCKER_USER_HOME}/Documents:rw \
-  -B ${CACHE_ROOT}/cache/wandb:${DOCKER_USER_HOME}/.cache/wandb:rw \
+  -B ${PERSISTENT_CACHE_DIR}/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \
+  -B ${PERSISTENT_CACHE_DIR}/cache/huggingface:${DOCKER_USER_HOME}/.cache/huggingface:rw \
+  -B ${PERSISTENT_CACHE_DIR}/cache/torch:${DOCKER_USER_HOME}/.cache/torch:rw \
   -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
-  -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
-  -B ${PERSISTENT_LOGS_DIR}:/workspace/isaaclab/logs:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
-  "
-
-echo "[remote] CMD to run: $CMD"
-
-singularity exec \
-  $CMD \
-  --env ISAAC_ARGS="$ISAAC_ARGS" \
-  --env VENV_DIR="$VENV_DIR" \
-  --env TMPDIR="/tmp" \
+  -B ${SCRATCH_TMP}:/tmp:rw \
+  -B ${SCRATCH_TMP}:/var/tmp:rw \
+  --env APPTAINER_TMPDIR=${APPTAINER_TMPDIR} \
+  --env TMPDIR=${SCRATCH_TMP} \
+  --env PIP_CACHE_DIR=${DOCKER_USER_HOME}/.cache/pip \
+  --env HF_TOKEN=${HF_TOKEN:-} \
+  --env HF_HOME=${DOCKER_USER_HOME}/.cache/huggingface \
+  --env TORCH_HOME=${DOCKER_USER_HOME}/.cache/torch \
+  --env XDG_CACHE_HOME=${DOCKER_USER_HOME}/.cache \
+  --env VENV_DIR=${VENV_DIR} \
   "${SIF_IMAGE}" bash -lc '
 set -euo pipefail
 
-if [ ! -d "${VENV_DIR}/bin" ]; then
-    echo "[SINGULARITY] Creating venv with Python"
-    /isaac-sim/python.sh -m venv ${VENV_DIR} --system-site-packages
+PROJECT_ROOT="/workspace/run"
+
+# ---- Create or reuse venv ----
+if [ ! -f "${VENV_DIR}/bin/activate" ]; then
+  echo "[APPTAINER] Creating venv at ${VENV_DIR}..."
+  python3 -m venv --without-pip "${VENV_DIR}" --system-site-packages
+  
+  echo "[APPTAINER] Bootstrapping pip..."
+  curl -sS https://bootstrap.pypa.io/get-pip.py | "${VENV_DIR}/bin/python3"
+else
+  echo "[APPTAINER] Reusing existing venv at ${VENV_DIR}"
 fi
 source "${VENV_DIR}/bin/activate"
 
-cd /workspace/isaaclab
-export ISAACLAB_PATH=/workspace/isaaclab
+echo "[APPTAINER] Python: $(which python) ($(python --version))"
 
-# Ensure the local package is installed in the container Python
+pip install --upgrade pip "setuptools<82" wheel wheel-stub
 
-echo "[SINGULARITY] Disk space inside container:"
-df -h /tmp
-df -h ${VENV_DIR}
+if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
+  echo "[APPTAINER] Patching DINO requirements..."
+  sed -i "/xformers==0.0.18/d"                        "$PROJECT_ROOT/external/dino/requirements.txt"
+  sed -i "s/torch==2.0.0/torch>=2.0/g"               "$PROJECT_ROOT/external/dino/requirements.txt"
+  sed -i "s/torchvision==0.15.0/torchvision>=0.15/g" "$PROJECT_ROOT/external/dino/requirements.txt"
+  sed -i "/--extra-index-url/d"                       "$PROJECT_ROOT/external/dino/requirements.txt"
+fi
 
-pip install --upgrade pip
-pip install -e /workspace/run[dev]
+echo "[APPTAINER] Installing cjepa project..."
+pip install -e "${PROJECT_ROOT}[dev]" || \
+  pip install -e "${PROJECT_ROOT}"
 
-echo "Using: $(which python)"
-echo "[singularity] ISAAC_ARGS=${ISAAC_ARGS}"
+# ---- Install externals (DINO, V-JEPA2, etc.) ----
+if [ -f "$PROJECT_ROOT/scripts/install_externals.sh" ]; then
+  echo "[APPTAINER] Running install_externals.sh..."
+  bash "$PROJECT_ROOT/scripts/install_externals.sh"
+fi
 
-# -------------------------------------------------------------
-# Post-Install Verification Tests
-# -------------------------------------------------------------
-echo "[test] Verifying core packages..."
-python -c "import torch; print(\"PyTorch \" + torch.__version__ + \" | CUDA Available: \" + str(torch.cuda.is_available()))"
-python -c "import numpy; print(\"NumPy \" + numpy.__version__)"
+pip install wandb
 
-# echo "[test] Running PyTest suite..."
-# python -m pytest /workspace/run/tests/ -v
+pip install "pyarrow>=21"
 
-echo "[SINGULARITY] Environment successfully built and verified!"
+echo ""
+echo "========== Installation Verification =========="
+python - <<PY
+import sys
+print(f"python {sys.version.split()[0]}")
+
+try:
+    import torch
+    print(f"torch {torch.__version__} | CUDA: {torch.cuda.is_available()}")
+except Exception as e:
+    print(f"[WARN] torch: {e}")
+
+try:
+    import numpy
+    print(f"numpy {numpy.__version__}")
+except Exception as e:
+    print(f"[WARN] numpy: {e}")
+
+try:
+    from world_model.architecture import WorldModel
+    print("world_model.architecture -> OK")
+except Exception as e:
+    print(f"[WARN] world_model: {e}")
+
+try:
+    from world_model.data import HFWindowDataset
+    print("world_model.data -> OK")
+except Exception as e:
+    print(f"[WARN] world_model.data: {e}")
+
+try:
+    import wandb
+    print(f"wandb {wandb.__version__}")
+except Exception as e:
+    print(f"[WARN] wandb: {e}")
+
+try:
+    import datasets
+    print(f"datasets {datasets.__version__}")
+except Exception as e:
+    print(f"[WARN] datasets: {e}")
+PY
+
+echo "========== Install complete =========="
 '
+
+echo "[NODE] Done."
+echo "[NODE] Venv installed at: ${VENV_DIR}"
+echo "[NODE] Training SLURM files will reuse this venv automatically."
