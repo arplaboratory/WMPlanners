@@ -7,12 +7,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
+#SBATCH --gres=gpu:1
 #SBATCH --mem=20GB
 #SBATCH --time=01:00:00
 #SBATCH --job-name=ds3001_install
 #SBATCH --mail-type=END
 #SBATCH --account=ds_ga_3001_003-2026sp
-#SBATCH --partition=c24m170-a100-2
+#SBATCH --partition=g2-standard-12
 #SBATCH --output=../%x_%j.out
 #SBATCH --error=../%x_%j.err
 
