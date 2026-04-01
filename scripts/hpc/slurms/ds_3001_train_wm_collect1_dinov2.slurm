@@ -107,6 +107,8 @@ if [ ! -f "${VENV_DIR}/bin/activate" ]; then
   exit 1
 fi
 source "${VENV_DIR}/bin/activate"
+echo "[APPTAINER] Fast project re-install..." 
+pip install -e /workspace/run --no-deps
 export PYTHONPATH="/workspace/run/src:${PYTHONPATH:-}"
 
 echo "[APPTAINER] Starting experiment: ${EXPERIMENT_NAME}"
