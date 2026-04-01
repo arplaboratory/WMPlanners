@@ -309,6 +309,56 @@ def generate_slurm_script(
     print(f"Generated Slurm script at {output_path}")
 
 
+# Each experiment type maps to a template file and pre-filled defaults.
+EXPERIMENT_TYPES: Dict[str, Dict] = {
+    "train_wm": {
+        "template": "ds_3001_train_wm_template.slurm",
+        "description": "World Model Training (torchrun DDP)",
+        "defaults": {
+            "PARTITION": "c24m170-a100-2",
+            "GRES": "gpu:2",
+            "NPROC": "2",
+            "TIME": "02:00:00",
+            "MEM": "20GB",
+            "ACCOUNT": "ds_ga_3001_003-2026sp",
+            "DATASET": "lquan9/collect1",
+            "BACKBONE": "dinov2",
+            "BACKBONE_NAME": "dinov2_vitb14",
+            "EPOCHS": "20",
+            "BATCH_SIZE": "64",
+            "LR": "3e-4",
+            "HORIZON": "8",
+            "IMG_SIZE": "224",
+        },
+    },
+}
+
+def generate_slurm_from_template(
+    template_path: Path,
+    placeholders: Dict[str, str],
+    output_path: Path,
+) -> Path:
+    """Read a template SLURM file, substitute {{KEY}} placeholders, and write output."""
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_path}")
+
+    content = template_path.read_text()
+    for key, value in placeholders.items():
+        content = content.replace(f"{{{{{key}}}}}", value)
+
+    # Auto-generate EXPERIMENT_NAME if not set
+    if "{{EXPERIMENT_NAME}}" in content and "EXPERIMENT_NAME" not in placeholders:
+        ds_short = placeholders.get("DATASET", "unknown").replace("/", "_")
+        bb = placeholders.get("BACKBONE", "cnn")
+        name = f"{ds_short}_{bb}_exp"
+        content = content.replace("{{EXPERIMENT_NAME}}", name)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content)
+    print(f"Generated Slurm script at {output_path}")
+    return output_path
+
+
 def submit_slurm(script_path: Path, dry_run: bool) -> None:
     """Submit the generated script via sbatch if available."""
 
@@ -1187,7 +1237,85 @@ def dialog_pretrain(ui: DialogUI) -> None:
         ui.msgbox(f"Slurm generation/submission failed: {exc}")
 
 
-def dialog_slurm(ui: DialogUI) -> None:
+def dialog_generate_slurm(ui: DialogUI) -> None:
+    """Generate a SLURM script from a template"""
+    import tempfile
+
+    try:
+        # 1. Experiment type selection
+        exp_choices = [(k, v["description"]) for k, v in EXPERIMENT_TYPES.items()]
+        exp_type = ui.menu("Select experiment type", exp_choices)
+        exp_cfg = EXPERIMENT_TYPES[exp_type]
+        defaults = dict(exp_cfg["defaults"])  # copy
+
+        # 2. SBATCH resource parameters (pre-filled)
+        defaults["PARTITION"] = ui.inputbox("Partition", defaults["PARTITION"])
+        defaults["GRES"] = ui.inputbox("GPU resources (e.g., gpu:2)", defaults["GRES"])
+        nproc_from_gres = defaults["GRES"].split(":")[-1] if ":" in defaults["GRES"] else "1"
+        defaults["NPROC"] = ui.inputbox("Processes per node (for torchrun)", nproc_from_gres)
+        defaults["TIME"] = ui.inputbox("Wall time (HH:MM:SS)", defaults["TIME"])
+        defaults["MEM"] = ui.inputbox("Memory (e.g., 20GB)", defaults["MEM"])
+        defaults["ACCOUNT"] = ui.inputbox("Account", defaults["ACCOUNT"])
+
+        # 3. Experiment-specific parameters (pre-filled)
+        if exp_type == "train_wm":
+            defaults["DATASET"] = ui.inputbox("HF Dataset (e.g., lquan9/collect1)", defaults["DATASET"])
+            defaults["BACKBONE"] = ui.menu("Select backbone", [
+                ("cnn", "CNN (built-in)"),
+                ("dinov2", "DINOv2 (ViT)"),
+                ("vjepa2", "V-JEPA2"),
+            ])
+            if defaults["BACKBONE"] != "cnn":
+                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", defaults["BACKBONE_NAME"])
+            else:
+                defaults["BACKBONE_NAME"] = "cnn"
+            defaults["EPOCHS"] = ui.inputbox("Epochs", defaults["EPOCHS"])
+            defaults["BATCH_SIZE"] = ui.inputbox("Batch size", defaults["BATCH_SIZE"])
+            defaults["LR"] = ui.inputbox("Learning rate", defaults["LR"])
+            defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
+            defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
+
+        # 4. Auto-generate experiment name
+        ds_short = defaults.get("DATASET", "unknown").replace("/", "_")
+        bb = defaults.get("BACKBONE", "cnn")
+        auto_name = f"{ds_short}_{bb}_exp"
+        defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
+
+        # 5. Generate the SLURM script
+        template_path = SLURMS_DIR / exp_cfg["template"]
+        output_name = f"ds_3001_{exp_type}_{defaults['EXPERIMENT_NAME']}.slurm"
+        output_path = SLURMS_DIR / output_name
+
+        use_temp = ui.yesno(f"Write to {output_path.name}? (No = use temp file)", default_no=False)
+        if not use_temp:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".slurm", prefix="ds3001_",
+                dir=str(SLURMS_DIR), delete=False
+            )
+            output_path = Path(tmp.name)
+            tmp.close()
+
+        generated = generate_slurm_from_template(template_path, defaults, output_path)
+
+        # 6. Show summary and optionally submit
+        summary = (
+            f"Generated: {generated.name}\n"
+            f"Experiment: {defaults['EXPERIMENT_NAME']}\n"
+            f"Partition: {defaults['PARTITION']} | GPUs: {defaults['GRES']}\n"
+            f"Dataset: {defaults.get('DATASET', 'N/A')} | Backbone: {defaults.get('BACKBONE', 'N/A')}"
+        )
+        ui.msgbox(summary)
+
+        if ui.yesno("Submit with sbatch now?", default_no=True):
+            submit_slurm(generated, dry_run=False)
+
+    except DialogCancelled:
+        return
+    except Exception as exc:
+        ui.msgbox(f"SLURM generation failed: {exc}")
+
+# Keep old dialog_slurm for backward compatibility (wraps an arbitrary command)
+def dialog_slurm_legacy(ui: DialogUI) -> None:
     try:
         raw_command = ui.inputbox("Command to wrap (e.g., python -m jepa.datasets.download ...)")
         if not raw_command:
@@ -1207,7 +1335,6 @@ def dialog_slurm(ui: DialogUI) -> None:
         params = prompt_slurm_parameters(ui)
         slurm_path = Path(ui.inputbox("Where should the Slurm script be written?", default_name))
         dry_run = False
-        # dry_run = prompt_dry_run(ui, config_key="last_slurm_dry_run")
     except DialogCancelled:
         return
 
@@ -1235,6 +1362,21 @@ def dialog_slurm(ui: DialogUI) -> None:
             submit_slurm(slurm_path, dry_run=dry_run)
     except Exception as exc:  # pragma: no cover - surfaced to the user
         ui.msgbox(f"Slurm generation/submission failed: {exc}")
+
+def dialog_slurm(ui: DialogUI) -> None:
+    """SLURM menu: choose between template-based generation or legacy wrapping."""
+    try:
+        mode = ui.menu("SLURM Script Generation", [
+            ("template", "Generate from template (ds_3001)"),
+            ("legacy", "Wrap an arbitrary command (old method)"),
+        ])
+    except DialogCancelled:
+        return
+
+    if mode == "template":
+        dialog_generate_slurm(ui)
+    else:
+        dialog_slurm_legacy(ui)
 def dialog_monitor(ui: DialogUI) -> None:
     user = os.environ.get("USER", "")
 
