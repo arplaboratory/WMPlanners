@@ -41,6 +41,7 @@ mkdir -p \
   "${CACHE_ROOT}/cache/pip" \
   "${CACHE_ROOT}/cache/wandb" \
   "${CACHE_ROOT}/cache/huggingface" \
+  "${CACHE_ROOT}/cache/torch" \
   "${CACHE_ROOT}/logs"
 
 mkdir -p "${PERSISTENT_LOGS_DIR}"
@@ -66,6 +67,7 @@ CMD="--nv --containall \
   -B ${CACHE_ROOT}/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \
   -B ${CACHE_ROOT}/cache/wandb:${DOCKER_USER_HOME}/.cache/wandb:rw \
   -B ${CACHE_ROOT}/cache/huggingface:${DOCKER_USER_HOME}/.cache/huggingface:rw \
+  -B ${CACHE_ROOT}/cache/torch:${DOCKER_USER_HOME}/.cache/torch:rw \
   -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
   -B ${PERSISTENT_LOGS_DIR}:/workspace/worldmodel/logs:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
@@ -77,6 +79,7 @@ CMD="--nv --containall \
   --env WANDB_RUN_NAME=${WANDB_RUN_NAME} \
   --env HF_TOKEN=${HF_TOKEN:-} \
   --env HF_HOME=${DOCKER_USER_HOME}/.cache/huggingface \
+  --env TORCH_HOME=${DOCKER_USER_HOME}/.cache/torch \
   --env EXPERIMENT_NAME=${EXPERIMENT_NAME}"
 
 CMD="${CMD} \

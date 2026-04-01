@@ -39,6 +39,7 @@ mkdir -p \
   "${PERSISTENT_CACHE_DIR}/cache/pip" \
   "${PERSISTENT_CACHE_DIR}/cache/wandb" \
   "${PERSISTENT_CACHE_DIR}/cache/huggingface" \
+  "${PERSISTENT_CACHE_DIR}/cache/torch" \
   "${VENV_DIR}" \
   "${SCRATCH_TMP}"
 
@@ -57,6 +58,7 @@ singularity exec --nv --containall \
   -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${PERSISTENT_CACHE_DIR}/cache/pip:${DOCKER_USER_HOME}/.cache/pip:rw \
   -B ${PERSISTENT_CACHE_DIR}/cache/huggingface:${DOCKER_USER_HOME}/.cache/huggingface:rw \
+  -B ${PERSISTENT_CACHE_DIR}/cache/torch:${DOCKER_USER_HOME}/.cache/torch:rw \
   -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
   -B ${SCRATCH_TMP}:/tmp:rw \
@@ -66,6 +68,7 @@ singularity exec --nv --containall \
   --env PIP_CACHE_DIR=${DOCKER_USER_HOME}/.cache/pip \
   --env HF_TOKEN=${HF_TOKEN:-} \
   --env HF_HOME=${DOCKER_USER_HOME}/.cache/huggingface \
+  --env TORCH_HOME=${DOCKER_USER_HOME}/.cache/torch \
   --env XDG_CACHE_HOME=${DOCKER_USER_HOME}/.cache \
   --env VENV_DIR=${VENV_DIR} \
   "${SIF_IMAGE}" bash -lc '
