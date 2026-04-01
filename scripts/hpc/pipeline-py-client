@@ -1276,9 +1276,9 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
             defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
 
-        # 4. Auto-generate experiment name from backbone + experiment type
+        ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
         bb = defaults.get("BACKBONE", "cnn")
-        auto_name = f"{exp_type}_{bb}"
+        auto_name = f"{ds_short}_{bb}_{exp_type}"
         defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
 
         # 5. Generate the SLURM script
