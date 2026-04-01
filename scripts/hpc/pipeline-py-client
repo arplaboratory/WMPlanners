@@ -177,21 +177,10 @@ def install_dependencies(pip_command: str, dry_run: bool) -> None:
     for command in commands:
         run_command(command, dry_run=dry_run if dry_run else False) if dry_run else subprocess.run(command, cwd=str(project_root), check=True)
 
-def discover_install_slurm_scripts() -> List[str]:
-    """Discover install Slurm scripts under the slurms/ directory."""
-    slurms_dir =  SLURMS_DIR
+def discover_slurm_scripts(pattern: str = "*.slurm") -> List[str]:
     candidates: List[str] = []
-    if slurms_dir.is_dir():
-        for path in sorted(slurms_dir.glob("*install*.slurm")):
-            candidates.append(str(path.relative_to(PROJECT_DIR)))
-    return candidates
-
-def discover_test_slurm_scripts() -> List[str]:
-    """Discover test Slurm scripts under the slurms/ directory."""
-    slurms_dir = SLURMS_DIR
-    candidates: List[str] = []
-    if slurms_dir.is_dir():
-        for path in sorted(slurms_dir.glob("*.slurm")):
+    if SLURMS_DIR.is_dir():
+        for path in sorted(SLURMS_DIR.glob(pattern)):
             candidates.append(str(path.relative_to(PROJECT_DIR)))
     return candidates
 
@@ -212,7 +201,6 @@ def download_assets(dry_run: bool, repo: str = None, out_dir: str = None, privat
 
 def build_pretrain_command(config: Path, datasets: Iterable[str], extra_args: Iterable[str]) -> List[str]:
     """Construct the pretraining command using app.main (V-JEPA)."""
-    # if no config (e.g., empty string or ''), use the default config
     command = [get_python_exe(), "-m", "app.main"]
     if config and Path(config).is_file():
         command.extend(["--fname", str(config)])
@@ -889,7 +877,7 @@ def prompt_dataset_selection(ui: DialogUI) -> List[str]:
 
 
 def prompt_install_slurm_selection(ui: DialogUI) -> str:
-    scripts = discover_install_slurm_scripts()
+    scripts = discover_slurm_scripts("*install*.slurm")
     if not scripts:
         raise FileNotFoundError("No install Slurm scripts found (pattern: *install*.slurm).")
 
@@ -987,7 +975,7 @@ def dialog_download_hf_dataset(ui: DialogUI) -> None:
         ui.msgbox(f"HF download failed: {exc}")
 
 def prompt_interactive_slurm_selection(ui: DialogUI) -> str:
-    scripts = discover_test_slurm_scripts()
+    scripts = discover_slurm_scripts("*.slurm")
     if not scripts:
         raise FileNotFoundError("No Slurm scripts found in slurms/ directory.")
 
