@@ -1266,8 +1266,10 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
                 ("dinov2", "DINOv2 (ViT)"),
                 ("vjepa2", "V-JEPA2"),
             ])
-            if defaults["BACKBONE"] != "cnn":
-                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", defaults["BACKBONE_NAME"])
+            if defaults["BACKBONE"] == "dinov2":
+                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "dinov2_vitb14")
+            elif defaults["BACKBONE"] == "vjepa2":
+                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "vjepa2_vit_giant")
             else:
                 defaults["BACKBONE_NAME"] = "cnn"
             defaults["EPOCHS"] = ui.inputbox("Epochs", defaults["EPOCHS"])
