@@ -97,6 +97,7 @@ def main():
     ap.add_argument('--experiment_name', type=str, default=None, help='WANDB run name (default: auto-generated)')
     ap.add_argument('--wandb', action='store_true', default=False, help='Enable WANDB logging')
     ap.add_argument('--pose_threshold', type=float, default=0.1, help='L2 threshold for pose accuracy metric')
+    ap.add_argument('--num_workers', type=int, default=8, help='Number of dataloader workers')
     # DDP
     ap.add_argument('--ddp', action='store_true', default=False, help='Enable DistributedDataParallel training')
     args = ap.parse_args()
@@ -144,7 +145,8 @@ def main():
         shuffle = False
 
     dl = DataLoader(ds, batch_size=args.batch_size, shuffle=shuffle, sampler=sampler,
-                    num_workers=0, collate_fn=collate_fn, drop_last=True)
+                    num_workers=args.num_workers, collate_fn=collate_fn, drop_last=True,
+                    pin_memory=True if "cuda" in str(args.device) else False)
 
     odom_dim = ds.D_odom
     imu_dim = ds.D_imu
@@ -235,8 +237,9 @@ def main():
         print("[Evaluation] Computing pose MSE and accuracy ...")
         print("=" * 60)
 
-        eval_dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=0,
-                             collate_fn=collate_fn, drop_last=False)
+        eval_dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
+                             num_workers=args.num_workers, collate_fn=collate_fn, drop_last=False,
+                             pin_memory=True if "cuda" in str(args.device) else False)
         eval_metrics = evaluate_pose(model, eval_dl, cfg, threshold=args.pose_threshold)
 
         print(f"  Pose MSE:      {eval_metrics['pose_mse']:.6f}")

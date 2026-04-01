@@ -124,6 +124,7 @@ torchrun --standalone --nproc_per_node={{NPROC}} \
   --experiment_name {{EXPERIMENT_NAME}} \
   --epochs {{EPOCHS}} \
   --batch_size {{BATCH_SIZE}} \
+  --num_workers {{NUM_WORKERS}} \
   --lr {{LR}} \
   --horizon {{HORIZON}} \
   --img_size {{IMG_SIZE}} \

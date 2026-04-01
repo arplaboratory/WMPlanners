@@ -330,6 +330,7 @@ EXPERIMENT_TYPES: Dict[str, Dict] = {
             "LR": "3e-4",
             "HORIZON": "8",
             "IMG_SIZE": "224",
+            "NUM_WORKERS": "8",
         },
     },
 }
@@ -1286,6 +1287,7 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             defaults["LR"] = ui.inputbox("Learning rate", defaults["LR"])
             defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
             defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
+            defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", "8"))
 
         ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
         bb = defaults.get("BACKBONE", "cnn")
