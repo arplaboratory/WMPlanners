@@ -87,10 +87,8 @@ source "${VENV_DIR}/bin/activate"
 
 echo "[APPTAINER] Python: $(which python) ($(python --version))"
 
-# ---- Upgrade pip ----
-pip install --upgrade pip "setuptools<82" wheel
+pip install --upgrade pip "setuptools<82" wheel wheel-stub
 
-# ---- Patch DINO requirements if present ----
 if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
   echo "[APPTAINER] Patching DINO requirements..."
   sed -i "/xformers==0.0.18/d"                        "$PROJECT_ROOT/external/dino/requirements.txt"
@@ -99,7 +97,6 @@ if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
   sed -i "/--extra-index-url/d"                       "$PROJECT_ROOT/external/dino/requirements.txt"
 fi
 
-# ---- Install project (editable, with dev extras) ----
 echo "[APPTAINER] Installing cjepa project..."
 pip install -e "${PROJECT_ROOT}[dev]" || \
   pip install -e "${PROJECT_ROOT}"
@@ -110,10 +107,10 @@ if [ -f "$PROJECT_ROOT/scripts/install_externals.sh" ]; then
   bash "$PROJECT_ROOT/scripts/install_externals.sh"
 fi
 
-# ---- Install wandb ----
 pip install wandb
 
-# ---- Verify installation ----
+pip install "pyarrow>=21"
+
 echo ""
 echo "========== Installation Verification =========="
 python - <<PY
