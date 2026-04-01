@@ -23,6 +23,10 @@ def rollout_loss(model, batch, cfg: TrainConfig) -> Tuple[torch.Tensor, Dict[str
       - state prediction: decode(z_pred) vs state_target
       - risk prediction:  risk(z_pred) vs collision_target
     """
+    # Unwrap DDP if needed to access sub-modules directly
+    from torch.nn.parallel import DistributedDataParallel as DDP
+    raw = model.module if isinstance(model, DDP) else model
+
     device = torch.device(cfg.device)
     rgb = batch.rgb.to(device)       # (B,T,3,H,W)
     depth = batch.depth.to(device)   # (B,T,1,H,W)
@@ -43,7 +47,7 @@ def rollout_loss(model, batch, cfg: TrainConfig) -> Tuple[torch.Tensor, Dict[str
     state_targets = []
     risk_targets = []
     for k in range(H + 1):
-        out = model.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
+        out = raw.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
         z_targets.append(out.z)
         state_targets.append(odom[:, t0+k])  # Here we decode odom-like state; adapt if needed
         risk_targets.append(collision[:, t0+k])
@@ -55,11 +59,11 @@ def rollout_loss(model, batch, cfg: TrainConfig) -> Tuple[torch.Tensor, Dict[str
     # Rollout dynamics from z0 using actions (t0..t0+H-1)
     z0 = z_targets[:, 0]
     a_seq = action[:, t0:t0+H]  # (B,H,act)
-    z_pred = model.rollout(z0, a_seq)  # (B,H+1,z)
+    z_pred = raw.rollout(z0, a_seq)  # (B,H+1,z)
 
     # Decode state/risk
-    state_pred = model.state_head(z_pred)  # (B,H+1,state_dim)
-    risk_pred = model.risk_head(z_pred)    # (B,H+1,1)
+    state_pred = raw.state_head(z_pred)  # (B,H+1,state_dim)
+    risk_pred = raw.risk_head(z_pred)    # (B,H+1,1)
 
     # Targets: stop-grad on latent target to avoid collapse (JEPA-ish)
     z_tgt = z_targets.detach()

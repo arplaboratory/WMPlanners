@@ -111,7 +111,8 @@ export PYTHONPATH="/workspace/run/src:${PYTHONPATH:-}"
 
 echo "[APPTAINER] Starting experiment: ${EXPERIMENT_NAME}"
 
-python /workspace/run/scripts/world_model/train_world_model.py \
+torchrun --standalone --nproc_per_node=2 \
+  /workspace/run/scripts/world_model/train_world_model.py --ddp \
   --dataset lquan9/collect1 \
   --backbone cnn \
   --experiment_name collect1_cnn_exp \
