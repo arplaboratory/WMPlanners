@@ -37,7 +37,7 @@ def main() -> None:
         target_dir.mkdir(parents=True, exist_ok=True)
         
         print(f"[hf-download] {args.repo} -> {target_dir}")
-        token = os.environ.get("HF_TOKEN") if args.private else None
+        token = os.environ.get("HF_TOKEN")
         
         try:
             snapshot_download(
