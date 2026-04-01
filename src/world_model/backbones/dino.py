@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import torch
+from pathlib import Path
 from logging import getLogger
 
 from .base import ModelBundle
 from .registry import register
 
 logger = getLogger(__name__)
+
+_ROOT = Path(__file__).resolve().parents[3]
 
 
 def default_preprocess(img, size: int = 224):
@@ -29,7 +32,7 @@ def default_preprocess(img, size: int = 224):
 
 @register("dinov2")
 def build_dinov2(
-    repo_dir: str = "external/dino",
+    repo_dir: str = str(_ROOT / "external/dino"),
     model_name: str = "dinov2_vitb14",
     pretrained: bool = True,
     device: str = "cpu",

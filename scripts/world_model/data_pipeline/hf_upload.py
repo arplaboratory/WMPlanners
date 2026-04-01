@@ -1,101 +1,70 @@
-"""Stage 4 -- Create a Hugging Face dataset from selected windows for DINO-WM training."""
+"""Stage 3 -- Upload selected NPZ episodes to Hugging Face Hub."""
 
 from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Generator
 
+import numpy as np
 from PIL import Image as PILImage
 
-from .utils import load_csv, resolve_path
 
-
-def _iter_rows(
-    windows: list[dict],
-    bags_root: str,
-    image_index_cache: dict[str, dict[int, str]],
+def _iter_episode_frames(
+    episodes_dir: str,
 ) -> Generator[dict, None, None]:
-    """Yield one dict per frame across all selected windows.
+    """Yield one dict per frame across all selected episodes.
 
-    Each window dict is expected to have (at minimum):
-        bag_name, window_id, frame_ids, timestamps, odom_deltas
-
-    ``odom_deltas`` has length ``len(frame_ids) - 1``; the last frame in
-    each window is padded with zeros.
+    Each NPZ episode contains: rgb (T,H,W,3), depth (T,H,W),
+    imu (T,D), odom (T,D), action (T,D).
     """
-    for win in windows:
-        bag_name: str = win["bag_name"]
-        window_id: int = win["window_id"]
-        frame_ids: list[int] = win["frame_ids"]
-        timestamps: list[int] = win["timestamps"]
-        odom_deltas: list[list[float]] = win.get("odom_deltas", [])
-        n_frames = len(frame_ids)
+    ep_files = sorted(Path(episodes_dir).glob("ep_*.npz"))
 
-        # Resolve colour image paths via image_index.csv
-        if bag_name not in image_index_cache:
-            idx_path = os.path.join(bags_root, bag_name, "image_index.csv")
-            if os.path.isfile(idx_path):
-                df = load_csv(idx_path)
-                image_index_cache[bag_name] = dict(
-                    zip(df["frame_id"].tolist(), df["color_path"].tolist())
-                )
-            else:
-                image_index_cache[bag_name] = {}
+    for ep_path in ep_files:
+        ep_id = int(ep_path.stem.split("_")[1])
+        data = np.load(ep_path)
+        rgb = data["rgb"]         # (T, H, W, 3) uint8
+        odom = data["odom"]       # (T, D_odom) float32
+        action = data["action"]   # (T, D_act) float32
+        imu = data["imu"]         # (T, D_imu) float32
+        depth = data.get("depth")  # (T, H, W) float32 or None
+        n_frames = len(rgb)
 
-        fid_to_color = image_index_cache[bag_name]
-        bag_dir = os.path.join(bags_root, bag_name)
+        for t in range(n_frames):
+            image = PILImage.fromarray(rgb[t])
 
-        for i, fid in enumerate(frame_ids):
-            # Odom delta: use window odom_deltas for frames 0..n-2, zeros for last
-            if i < len(odom_deltas):
-                dx, dy, dz, ax, ay, az = odom_deltas[i]
-            else:
-                dx = dy = dz = ax = ay = az = 0.0
-
-            # Resolve image path
-            color_rel = fid_to_color.get(fid, "")
-            color_abs = resolve_path(color_rel, bag_dir) if color_rel else ""
-
-            # Load image (or None if missing)
-            if color_abs:
-                try:
-                    image = PILImage.open(color_abs).convert("RGB")
-                except (FileNotFoundError, OSError):
-                    image = None
-            else:
-                image = None
-
-            yield {
-                "bag_name": bag_name,
-                "window_id": window_id,
-                "frame_idx_in_window": i,
-                "frame_id": fid,
-                "timestamp_ns": timestamps[i],
-                "odom_dx": float(dx),
-                "odom_dy": float(dy),
-                "odom_dz": float(dz),
-                "odom_ax": float(ax),
-                "odom_ay": float(ay),
-                "odom_az": float(az),
+            row = {
+                "episode_id": ep_id,
+                "frame_idx": t,
                 "image": image,
             }
 
+            # Flatten odom, action, imu into named columns
+            for j, val in enumerate(odom[t]):
+                row[f"odom_{j}"] = float(val)
+            for j, val in enumerate(action[t]):
+                row[f"action_{j}"] = float(val)
+            for j, val in enumerate(imu[t]):
+                row[f"imu_{j}"] = float(val)
+
+            if depth is not None:
+                row["depth_mean"] = float(depth[t].mean())
+
+            yield row
+
 
 def run_hf_upload(
-    corpus_dir: str,
-    bags_root: str,
+    episodes_dir: str,
     repo_id: str | None = None,
     private: bool = True,
 ) -> str:
-    """Create HF dataset from selected windows and optionally push to Hub.
+    """Create HF dataset from selected NPZ episodes and optionally push to Hub.
 
     Parameters
     ----------
-    corpus_dir : str
-        Directory containing ``selected_windows_full.json`` (Stage 3 output).
-    bags_root : str
-        Root directory containing per-bag folders, each with ``image_index.csv``.
+    episodes_dir : str
+        Directory containing ep_*.npz files (output of select_episodes).
     repo_id : str | None
         If provided, push the dataset to this Hugging Face Hub repository.
     private : bool
@@ -104,64 +73,89 @@ def run_hf_upload(
     Returns
     -------
     str
-        Path to the saved dataset directory (``{corpus_dir}/hf_dataset/``).
+        Path to the saved dataset directory.
     """
     from datasets import Dataset, Features, Image, Value
 
-    json_path = os.path.join(corpus_dir, "selected_windows_full.json")
-    with open(json_path) as f:
-        windows: list[dict] = json.load(f)
+    save_dir = os.path.join(episodes_dir, "hf_dataset")
 
-    save_dir = os.path.join(corpus_dir, "hf_dataset")
-
-    # Schema shared between empty and non-empty branches.
-    # Empty datasets use Value("string") for image to avoid a datasets bug
-    # with empty Image() columns on save_to_disk.
-    def _build_features(image_type):
-        return Features({
-            "bag_name": Value("string"),
-            "window_id": Value("int64"),
-            "frame_idx_in_window": Value("int64"),
-            "frame_id": Value("int64"),
-            "timestamp_ns": Value("int64"),
-            "odom_dx": Value("float64"),
-            "odom_dy": Value("float64"),
-            "odom_dz": Value("float64"),
-            "odom_ax": Value("float64"),
-            "odom_ay": Value("float64"),
-            "odom_az": Value("float64"),
-            "image": image_type,
-        })
-
-    if not windows:
-        # Force a shard file by adding a null row and filtering it out.
-        # This resolves an IndexError in load_from_disk for empty datasets.
-        empty_features = _build_features(Value("string"))
-        ds = Dataset.from_dict(
-            {col: [None] for col in empty_features},
-            features=empty_features,
-        ).filter(lambda _: False)
-        ds.save_to_disk(save_dir)
-        print(f"[hf_upload] Empty selection — saved empty dataset to {save_dir}")
+    ep_files = sorted(Path(episodes_dir).glob("ep_*.npz"))
+    if not ep_files:
+        print("[hf_upload] No episodes found — nothing to upload.")
+        os.makedirs(save_dir, exist_ok=True)
         return save_dir
 
-    # Collect all rows via generator (materialise into lists for from_dict)
-    image_index_cache: dict[str, dict[int, str]] = {}
-    rows = list(_iter_rows(windows, bags_root, image_index_cache))
+    # Probe first episode to determine sensor dims
+    probe = np.load(ep_files[0])
+    odom_dim = probe["odom"].shape[1]
+    action_dim = probe["action"].shape[1]
+    imu_dim = probe["imu"].shape[1]
+    has_depth = "depth" in probe
 
-    # Transpose list-of-dicts into dict-of-lists
-    columns: dict[str, list] = {key: [] for key in rows[0]}
-    for row in rows:
-        for key in columns:
-            columns[key].append(row[key])
+    # Build features schema
+    feature_dict = {
+        "episode_id": Value("int64"),
+        "frame_idx": Value("int64"),
+        "image": Image(),
+    }
+    for j in range(odom_dim):
+        feature_dict[f"odom_{j}"] = Value("float32")
+    for j in range(action_dim):
+        feature_dict[f"action_{j}"] = Value("float32")
+    for j in range(imu_dim):
+        feature_dict[f"imu_{j}"] = Value("float32")
+    if has_depth:
+        feature_dict["depth_mean"] = Value("float32")
 
-    features = _build_features(Image())
-    ds = Dataset.from_dict(columns, features=features)
+    features = Features(feature_dict)
+
+    ds = Dataset.from_generator(
+        _iter_episode_frames,
+        gen_kwargs={"episodes_dir": episodes_dir},
+        features=features,
+        cache_dir=os.path.join(save_dir, ".cache"),
+    )
+
     ds.save_to_disk(save_dir)
-    print(f"[hf_upload] Saved {len(ds)} rows ({len(windows)} windows) to {save_dir}")
+    n_episodes = len(ep_files)
+    print(f"[hf_upload] Saved {len(ds)} frames ({n_episodes} episodes) to {save_dir}")
 
     if repo_id:
+        repo_id = repo_id.strip("'\"")
         ds.push_to_hub(repo_id, private=private)
         print(f"[hf_upload] Pushed to https://huggingface.co/datasets/{repo_id}")
 
     return save_dir
+
+
+def main() -> None:
+    """Standalone CLI for creating / uploading the HF dataset."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Create a Hugging Face dataset from selected NPZ episodes",
+    )
+    parser.add_argument(
+        "--episodes-dir", required=True,
+        help="Directory containing ep_*.npz files",
+    )
+    parser.add_argument(
+        "--push-to-hub", default=None,
+        help="HF Hub repo ID (e.g. dmody1/wm-data). Omit to save locally only.",
+    )
+    parser.add_argument(
+        "--private", action="store_true", default=False,
+        help="Make the Hub repo private",
+    )
+    args = parser.parse_args()
+
+    save_dir = run_hf_upload(
+        episodes_dir=args.episodes_dir,
+        repo_id=args.push_to_hub,
+        private=args.private,
+    )
+    print(f"[hf_upload] Dataset saved to {save_dir}")
+
+
+if __name__ == "__main__":
+    main()

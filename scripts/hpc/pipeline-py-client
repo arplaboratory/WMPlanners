@@ -35,16 +35,39 @@ if not GLOBAL_EXP_DIR.exists():
 
 REPO_ROOT = PROJECT_DIR 
 SETTINGS = PROJECT_DIR / ".jepa_config.json"
-
 src_dir = PROJECT_DIR / "src"
+
 if src_dir.exists():
     current_pythonpath = os.environ.get("PYTHONPATH", "")
     os.environ["PYTHONPATH"] = f"{src_dir}:{current_pythonpath}" if current_pythonpath else str(src_dir)
+
+def load_dotenv():
+    """Load environment variables from ~/.envs if it exists."""
+    dotenv_path = Path.home() / ".envs"
+    if dotenv_path.exists():
+        for line in dotenv_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                try:
+                    key, value = line.split("=", 1)
+                    # Strip potential export prefix and quotes
+                    key = key.replace("export ", "").strip()
+                    value = value.strip().strip("'").strip('"')
+                    if key not in os.environ:
+                        os.environ[key] = value
+                except ValueError:
+                    continue
+
+load_dotenv()
 
 
 CONFIGS_DIR = GLOBAL_EXP_DIR / "configs"
 SLURMS_DIR = ROOT / "slurms"
 DATA_DIR = GLOBAL_EXP_DIR / "data"
+
+def get_python_exe() -> str:
+    """Use the same Python executable that is running this client."""
+    return sys.executable
 
 # Ensure directories exist
 CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -173,36 +196,31 @@ def install_dependencies(pip_command: str, dry_run: bool) -> None:
     for command in commands:
         run_command(command, dry_run=dry_run if dry_run else False) if dry_run else subprocess.run(command, cwd=str(project_root), check=True)
 
-def discover_install_slurm_scripts() -> List[str]:
-    """Discover install Slurm scripts under the slurms/ directory."""
-    slurms_dir =  SLURMS_DIR
+def discover_slurm_scripts(pattern: str = "*.slurm") -> List[str]:
     candidates: List[str] = []
-    if slurms_dir.is_dir():
-        for path in sorted(slurms_dir.glob("*install*.slurm")):
-            candidates.append(str(path.relative_to(PROJECT_DIR)))
-    return candidates
-
-def discover_test_slurm_scripts() -> List[str]:
-    """Discover test Slurm scripts under the slurms/ directory."""
-    slurms_dir = SLURMS_DIR
-    candidates: List[str] = []
-    if slurms_dir.is_dir():
-        for path in sorted(slurms_dir.glob("*.slurm")):
+    if SLURMS_DIR.is_dir():
+        for path in sorted(SLURMS_DIR.glob(pattern)):
             candidates.append(str(path.relative_to(PROJECT_DIR)))
     return candidates
 
 
-def download_assets(dry_run: bool) -> None:
-    """Download project assets from assets.yml."""
-    command = ["python", "scripts/download_assets.py"]
+def download_assets(dry_run: bool, repo: str = None, out_dir: str = None, private: bool = False) -> None:
+    """Download project assets or HF datasets."""
+    command = [get_python_exe(), "scripts/utils/download_assets.py"]
+    if repo:
+        command.extend(["--repo", repo])
+    if out_dir:
+        command.extend(["--out_dir", out_dir])
+    if private:
+        command.append("--private")
+        
     run_command(command, dry_run=dry_run)
 
 
 
 def build_pretrain_command(config: Path, datasets: Iterable[str], extra_args: Iterable[str]) -> List[str]:
     """Construct the pretraining command using app.main (V-JEPA)."""
-    # if no config (e.g., empty string or ''), use the default config
-    command = ["python", "-m", "app.main"]
+    command = [get_python_exe(), "-m", "app.main"]
     if config and Path(config).is_file():
         command.extend(["--fname", str(config)])
 
@@ -226,7 +244,7 @@ def build_rloclab_train_command(
     if use_isaaclab_launcher:
         command: List[str] = ["./isaaclab.sh", "-p", "scripts/rsl_rl/train.py"]
     else:
-        command = ["python", "src/rloclab/scripts/rsl_rl/train.py"]
+        command = [get_python_exe(), "src/rloclab/scripts/rsl_rl/train.py"]
 
     command.extend(["--task", task, "--agent", agent])
     if max_iterations is not None:
@@ -292,6 +310,57 @@ def generate_slurm_script(
     print(f"Generated Slurm script at {output_path}")
 
 
+# Each experiment type maps to a template file and pre-filled defaults.
+EXPERIMENT_TYPES: Dict[str, Dict] = {
+    "train_wm": {
+        "template": "ds_3001_train_wm_template.slurm",
+        "description": "World Model Training (torchrun DDP)",
+        "defaults": {
+            "PARTITION": "c24m170-a100-2",
+            "GRES": "gpu:2",
+            "NPROC": "2",
+            "TIME": "02:00:00",
+            "MEM": "20GB",
+            "ACCOUNT": "ds_ga_3001_003-2026sp",
+            "DATASET": "lquan9/collect1",
+            "BACKBONE": "dinov2",
+            "BACKBONE_NAME": "dinov2_vitb14",
+            "EPOCHS": "20",
+            "BATCH_SIZE": "64",
+            "LR": "3e-4",
+            "HORIZON": "8",
+            "IMG_SIZE": "224",
+            "NUM_WORKERS": "8",
+        },
+    },
+}
+
+def generate_slurm_from_template(
+    template_path: Path,
+    placeholders: Dict[str, str],
+    output_path: Path,
+) -> Path:
+    """Read a template SLURM file, substitute {{KEY}} placeholders, and write output."""
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_path}")
+
+    content = template_path.read_text()
+    for key, value in placeholders.items():
+        content = content.replace(f"{{{{{key}}}}}", value)
+
+    # Auto-generate EXPERIMENT_NAME if not set
+    if "{{EXPERIMENT_NAME}}" in content and "EXPERIMENT_NAME" not in placeholders:
+        ds_short = placeholders.get("DATASET", "unknown").replace("/", "_")
+        bb = placeholders.get("BACKBONE", "cnn")
+        name = f"{ds_short}_{bb}_exp"
+        content = content.replace("{{EXPERIMENT_NAME}}", name)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content)
+    print(f"Generated Slurm script at {output_path}")
+    return output_path
+
+
 def submit_slurm(script_path: Path, dry_run: bool) -> None:
     """Submit the generated script via sbatch if available."""
 
@@ -317,7 +386,9 @@ def handle_download_assets(args: argparse.Namespace) -> None:
     download_assets(dry_run=args.dry_run)
 
 def handle_test(args: argparse.Namespace) -> None:
-    command = ["pytest", "tests/"] + args.extra_args
+    python_exe = get_python_exe()
+    pytest_bin = Path(python_exe).parent / "pytest"
+    command = [str(pytest_bin if pytest_bin.exists() else "pytest"), "tests/"] + args.extra_args
     run_command(command, dry_run=args.dry_run)
     if getattr(args, "slurm_path", None):
         slurm_path = Path(args.slurm_path)
@@ -332,7 +403,7 @@ def handle_test(args: argparse.Namespace) -> None:
 
 def handle_world_model_dataset(args: argparse.Namespace) -> None:
     command = [
-        "python", "scripts/world_model/make_toy_dataset.py",
+        get_python_exe(), "scripts/world_model/make_toy_dataset.py",
         "--out_dir", args.out_dir,
         "--episodes", str(args.episodes),
         "--steps", str(args.steps)
@@ -351,7 +422,7 @@ def handle_world_model_dataset(args: argparse.Namespace) -> None:
 
 def handle_world_model_train(args: argparse.Namespace) -> None:
     command = [
-        "python", "scripts/world_model/train_world_model.py",
+        get_python_exe(), "scripts/world_model/train_world_model.py",
         "--data_dir", args.data_dir,
         "--epochs", str(args.epochs),
         "--batch_size", str(args.batch_size)
@@ -377,7 +448,7 @@ def handle_world_model_train(args: argparse.Namespace) -> None:
 
 def handle_world_model_eval(args: argparse.Namespace) -> None:
     command = [
-        "python", "scripts/world_model/eval_mpc.py",
+        get_python_exe(), "scripts/world_model/eval_mpc.py",
         "--ckpt", args.ckpt,
     ] + args.extra_args
     run_command(command, dry_run=args.dry_run)
@@ -393,7 +464,7 @@ def handle_world_model_eval(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 def handle_dino_demo(args: argparse.Namespace) -> None:
-    command = ["python", "src/world_model/dino_demo.py"]
+    command = [get_python_exe(), "src/world_model/dino_demo.py"]
     if getattr(args, "config", None):
         command.extend(["--config", args.config])
     command.extend(args.extra_args)
@@ -485,7 +556,7 @@ def handle_rloclab_train(args: argparse.Namespace) -> None:
 
 def handle_curate_dataset(args: argparse.Namespace) -> None:
     command = [
-        "python",
+        get_python_exe(),
         "scripts/hpc/helpers/curate_jepa_dataset.py",
         "--input-root",
         args.input_root,
@@ -876,7 +947,7 @@ def prompt_dataset_selection(ui: DialogUI) -> List[str]:
 
 
 def prompt_install_slurm_selection(ui: DialogUI) -> str:
-    scripts = discover_install_slurm_scripts()
+    scripts = [s for s in discover_slurm_scripts("*install*.slurm") if "template" not in s.lower()]
     if not scripts:
         raise FileNotFoundError("No install Slurm scripts found (pattern: *install*.slurm).")
 
@@ -943,11 +1014,38 @@ def dialog_download_assets(ui: DialogUI) -> None:
         return
     try:
         download_assets(dry_run=dry_run)
+        ui.msgbox("Assets downloaded successfully.")
     except Exception as exc:  # pragma: no cover - surfaced to the user
         ui.msgbox(f"Download failed: {exc}")
 
+def dialog_download_hf_dataset(ui: DialogUI) -> None:
+    try:
+        repo = ui.inputbox("Hugging Face Repository (e.g., lquan9/collect1)", config.get("last_hf_repo", "lquan9/collect1"))
+        if not repo:
+            return
+        
+        subset = repo.split("/")[-1]
+        out_dir = ui.inputbox("Local directory", str(DATA_DIR / subset))
+        if not out_dir:
+            return
+            
+        private = ui.yesno("Is this a private repository (requires HF_TOKEN)?", default_no=True)
+        dry_run = prompt_dry_run(ui, config_key="last_hf_download_dry_run")
+        
+        config["last_hf_repo"] = repo
+        save_config(config)
+        
+        download_assets(dry_run=dry_run, repo=repo, out_dir=out_dir, private=private)
+        if not dry_run:
+            ui.msgbox(f"Successfully downloaded {repo} to {out_dir}")
+            
+    except DialogCancelled:
+        return
+    except Exception as exc:
+        ui.msgbox(f"HF download failed: {exc}")
+
 def prompt_interactive_slurm_selection(ui: DialogUI) -> str:
-    scripts = discover_test_slurm_scripts()
+    scripts = [s for s in discover_slurm_scripts("*.slurm") if "template" not in s.lower()]
     if not scripts:
         raise FileNotFoundError("No Slurm scripts found in slurms/ directory.")
 
@@ -1141,7 +1239,108 @@ def dialog_pretrain(ui: DialogUI) -> None:
         ui.msgbox(f"Slurm generation/submission failed: {exc}")
 
 
-def dialog_slurm(ui: DialogUI) -> None:
+def dialog_generate_slurm(ui: DialogUI) -> None:
+    """Generate a SLURM script from a template"""
+    import tempfile
+
+    try:
+        # 1. Experiment type selection
+        exp_choices = [(k, v["description"]) for k, v in EXPERIMENT_TYPES.items()]
+        exp_type = ui.menu("Select experiment type", exp_choices)
+        exp_cfg = EXPERIMENT_TYPES[exp_type]
+        defaults = dict(exp_cfg["defaults"])  # copy
+
+        # 2. SBATCH resource parameters (pre-filled)
+        defaults["PARTITION"] = ui.inputbox("Partition", defaults["PARTITION"])
+        defaults["GRES"] = ui.inputbox("GPU resources (e.g., gpu:2)", defaults["GRES"])
+        nproc_from_gres = defaults["GRES"].split(":")[-1] if ":" in defaults["GRES"] else "1"
+        defaults["NPROC"] = ui.inputbox("Processes per node (for torchrun)", nproc_from_gres)
+        defaults["TIME"] = ui.inputbox("Wall time (HH:MM:SS)", defaults["TIME"])
+        defaults["MEM"] = ui.inputbox("Memory (e.g., 20GB)", defaults["MEM"])
+        defaults["ACCOUNT"] = ui.inputbox("Account", defaults["ACCOUNT"])
+
+        # 3. Experiment-specific parameters (pre-filled)
+        if exp_type == "train_wm":
+            defaults["DATASET"] = ui.inputbox("HF Dataset (e.g., lquan9/collect1)", defaults["DATASET"])
+            defaults["BACKBONE"] = ui.menu("Select backbone", [
+                ("cnn", "CNN (built-in)"),
+                ("dinov2", "DINOv2 (ViT)"),
+                ("vjepa2", "V-JEPA2"),
+            ])
+            if defaults["BACKBONE"] == "dinov2":
+                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "dinov2_vitb14")
+            elif defaults["BACKBONE"] == "vjepa2":
+                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "vjepa2_vit_giant")
+            else:
+                defaults["BACKBONE_NAME"] = "cnn"
+
+            if defaults["BACKBONE"] in ("dinov2", "vjepa2"):
+                freeze = ui.yesno("Freeze backbone weights? (recommended for pretrained)", default_no=False)
+                defaults["EXTRA_FLAGS"] = "--freeze_backbone" if freeze else ""
+                batch_default = "16"
+            else:
+                defaults["EXTRA_FLAGS"] = ""
+                batch_default = defaults["BATCH_SIZE"]
+
+            defaults["EPOCHS"] = ui.inputbox("Epochs", defaults["EPOCHS"])
+            defaults["BATCH_SIZE"] = ui.inputbox("Batch size", batch_default)
+            defaults["LR"] = ui.inputbox("Learning rate", defaults["LR"])
+            defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
+            defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
+            defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", "8"))
+
+        ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
+        bb = defaults.get("BACKBONE", "cnn")
+        auto_name = f"{ds_short}_{bb}_{exp_type}"
+        defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
+
+        # 5. Generate the SLURM script
+        template_path = SLURMS_DIR / exp_cfg["template"]
+        output_name = f"ds_3001_{exp_type}_{defaults['EXPERIMENT_NAME']}.slurm"
+        output_path = SLURMS_DIR / output_name
+
+        use_temp = ui.yesno(f"Write to {output_path.name}? (No = use temp file)", default_no=False)
+        if not use_temp:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".slurm", prefix="ds3001_",
+                dir=str(SLURMS_DIR), delete=False
+            )
+            output_path = Path(tmp.name)
+            tmp.close()
+
+        generated = generate_slurm_from_template(template_path, defaults, output_path)
+
+        # 6. Show summary and optionally submit
+        summary = (
+            f"Generated: {generated.name}\n"
+            f"Experiment: {defaults['EXPERIMENT_NAME']}\n"
+            f"Partition: {defaults['PARTITION']} | GPUs: {defaults['GRES']}\n"
+            f"Dataset: {defaults.get('DATASET', 'N/A')} | Backbone: {defaults.get('BACKBONE', 'N/A')}"
+        )
+        ui.msgbox(summary)
+
+        if ui.yesno("Submit with sbatch now?", default_no=False):
+            if not shutil.which("sbatch"):
+                ui.msgbox("Error: sbatch not found in PATH.\n\nAre you on a login node? Try:\n  sbatch " + str(generated))
+            else:
+                try:
+                    result = subprocess.run(
+                        ["sbatch", str(generated)],
+                        capture_output=True, text=True, check=True,
+                    )
+                    ui.msgbox(f"Job submitted!\n\n{result.stdout.strip()}")
+                except subprocess.CalledProcessError as e:
+                    ui.msgbox(f"sbatch failed:\n{e.stderr or e.stdout or str(e)}")
+        else:
+            ui.msgbox(f"Script saved. Submit manually:\n  sbatch {generated}")
+
+    except DialogCancelled:
+        return
+    except Exception as exc:
+        ui.msgbox(f"SLURM generation failed: {exc}")
+
+# Keep old dialog_slurm for backward compatibility (wraps an arbitrary command)
+def dialog_slurm_legacy(ui: DialogUI) -> None:
     try:
         raw_command = ui.inputbox("Command to wrap (e.g., python -m jepa.datasets.download ...)")
         if not raw_command:
@@ -1161,7 +1360,6 @@ def dialog_slurm(ui: DialogUI) -> None:
         params = prompt_slurm_parameters(ui)
         slurm_path = Path(ui.inputbox("Where should the Slurm script be written?", default_name))
         dry_run = False
-        # dry_run = prompt_dry_run(ui, config_key="last_slurm_dry_run")
     except DialogCancelled:
         return
 
@@ -1189,6 +1387,21 @@ def dialog_slurm(ui: DialogUI) -> None:
             submit_slurm(slurm_path, dry_run=dry_run)
     except Exception as exc:  # pragma: no cover - surfaced to the user
         ui.msgbox(f"Slurm generation/submission failed: {exc}")
+
+def dialog_slurm(ui: DialogUI) -> None:
+    """SLURM menu: choose between template-based generation or legacy wrapping."""
+    try:
+        mode = ui.menu("SLURM Script Generation", [
+            ("template", "Generate from template (ds_3001)"),
+            ("legacy", "Wrap an arbitrary command (old method)"),
+        ])
+    except DialogCancelled:
+        return
+
+    if mode == "template":
+        dialog_generate_slurm(ui)
+    else:
+        dialog_slurm_legacy(ui)
 def dialog_monitor(ui: DialogUI) -> None:
     user = os.environ.get("USER", "")
 
@@ -1310,7 +1523,8 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
     ui = DialogUI()
     choices: List[Tuple[str, str]] = [
         ("install", "Queue install.slurm on HPC"),
-        ("download-assets", "Download datasets and assets via assets.yml"),
+        ("download-assets", "Download static assets via assets.yml"),
+        ("download-dataset", "Download HF dataset (e.g., lquan9/collect1)"),
         ("pretrain", "Launch pretraining and optional Slurm"),
         ("world-model", "Manage world model (Dataset, Train, Eval)"),
         ("test", "Run tests (pytest) and optional Slurm"),
@@ -1327,6 +1541,7 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
         "interactive": dialog_interactive,
         "pretrain": dialog_pretrain,
         "download-assets": dialog_download_assets,
+        "download-dataset": dialog_download_hf_dataset,
         "slurm": dialog_slurm,
         "monitor": dialog_monitor,
         "help": lambda ui: (

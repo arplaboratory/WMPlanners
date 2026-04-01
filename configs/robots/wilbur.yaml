@@ -1,0 +1,16 @@
+version: 1
+name: wilbur
+
+topics:
+  color: /wilbur/forward/color/image_rect_color/compressed
+  imu: /wilbur/imu/data
+  odom: /wilbur/odom
+
+sensors:
+  color_encoding: compressed
+  imu_dim: 10
+  odom_dim: 13
+
+action:
+  source: odom
+  dim: 13

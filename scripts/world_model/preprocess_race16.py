@@ -23,24 +23,10 @@ import numpy as np
 import pandas as pd
 from huggingface_hub import snapshot_download
 
+from scripts.world_model.sync_utils import nearest_merge
+
 
 # ── helpers ──────────────────────────────────────────────────────────────
-
-def _nearest_merge(target_ts: np.ndarray, src_df: pd.DataFrame) -> np.ndarray:
-    """For each target timestamp, pick the nearest row in src_df (by timestamp_ns).
-
-    Returns an (N, D) float32 array where D = number of value columns in src_df.
-    """
-    src_ts = src_df["timestamp_ns"].values
-    vals = src_df.drop(columns=["timestamp_ns"]).values.astype(np.float32)
-    idx = np.searchsorted(src_ts, target_ts, side="left")
-    idx = np.clip(idx, 1, len(src_ts) - 1)
-    # pick whichever neighbour is closer
-    left = np.abs(src_ts[idx - 1] - target_ts)
-    right = np.abs(src_ts[idx] - target_ts)
-    closer = np.where(left <= right, idx - 1, idx)
-    return vals[closer]
-
 
 def _load_image(path: str, size: tuple[int, int]) -> np.ndarray:
     """Load an image, resize, return as uint8 (RGB) or float32 (depth)."""
@@ -112,9 +98,9 @@ def main() -> None:
 
     # ── 4. time-synchronise CSVs to image timestamps ────────────────────
     print("Time-synchronising sensors to image timestamps …")
-    imu_sync = _nearest_merge(image_ts, imu_df)       # (N, 10)
-    odom_sync = _nearest_merge(image_ts, odom_df)      # (N, 13)
-    action_sync = _nearest_merge(image_ts, pos_cmd_df) # (N, 14)
+    imu_sync = nearest_merge(image_ts, imu_df)       # (N, 10)
+    odom_sync = nearest_merge(image_ts, odom_df)      # (N, 13)
+    action_sync = nearest_merge(image_ts, pos_cmd_df) # (N, 14)
 
     print(f"  IMU dims:    {imu_sync.shape[1]}")
     print(f"  Odom dims:   {odom_sync.shape[1]}")

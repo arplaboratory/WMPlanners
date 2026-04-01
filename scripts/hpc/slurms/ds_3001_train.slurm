@@ -6,11 +6,11 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=20GB
 #SBATCH --time=02:00:00
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --job-name=wm_train
 #SBATCH --mail-type=END
 #SBATCH --account=ds_ga_3001_003-2026sp
-#SBATCH --partition=g2-standard-12
+#SBATCH --partition=c24m170-a100-2
 #SBATCH --output=../%x_%j.out
 #SBATCH --error=../%x_%j.err
 
@@ -140,15 +140,14 @@ if [ ! -f "${VENV_DIR}/bin/activate" ]; then
   python -m venv "${VENV_DIR}" --system-site-packages
 fi
 source "${VENV_DIR}/bin/activate"
+echo "[APPTAINER] Fast project re-install..." 
+pip install -e /workspace/run --no-deps
 export PYTHONPATH="/workspace/run/src:${PYTHONPATH:-}"
 
 echo "[APPTAINER] /tmp usage:"; df -h /tmp || true
 echo "[APPTAINER] venv: $(which python)"
 echo "[APPTAINER] listing /workspace/run:"
 ls -la /workspace/run || true
-
-echo "[APPTAINER] installing /workspace/run into venv..."
-pip install -e /workspace/run
 
 echo "[APPTAINER] TASK_NAME=${TASK_NAME}"
 echo "[APPTAINER] WORLD_MODEL_ARGS=${WORLD_MODEL_ARGS}"

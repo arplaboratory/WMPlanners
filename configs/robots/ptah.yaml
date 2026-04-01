@@ -1,0 +1,16 @@
+version: 1
+name: ptah
+
+topics:
+  color: /ptah/forward/color/image_rect_color/compressed
+  imu: /ptah/imu/data
+  odom: /ptah/jackal_velocity_controller/odom
+
+sensors:
+  color_encoding: compressed
+  imu_dim: 10
+  odom_dim: 13
+
+action:
+  source: odom
+  dim: 13

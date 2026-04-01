@@ -1,6 +1,6 @@
-# World Model Training via JEPA
+# World Model Training
 
-This document covers the modular world model architecture, backbone testing, and training procedures for Embodied Learning and Vision.
+This document covers the modular world model architecture, backbone options, and training procedures.
 
 ## Modular World Model Architecture
 
@@ -21,113 +21,105 @@ The world model is designed with a **modular backbone architecture**, allowing y
 
 ---
 
-## Environment Setup
+## Data
 
-To ensure compatibility with pre-trained backbones and internal tools, we use a centralized setup script:
+### HuggingFace Datasets (Recommended)
+
+Download datasets via the pipeline client or directly:
 
 ```bash
-bash scripts/python_setup.sh
-source .venv/bin/activate
+# Via pipeline client (recommended)
+python scripts/hpc/pipeline-py-client
+# → Select "Download HF dataset" → enter repo name (e.g., lquan9/collect1)
+
+# Or directly in Python
+from huggingface_hub import snapshot_download
+snapshot_download("lquan9/collect1", repo_type="dataset", local_dir="data/collect1")
 ```
 
-This enforces **Python 3.11** and correctly initializes all external submodules.
+### Toy Dataset (Local Testing)
 
----
-
-## Backbone Demo and Standalone Testing
-
-Before training the full world model, you can test the vision backbones using the standalone demo script. This is useful for verifying that models load correctly and datasets are being parsed properly.
-
-### Configuration (`configs/config.yaml`)
-
-The demo script is driven by a YAML configuration file:
-
-```yaml
-# Model configuration
-model:
-  name: "dinov2"  # Options: "vjepa2", "dinov2"
-  model_name: "dinov2_vitb14"  # Model variant
-  pretrained: true
-  device: "cpu"  # "cuda" or "cpu"
-
-# Dataset configuration
-dataset:
-  type: "video"  # "video" or "pair"
-  batch_size: 2
-  num_workers: 2
-
-  # Video dataset specific args
-  video_args:
-    num_frames: 16
-    sampling_stride: 4
-    crop_size: 256
-    random_clip: true
-
-  # Pair dataset specific args
-  pair_args:
-    random_pair: true
-    image_size: 224
-
-# Training configuration (for demo purposes)
-training:
-  epochs: 1
-  log_every: 10
-```
-
-### Running the Demo
-Launch the demo using the installed CLI command:
-```bash
-dino --config configs/config.yaml
-```
-
-### Verification Tests
-Run these scripts to verify specific components:
-
-- **DINOv2 Loading**: `python tests/test_dino_load.py`
-- **Pairwise Dataset**: `python tests/test_pairdataset.py`
-- **Video Dataset**: `python tests/test_videodataset.py`
-- **Full Architecture**: `python -m pytest tests/test_world_model.py`
-
----
-
-## World Model Training Pipeline
-
-The training pipeline supports two phases: self-supervised representation learning and task-specific adaptation.
-
-### 1. Data Preparation
-For initial experiments, you can generate a toy dataset:
 ```bash
 python scripts/world_model/make_toy_dataset.py --out_dir data/toy --episodes 200
 ```
 
-### 2. Training Commands
+---
 
-**Basic CNN Training:**
-```bash
-python scripts/world_model/train_world_model.py --dataset data/toy --dataset_type npz --epochs 20 --out_dir runs/cnn
-```
+## Training
 
-**Training with DINOv2 Backbone (Frozen):**
+### Single-GPU Training (Local)
+
 ```bash
 python scripts/world_model/train_world_model.py \
-    --data_dir data/toy \
-    --dataset_type npz \
-    --backbone dinov2 \
-    --backbone_name dinov2_vits14 \
-    --freeze_backbone \
-    --epochs 10 \
-    --out_dir runs/dino
+  --dataset data/toy --dataset_type npz \
+  --backbone cnn --epochs 20 --out_dir runs/cnn
+```
+
+### Multi-GPU DDP Training (HPC)
+
+All HPC experiments use `torchrun` with `--ddp` for DistributedDataParallel across 2 GPUs:
+
+```bash
+torchrun --standalone --nproc_per_node=2 \
+  scripts/world_model/train_world_model.py --ddp \
+  --dataset lquan9/collect1 \
+  --backbone dinov2 \
+  --backbone_name dinov2_vitb14 \
+  --freeze_backbone \
+  --epochs 20 --batch_size 64 \
+  --lr 3e-4 --horizon 8 --img_size 224 \
+  --wandb \
+  --out_dir runs/dinov2
 ```
 
 > [!TIP]
 > Use `--freeze_backbone` when using large pre-trained models (DINO/JEPA) to speed up training and prevent the encoder from collapsing on small robotics datasets.
 
-### 3. Evaluate MPC
-After training, evaluate the model's performance in a closed-loop MPC setting:
+### Launching on HPC
+
+Use the pipeline client to generate and submit SLURM scripts:
+
 ```bash
-python scripts/world_model/eval_mpc.py --ckpt runs/<dino|cnn|jepa>/latest.pt --episodes 20
+python scripts/hpc/pipeline-py-client
+# → Select "slurm" → "Generate from template (ds_3001)"
+# → Choose experiment type: train_wm
+# → Confirm pre-filled defaults (partition, GPUs, dataset, backbone)
+# → Submit
+```
+
+The template handles: container setup, venv activation, code refresh (`pip install -e`), and DDP launch.
+
+### Key Training Arguments
+
+| Argument | Description | Default |
+|---|---|---|
+| `--dataset` | HF repo ID or local path | *(required)* |
+| `--dataset_type` | `hf` or `npz` | `hf` |
+| `--backbone` | `cnn`, `dinov2`, or `vjepa2` | `cnn` |
+| `--backbone_name` | Model variant (e.g., `dinov2_vitb14`) | `dinov2_vitb14` |
+| `--freeze_backbone` | Freeze backbone weights | off |
+| `--ddp` | Enable DistributedDataParallel | off |
+| `--epochs` | Training epochs | `20` |
+| `--batch_size` | Batch size per GPU | `64` |
+| `--lr` | Learning rate | `3e-4` |
+| `--horizon` | Multi-step rollout horizon | `8` |
+| `--wandb` | Enable WANDB logging | off |
+| `--out_dir` | Checkpoint output directory | `runs` |
+
+---
+
+## Evaluation
+
+After training, evaluate pose prediction quality:
+
+```bash
+python scripts/world_model/eval_mpc.py --ckpt runs/<experiment>/latest.pt --episodes 20
 ```
 
 ## Dependencies and Notes
-- **External Submodules**: Ensure DINO and VJEPA2 submodules are initialized (`git submodule update --init --recursive`).
-- **Python Version**: Required **Python 3.11** for compatibility with legacy DINOv2 dependency pins (`torch==2.0.0`).
+- **External Submodules**: Ensure DINO and VJEPA2 submodules are initialized:
+  ```bash
+  git submodule update --init --recursive
+  ```
+- **Python Version**: Python 3.11+ required.
+- **setuptools**: Pinned to `<82` for compatibility with `torch 2.11.0`.

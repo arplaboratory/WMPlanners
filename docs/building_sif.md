@@ -3,6 +3,7 @@
 This guide documents how to manually reproduce the custom Isaac Sim Apptainer image
 (`isaac-sim_ds3001.sif`).
 
+(installing-apptainer-on-ubuntu)=
 ## Installing Apptainer on Ubuntu
 
 <details>
@@ -106,6 +107,7 @@ Each file should contain a line like:
 
 </details>
 
+(obtaining-the-base-sif)=
 ## Obtaining the Base SIF
 
 Apptainer stages the squashfs build in `$TMPDIR`, which defaults to `/tmp` — a
