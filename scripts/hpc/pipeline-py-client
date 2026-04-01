@@ -946,7 +946,7 @@ def prompt_dataset_selection(ui: DialogUI) -> List[str]:
 
 
 def prompt_install_slurm_selection(ui: DialogUI) -> str:
-    scripts = discover_slurm_scripts("*install*.slurm")
+    scripts = [s for s in discover_slurm_scripts("*install*.slurm") if "template" not in s.lower()]
     if not scripts:
         raise FileNotFoundError("No install Slurm scripts found (pattern: *install*.slurm).")
 
@@ -1044,7 +1044,7 @@ def dialog_download_hf_dataset(ui: DialogUI) -> None:
         ui.msgbox(f"HF download failed: {exc}")
 
 def prompt_interactive_slurm_selection(ui: DialogUI) -> str:
-    scripts = discover_slurm_scripts("*.slurm")
+    scripts = [s for s in discover_slurm_scripts("*.slurm") if "template" not in s.lower()]
     if not scripts:
         raise FileNotFoundError("No Slurm scripts found in slurms/ directory.")
 
@@ -1276,10 +1276,9 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
             defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
 
-        # 4. Auto-generate experiment name
-        ds_short = defaults.get("DATASET", "unknown").replace("/", "_")
+        # 4. Auto-generate experiment name from backbone + experiment type
         bb = defaults.get("BACKBONE", "cnn")
-        auto_name = f"{ds_short}_{bb}_exp"
+        auto_name = f"{exp_type}_{bb}"
         defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
 
         # 5. Generate the SLURM script
@@ -1307,8 +1306,20 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
         )
         ui.msgbox(summary)
 
-        if ui.yesno("Submit with sbatch now?", default_no=True):
-            submit_slurm(generated, dry_run=False)
+        if ui.yesno("Submit with sbatch now?", default_no=False):
+            if not shutil.which("sbatch"):
+                ui.msgbox("Error: sbatch not found in PATH.\n\nAre you on a login node? Try:\n  sbatch " + str(generated))
+            else:
+                try:
+                    result = subprocess.run(
+                        ["sbatch", str(generated)],
+                        capture_output=True, text=True, check=True,
+                    )
+                    ui.msgbox(f"Job submitted!\n\n{result.stdout.strip()}")
+                except subprocess.CalledProcessError as e:
+                    ui.msgbox(f"sbatch failed:\n{e.stderr or e.stdout or str(e)}")
+        else:
+            ui.msgbox(f"Script saved. Submit manually:\n  sbatch {generated}")
 
     except DialogCancelled:
         return
