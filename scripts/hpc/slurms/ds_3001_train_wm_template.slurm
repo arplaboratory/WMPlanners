@@ -127,6 +127,7 @@ torchrun --standalone --nproc_per_node={{NPROC}} \
   --lr {{LR}} \
   --horizon {{HORIZON}} \
   --img_size {{IMG_SIZE}} \
+  {{EXTRA_FLAGS}} \
   --wandb \
   --out_dir /workspace/worldmodel/logs/{{EXPERIMENT_NAME}}
 '

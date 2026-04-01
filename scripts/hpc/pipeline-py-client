@@ -1272,8 +1272,17 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
                 defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "vjepa2_vit_giant")
             else:
                 defaults["BACKBONE_NAME"] = "cnn"
+
+            if defaults["BACKBONE"] in ("dinov2", "vjepa2"):
+                freeze = ui.yesno("Freeze backbone weights? (recommended for pretrained)", default_no=False)
+                defaults["EXTRA_FLAGS"] = "--freeze_backbone" if freeze else ""
+                batch_default = "16"
+            else:
+                defaults["EXTRA_FLAGS"] = ""
+                batch_default = defaults["BATCH_SIZE"]
+
             defaults["EPOCHS"] = ui.inputbox("Epochs", defaults["EPOCHS"])
-            defaults["BATCH_SIZE"] = ui.inputbox("Batch size", defaults["BATCH_SIZE"])
+            defaults["BATCH_SIZE"] = ui.inputbox("Batch size", batch_default)
             defaults["LR"] = ui.inputbox("Learning rate", defaults["LR"])
             defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
             defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
