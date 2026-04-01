@@ -87,7 +87,7 @@ source "${VENV_DIR}/bin/activate"
 echo "[APPTAINER] Python: $(which python) ($(python --version))"
 
 # ---- Upgrade pip ----
-pip install --upgrade pip setuptools wheel
+pip install --upgrade pip "setuptools<82" wheel
 
 # ---- Patch DINO requirements if present ----
 if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
