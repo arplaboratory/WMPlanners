@@ -46,6 +46,10 @@ CONFIGS_DIR = GLOBAL_EXP_DIR / "configs"
 SLURMS_DIR = ROOT / "slurms"
 DATA_DIR = GLOBAL_EXP_DIR / "data"
 
+def get_python_exe() -> str:
+    """Use the same Python executable that is running this client."""
+    return sys.executable
+
 # Ensure directories exist
 CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
 SLURMS_DIR.mkdir(parents=True, exist_ok=True)
@@ -192,9 +196,16 @@ def discover_test_slurm_scripts() -> List[str]:
     return candidates
 
 
-def download_assets(dry_run: bool) -> None:
-    """Download project assets from assets.yml."""
-    command = ["python", "scripts/download_assets.py"]
+def download_assets(dry_run: bool, repo: str = None, out_dir: str = None, private: bool = False) -> None:
+    """Download project assets or HF datasets."""
+    command = [get_python_exe(), "scripts/utils/download_assets.py"]
+    if repo:
+        command.extend(["--repo", repo])
+    if out_dir:
+        command.extend(["--out_dir", out_dir])
+    if private:
+        command.append("--private")
+        
     run_command(command, dry_run=dry_run)
 
 
@@ -202,7 +213,7 @@ def download_assets(dry_run: bool) -> None:
 def build_pretrain_command(config: Path, datasets: Iterable[str], extra_args: Iterable[str]) -> List[str]:
     """Construct the pretraining command using app.main (V-JEPA)."""
     # if no config (e.g., empty string or ''), use the default config
-    command = ["python", "-m", "app.main"]
+    command = [get_python_exe(), "-m", "app.main"]
     if config and Path(config).is_file():
         command.extend(["--fname", str(config)])
 
@@ -226,7 +237,7 @@ def build_rloclab_train_command(
     if use_isaaclab_launcher:
         command: List[str] = ["./isaaclab.sh", "-p", "scripts/rsl_rl/train.py"]
     else:
-        command = ["python", "src/rloclab/scripts/rsl_rl/train.py"]
+        command = [get_python_exe(), "src/rloclab/scripts/rsl_rl/train.py"]
 
     command.extend(["--task", task, "--agent", agent])
     if max_iterations is not None:
@@ -317,7 +328,9 @@ def handle_download_assets(args: argparse.Namespace) -> None:
     download_assets(dry_run=args.dry_run)
 
 def handle_test(args: argparse.Namespace) -> None:
-    command = ["pytest", "tests/"] + args.extra_args
+    python_exe = get_python_exe()
+    pytest_bin = Path(python_exe).parent / "pytest"
+    command = [str(pytest_bin if pytest_bin.exists() else "pytest"), "tests/"] + args.extra_args
     run_command(command, dry_run=args.dry_run)
     if getattr(args, "slurm_path", None):
         slurm_path = Path(args.slurm_path)
@@ -332,7 +345,7 @@ def handle_test(args: argparse.Namespace) -> None:
 
 def handle_world_model_dataset(args: argparse.Namespace) -> None:
     command = [
-        "python", "scripts/world_model/make_toy_dataset.py",
+        get_python_exe(), "scripts/world_model/make_toy_dataset.py",
         "--out_dir", args.out_dir,
         "--episodes", str(args.episodes),
         "--steps", str(args.steps)
@@ -351,7 +364,7 @@ def handle_world_model_dataset(args: argparse.Namespace) -> None:
 
 def handle_world_model_train(args: argparse.Namespace) -> None:
     command = [
-        "python", "scripts/world_model/train_world_model.py",
+        get_python_exe(), "scripts/world_model/train_world_model.py",
         "--data_dir", args.data_dir,
         "--epochs", str(args.epochs),
         "--batch_size", str(args.batch_size)
@@ -377,7 +390,7 @@ def handle_world_model_train(args: argparse.Namespace) -> None:
 
 def handle_world_model_eval(args: argparse.Namespace) -> None:
     command = [
-        "python", "scripts/world_model/eval_mpc.py",
+        get_python_exe(), "scripts/world_model/eval_mpc.py",
         "--ckpt", args.ckpt,
     ] + args.extra_args
     run_command(command, dry_run=args.dry_run)
@@ -393,7 +406,7 @@ def handle_world_model_eval(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 def handle_dino_demo(args: argparse.Namespace) -> None:
-    command = ["python", "src/world_model/dino_demo.py"]
+    command = [get_python_exe(), "src/world_model/dino_demo.py"]
     if getattr(args, "config", None):
         command.extend(["--config", args.config])
     command.extend(args.extra_args)
@@ -485,7 +498,7 @@ def handle_rloclab_train(args: argparse.Namespace) -> None:
 
 def handle_curate_dataset(args: argparse.Namespace) -> None:
     command = [
-        "python",
+        get_python_exe(),
         "scripts/hpc/helpers/curate_jepa_dataset.py",
         "--input-root",
         args.input_root,
@@ -943,8 +956,35 @@ def dialog_download_assets(ui: DialogUI) -> None:
         return
     try:
         download_assets(dry_run=dry_run)
+        ui.msgbox("Assets downloaded successfully.")
     except Exception as exc:  # pragma: no cover - surfaced to the user
         ui.msgbox(f"Download failed: {exc}")
+
+def dialog_download_hf_dataset(ui: DialogUI) -> None:
+    try:
+        repo = ui.inputbox("Hugging Face Repository (e.g., lquan9/collect1)", config.get("last_hf_repo", "lquan9/collect1"))
+        if not repo:
+            return
+        
+        subset = repo.split("/")[-1]
+        out_dir = ui.inputbox("Local directory", str(DATA_DIR / subset))
+        if not out_dir:
+            return
+            
+        private = ui.yesno("Is this a private repository (requires HF_TOKEN)?", default_no=True)
+        dry_run = prompt_dry_run(ui, config_key="last_hf_download_dry_run")
+        
+        config["last_hf_repo"] = repo
+        save_config(config)
+        
+        download_assets(dry_run=dry_run, repo=repo, out_dir=out_dir, private=private)
+        if not dry_run:
+            ui.msgbox(f"Successfully downloaded {repo} to {out_dir}")
+            
+    except DialogCancelled:
+        return
+    except Exception as exc:
+        ui.msgbox(f"HF download failed: {exc}")
 
 def prompt_interactive_slurm_selection(ui: DialogUI) -> str:
     scripts = discover_test_slurm_scripts()
@@ -1310,7 +1350,8 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
     ui = DialogUI()
     choices: List[Tuple[str, str]] = [
         ("install", "Queue install.slurm on HPC"),
-        ("download-assets", "Download datasets and assets via assets.yml"),
+        ("download-assets", "Download static assets via assets.yml"),
+        ("download-dataset", "Download HF dataset (e.g., lquan9/collect1)"),
         ("pretrain", "Launch pretraining and optional Slurm"),
         ("world-model", "Manage world model (Dataset, Train, Eval)"),
         ("test", "Run tests (pytest) and optional Slurm"),
@@ -1327,6 +1368,7 @@ def launch_dialog_ui(_: argparse.Namespace | None = None) -> None:
         "interactive": dialog_interactive,
         "pretrain": dialog_pretrain,
         "download-assets": dialog_download_assets,
+        "download-dataset": dialog_download_hf_dataset,
         "slurm": dialog_slurm,
         "monitor": dialog_monitor,
         "help": lambda ui: (
