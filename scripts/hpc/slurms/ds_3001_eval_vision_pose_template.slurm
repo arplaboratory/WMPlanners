@@ -68,6 +68,7 @@ CMD="--nv --containall \
   -B ${CACHE_ROOT}/cache/wandb:${DOCKER_USER_HOME}/.cache/wandb:rw \
   -B ${CACHE_ROOT}/cache/huggingface:${DOCKER_USER_HOME}/.cache/huggingface:rw \
   -B ${CACHE_ROOT}/cache/torch:${DOCKER_USER_HOME}/.cache/torch:rw \
+  -B ${CACHE_ROOT}/data:${CACHE_ROOT}/data:rw \
   -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
   -B ${PERSISTENT_LOGS_DIR}:/workspace/worldmodel/logs:rw \
   -B ${RUN_DIR}:/workspace/run:rw \

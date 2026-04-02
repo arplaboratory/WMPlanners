@@ -50,6 +50,7 @@ USER_HOME="/root"
 # Cache and Temp setup
 CACHE_ROOT="/scratch/$USER/singularity-cache"
 mkdir -p "${CACHE_ROOT}/cache/pip"
+mkdir -p "${CACHE_ROOT}/cache/uv"
 
 SCRATCH_TMP="/scratch/$USER/tmp"
 mkdir -p "${SCRATCH_TMP}"
@@ -90,6 +91,7 @@ else
   echo "[NODE] Installing packages into sandbox..."
 
   mkdir -p "${SANDBOX_DIR}/root/.cache/pip"
+  mkdir -p "${SANDBOX_DIR}/root/.cache/uv"
   mkdir -p "${SANDBOX_DIR}/tmp"
   mkdir -p "${SANDBOX_DIR}/scratch"
   mkdir -p "${SANDBOX_DIR}/share/apps"
@@ -98,9 +100,11 @@ else
 
   singularity exec --writable --no-home \
     -B ${CACHE_ROOT}/cache/pip:${USER_HOME}/.cache/pip:rw \
+    -B ${CACHE_ROOT}/cache/uv:${USER_HOME}/.cache/uv:rw \
     -B ${SCRATCH_TMP}:/tmp:rw \
     -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
     -B ${RUN_DIR}:/workspace/run:rw \
+    --env UV_CACHE_DIR=${USER_HOME}/.cache/uv \
     "${SANDBOX_DIR}" bash -s <<'SCRIPT'
 set -euo pipefail
 export PYTHON_EXE="/isaac-sim/kit/python/bin/python3"

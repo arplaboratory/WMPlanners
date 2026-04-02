@@ -51,7 +51,7 @@ PERSISTENT_CACHE_DIR="/scratch/$USER/isaaclab_cache"
 VENV_DIR="${PERSISTENT_CACHE_DIR}/venv"
 SCRATCH_TMP="/scratch/$USER/tmp"
 
-mkdir -p "${VENV_DIR}" "${SCRATCH_TMP}" "${PERSISTENT_CACHE_DIR}/cache/pip"
+mkdir -p "${VENV_DIR}" "${SCRATCH_TMP}" "${PERSISTENT_CACHE_DIR}/cache/pip" "${PERSISTENT_CACHE_DIR}/cache/uv"
 export APPTAINER_TMPDIR="${SCRATCH_TMP}"
 
 echo "[NODE] Creating IsaacLab environment in ${VENV_DIR}..."
@@ -59,11 +59,13 @@ echo "[NODE] Creating IsaacLab environment in ${VENV_DIR}..."
 singularity exec --nv --containall \
   -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${PERSISTENT_CACHE_DIR}/cache/pip:/root/.cache/pip:rw \
+  -B ${PERSISTENT_CACHE_DIR}/cache/uv:/root/.cache/uv:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
   -B /scratch/$USER/IsaacLab:/workspace/isaaclab:rw \
   -B ${SCRATCH_TMP}:/tmp:rw \
   --env TMPDIR=${SCRATCH_TMP} \
   --env PIP_CACHE_DIR=/root/.cache/pip \
+  --env UV_CACHE_DIR=/root/.cache/uv \
   "${SIF_IMAGE}" bash -lc "
 set -euo pipefail
 
