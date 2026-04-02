@@ -22,8 +22,18 @@ SIF_IN="/scratch/$USER/isaac-sim_5.1.0.sif"
 # Output location on /scratch
 SIF_OUT="/scratch/$USER/isaac-sim_5.1.0_fixed.sif"
 
-# Use node-local SSD (Local disk) if available, fallback to /tmp
-TMP_SANDBOX="${SLURM_TMPDIR:-/tmp}/isaac_sandbox"
+# Create a large scratch temporary directory for Apptainer/Singularity
+SCRATCH_TMP="/scratch/$USER/tmp"
+mkdir -p "${SCRATCH_TMP}"
+
+export TMPDIR="${SCRATCH_TMP}"
+export APPTAINER_TMPDIR="${SCRATCH_TMP}"
+export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer_cache"
+export SINGULARITY_TMPDIR="${SCRATCH_TMP}"
+export SINGULARITY_CACHEDIR="${SCRATCH_TMP}/singularity_cache"
+
+# Build the sandbox here instead of node /tmp which is severely size-limited
+TMP_SANDBOX="${SCRATCH_TMP}/isaac_sandbox"
 
 if [ ! -f "${SIF_IN}" ]; then
   echo "[NODE] Original SIF not found at ${SIF_IN}. Please ensure it exists."
