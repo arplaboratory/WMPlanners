@@ -78,6 +78,11 @@ fi
 source \"${VENV_DIR}/bin/activate\"
 python -m pip install --upgrade pip 'setuptools<82' uv
 
+echo '[APPTAINER] Installing main project dependencies...'
+python -m uv pip install -e \"/workspace/run[dev]\" || \
+  python -m uv pip install -e \"/workspace/run\" || \
+  echo \"[APPTAINER] Warning: install of project root failed.\"
+
 echo '[APPTAINER] Installing IsaacLab packages...'
 for pkg in isaaclab isaaclab_assets isaaclab_tasks isaaclab_rl; do
   target=\"/workspace/isaaclab/source/\${pkg}\"

@@ -1304,20 +1304,17 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
             defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
             defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", "8"))
-            defaults["MEM"] = ui.inputbox("System RAM (e.g., 64GB)", defaults.get("MEM", "64GB"))
-            defaults["TIME"] = ui.inputbox("Walltime (HH:MM:SS)", defaults.get("TIME", "02:00:00"))
+            
+            ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
+            bb = defaults.get("BACKBONE", "cnn")
+            auto_name = f"{ds_short}_{bb}_{exp_type}"
+            defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
+            
         elif opt_choice == "wheeled_train":
             defaults["TASK_NAME"] = ui.inputbox("Task Name", defaults["TASK_NAME"])
             defaults["AGENT_NAME"] = ui.inputbox("Agent Name", defaults["AGENT_NAME"])
             defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment Name", defaults["EXPERIMENT_NAME"])
             defaults["EXTRA_FLAGS"] = ui.inputbox("Extra Args (e.g., --video)", defaults["EXTRA_FLAGS"])
-            defaults["MEM"] = ui.inputbox("System RAM (e.g., 32GB)", defaults.get("MEM", "32GB"))
-            defaults["TIME"] = ui.inputbox("Walltime (HH:MM:SS)", defaults.get("TIME", "02:00:00"))
-
-        ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
-        bb = defaults.get("BACKBONE", "cnn")
-        auto_name = f"{ds_short}_{bb}_{exp_type}"
-        defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
 
         # 5. Generate the SLURM script
         template_path = SLURMS_DIR / exp_cfg["template"]
