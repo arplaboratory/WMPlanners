@@ -18,6 +18,7 @@ class ModelBundle:
     preprocess: Callable
     feature_dim: Optional[int]
     modality: str  # ``"image"`` or ``"video"``
+    tubelet_size: int = 1
 
 
 class BaseBackbone(ABC, nn.Module):
