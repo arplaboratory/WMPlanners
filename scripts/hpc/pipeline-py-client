@@ -1286,24 +1286,27 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             if defaults["BACKBONE"] == "dinov2":
                 defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "dinov2_vitb14")
             elif defaults["BACKBONE"] == "vjepa2":
-                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "vjepa2_vit_giant")
+                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name (vit_large, vit_huge, vit_giant)", "vjepa2_vit_large")
             else:
                 defaults["BACKBONE_NAME"] = "cnn"
 
             if defaults["BACKBONE"] in ("dinov2", "vjepa2"):
-                freeze = ui.yesno("Freeze backbone weights? (recommended for pretrained)", default_no=False)
+                msg = "Freeze backbone weights? (HIGHLY RECOMMENDED for 20GB limit)" if defaults["BACKBONE"] == "vjepa2" else "Freeze backbone weights? (recommended)"
+                freeze = ui.yesno(msg, default_no=False)
                 defaults["EXTRA_FLAGS"] = "--freeze_backbone" if freeze else ""
-                batch_default = "16"
+                batch_default = "16" if defaults["BACKBONE"] == "vjepa2" else "32"
+                num_workers_default = "4" if defaults["BACKBONE"] == "vjepa2" else "8"
             else:
                 defaults["EXTRA_FLAGS"] = ""
                 batch_default = defaults["BATCH_SIZE"]
+                num_workers_default = "8"
 
             defaults["EPOCHS"] = ui.inputbox("Epochs", defaults["EPOCHS"])
             defaults["BATCH_SIZE"] = ui.inputbox("Batch size", batch_default)
             defaults["LR"] = ui.inputbox("Learning rate", defaults["LR"])
             defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
             defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
-            defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", "8"))
+            defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", num_workers_default))
             
             ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
             bb = defaults.get("BACKBONE", "cnn")
