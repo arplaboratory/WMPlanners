@@ -69,7 +69,7 @@ dino = "world_model.dino_demo:main"
 packages = [
   "src/cjepa",
   "src/world_model",
-  "src/models",
+  "src/rloclab",
   "src/wm_datasets",
   "src/utils"
 ]
