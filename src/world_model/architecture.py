@@ -11,6 +11,7 @@ import torch.nn as nn
 from .backbones import ModelBundle, create_model as create_backbone
 from .backbones.cnn import VisionEncoder
 from .components import Fusion, LatentDynamics, ProprioEncoder, StateHead, RiskHead
+from .components.dynamics import RSSMDynamics
 
 
 @dataclass
@@ -47,6 +48,7 @@ class WorldModel(nn.Module):
         backbone: Optional[str] = None,
         backbone_kwargs: Optional[dict] = None,
         freeze_backbone: bool = False,
+        dynamics_type: str = "mlp",
     ):
         super().__init__()
 
@@ -77,7 +79,11 @@ class WorldModel(nn.Module):
 
         # fusion & dynamics
         self.fusion = Fusion(z_vis=z_vis_dim, z_prop=z_prop_dim, z_out=z_dim)
-        self.dynamics = LatentDynamics(z_dim=z_dim, act_dim=act_dim)
+        
+        if dynamics_type.lower() == "rssm":
+            self.dynamics = RSSMDynamics(z_dim=z_dim, act_dim=act_dim)
+        else:
+            self.dynamics = LatentDynamics(z_dim=z_dim, act_dim=act_dim)
 
         # heads
         self.state_head = StateHead(z_dim=z_dim, state_dim=state_dim)
@@ -124,7 +130,16 @@ class WorldModel(nn.Module):
         B, T, _ = a_seq.shape
         z = z0
         zs = [z0]
-        for t in range(T):
-            z = self.dynamics(z, a_seq[:, t])
-            zs.append(z)
+        
+        # Check if the dynamics model requires a hidden state (e.g., RSSM)
+        if hasattr(self.dynamics, "get_initial_state"):
+            h = self.dynamics.get_initial_state(B, z0.device)
+            for t in range(T):
+                z, h = self.dynamics(z, a_seq[:, t], h)
+                zs.append(z)
+        else:
+            for t in range(T):
+                z = self.dynamics(z, a_seq[:, t])
+                zs.append(z)
+                
         return torch.stack(zs, dim=1)

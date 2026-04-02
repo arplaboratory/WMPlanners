@@ -14,7 +14,7 @@ class TrainConfig:
     lambda_state: float = 1.0
     lambda_risk: float = 0.2
 
-def rollout_loss(model, batch, cfg: TrainConfig) -> Tuple[torch.Tensor, Dict[str, float]]:
+def rollout_loss(model, batch, cfg: TrainConfig, target_model=None) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Compute multi-step latent dynamics loss.
 
     batch contains sequences length T. We take a random start and roll out H steps.
@@ -42,12 +42,17 @@ def rollout_loss(model, batch, cfg: TrainConfig) -> Tuple[torch.Tensor, Dict[str
     # Use the *first* part of sequence as start for simplicity
     t0 = 0
 
+    target_raw = target_model.module if target_model is not None and hasattr(target_model, "module") else target_model
+    if target_raw is None:
+        target_raw = raw
+
     # Encode all steps we need (t0..t0+H)
     z_targets = []
     state_targets = []
     risk_targets = []
     for k in range(H + 1):
-        out = raw.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
+        with torch.no_grad():
+            out = target_raw.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
         z_targets.append(out.z)
         state_targets.append(odom[:, t0+k])  # Here we decode odom-like state; adapt if needed
         risk_targets.append(collision[:, t0+k])

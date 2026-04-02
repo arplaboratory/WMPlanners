@@ -1321,6 +1321,14 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
                 batch_default = defaults["BATCH_SIZE"]
                 num_workers_default = "8"
 
+            if exp_type == "train_wm":
+                dynamics_type = ui.menu("Select dynamics type", [
+                    ("mlp", "Linear MLP Predictor (Exp 02-04)"),
+                    ("rssm", "Recurrent State-Space Model *GRU* (Exp 05)"),
+                    ("td-jepa", "TD-JEPA with EMA Target Encoder (Exp 06)"),
+                ])
+                defaults["EXTRA_FLAGS"] += f" --dynamics_type {dynamics_type}"
+
             defaults["EPOCHS"] = ui.inputbox("Epochs", defaults["EPOCHS"])
             defaults["BATCH_SIZE"] = ui.inputbox("Batch size", batch_default)
             defaults["LR"] = ui.inputbox("Learning rate", defaults["LR"])

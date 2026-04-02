@@ -94,6 +94,8 @@ def main():
     ap.add_argument('--backbone', type=str, default='cnn', help='cnn, dinov2, or vjepa2')
     ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14', help='Specific model variant for the backbone')
     ap.add_argument('--freeze_backbone', action='store_true', help='Freeze backbone weights during training')
+    ap.add_argument('--dynamics_type', type=str, default='mlp', choices=['mlp', 'rssm', 'td-jepa'], help='Type of dynamics module')
+    ap.add_argument('--ema_tau', type=float, default=0.996, help='EMA coefficient for TD-JEPA target model')
     # Experiment / logging
     ap.add_argument('--experiment_name', type=str, default=None, help='WANDB run name (default: auto-generated)')
     ap.add_argument('--wandb', action='store_true', default=False, help='Enable WANDB logging')
@@ -163,7 +165,15 @@ def main():
         backbone=args.backbone,
         backbone_kwargs={"model_name": args.backbone_name, "device": args.device},
         freeze_backbone=args.freeze_backbone,
+        dynamics_type="mlp" if args.dynamics_type == "td-jepa" else args.dynamics_type,
     ).to(args.device)
+
+    target_model = None
+    if args.dynamics_type == "td-jepa":
+        import copy
+        target_model = copy.deepcopy(model)
+        for p in target_model.parameters():
+            p.requires_grad = False
 
     if args.ddp:
         model = DDP(model, device_ids=[local_rank])
@@ -211,11 +221,16 @@ def main():
         epoch_steps = 0
 
         for batch in dl:
-            loss, logs = rollout_loss(model, batch, cfg)
+            loss, logs = rollout_loss(model, batch, cfg, target_model=target_model)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
+
+            if target_model is not None:
+                with torch.no_grad():
+                    for online_p, target_p in zip(model.parameters(), target_model.parameters()):
+                        target_p.data.mul_(args.ema_tau).add_(online_p.data, alpha=1.0 - args.ema_tau)
 
             epoch_loss += logs['loss']
             epoch_steps += 1
