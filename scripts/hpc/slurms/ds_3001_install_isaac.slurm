@@ -8,7 +8,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
 #SBATCH --gres=gpu:1
-#SBATCH --mem=32GB
+#SBATCH --mem=20GB
 #SBATCH --time=02:00:00
 #SBATCH --job-name=ds3001_install_isaac
 #SBATCH --mail-type=END
