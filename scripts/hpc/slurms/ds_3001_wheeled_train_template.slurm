@@ -4,13 +4,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
-#SBATCH --mem=20GB
-#SBATCH --time=02:00:00
-#SBATCH --gres=gpu:2
-#SBATCH --job-name=wheeled_rl
+#SBATCH --mem={{MEM}}
+#SBATCH --time={{TIME}}
+#SBATCH --gres={{GRES}}
+#SBATCH --job-name={{EXPERIMENT_NAME}}
 #SBATCH --mail-type=END
-#SBATCH --account=ds_ga_3001_003-2026sp
-#SBATCH --partition=c24m170-a100-2
+#SBATCH --account={{ACCOUNT}}
+#SBATCH --partition={{PARTITION}}
 #SBATCH --output=../%x_%j.out
 #SBATCH --error=../%x_%j.err
 
@@ -25,12 +25,12 @@ set -euo pipefail
 # -------------------------------
 PROJECT_NAME="rloclab"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
-SIF_IMAGE="/scratch/$USER/isaac-sim_ds3001.sif"
-SANDBOX_DIR="/scratch/$USER/isaac_container"
+SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
 
-PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
+PERSISTENT_CACHE_DIR="/scratch/$USER/isaaclab_cache"
 PERSISTENT_LOGS_DIR="/scratch/$USER/isaaclab/logs/${SLURM_JOB_ID}"
+VENV_DIR="${PERSISTENT_CACHE_DIR}/venv"
 
 # Isaac Sim container paths
 DOCKER_ISAACSIM_ROOT_PATH="/isaac-sim"
@@ -39,8 +39,7 @@ DOCKER_USER_HOME="/root"
 # Node-local cache & execution
 NODE_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
 # Use a persistent scratch-backed cache root so pip/builds don't exhaust node-local /tmp
-# Must match ds_3001_install.slurm so the pre-warmed pip/kit caches are reused
-CACHE_ROOT="/scratch/$USER/singularity-cache"
+CACHE_ROOT="${PERSISTENT_CACHE_DIR}"
 mkdir -p \
   "${CACHE_ROOT}/cache/kit" \
   "${CACHE_ROOT}/cache/ov" \
@@ -66,10 +65,10 @@ export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
 # -------------------------------
 # Wheeled RL defaults (MuSHR drift)
 # -------------------------------
-export ISAAC_ARGS="$*"
-TASK_NAME="${TASK_NAME:-Template-Rloclab-Mushr-DriftRL-v0}"
-AGENT_NAME="${AGENT_NAME:-rsl_rl_cfg_entry_point}"
-EXPERIMENT_NAME="${EXPERIMENT_NAME:-mushr_drift_rl}"
+export ISAAC_ARGS="{{EXTRA_FLAGS}}"
+TASK_NAME="{{TASK_NAME}}"
+AGENT_NAME="{{AGENT_NAME}}"
+EXPERIMENT_NAME="{{EXPERIMENT_NAME}}"
 
 EXPERIMENT_NAME_GREP=$(echo "$ISAAC_ARGS" | tr -s ' ' | grep -oP '(?<=--experiment_name )\S+' || true)
 if [[ -n "$EXPERIMENT_NAME_GREP" ]]; then
@@ -86,17 +85,13 @@ WHEELED_ASSETS_DATA_DIR="${RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR:-${RUN_DIR}/src/Wh
 export WANDB_PROJECT="${PROJECT_NAME}"
 export WANDB_RUN_NAME="${EXPERIMENT_NAME}_${SLURM_JOB_ID}"
 
-# Prefer baked SIF; fall back to sandbox directory if SIF not yet built
-if [ -f "${SIF_IMAGE}" ]; then
-  APPTAINER_IMAGE="${SIF_IMAGE}"
-elif [ -d "${SANDBOX_DIR}" ]; then
-  echo "[NODE] SIF not found; using sandbox at ${SANDBOX_DIR}"
-  APPTAINER_IMAGE="${SANDBOX_DIR}"
-else
-  echo "[NODE] ERROR: neither SIF (${SIF_IMAGE}) nor sandbox (${SANDBOX_DIR}) found." >&2; exit 1
+if [ ! -f "${SIF_IMAGE}" ]; then
+  echo "[NODE] SIF not found at ${SIF_IMAGE}"; exit 1
 fi
+APPTAINER_IMAGE="${SIF_IMAGE}"
 
 CMD="--nv --containall \
+  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -155,6 +150,13 @@ singularity exec \
   "${APPTAINER_IMAGE}" bash -lc '
 set -euo pipefail
 
+if [ ! -f "${VENV_DIR}/bin/activate" ]; then
+  echo "[ERROR] Virtual environment not found at ${VENV_DIR}."
+  echo "Please run: sbatch scripts/hpc/slurms/ds_3001_install_isaac.slurm"
+  exit 1
+fi
+source "${VENV_DIR}/bin/activate"
+
 cd /workspace/isaaclab || true
 export ISAACLAB_PATH=/workspace/isaaclab
 
@@ -172,7 +174,7 @@ echo "[APPTAINER] TASK_NAME=${TASK_NAME}"
 echo "[APPTAINER] AGENT_NAME=${AGENT_NAME}"
 echo "[APPTAINER] ISAAC_ARGS=${ISAAC_ARGS}"
 
-python /workspace/code/scripts/rl/wheeledlab_rl/scripts/train_rl.py \
+python /workspace/code/scripts/rl/rsl_rl/train.py \
   --task="${TASK_NAME}" \
   --agent="${AGENT_NAME}" \
   --headless \

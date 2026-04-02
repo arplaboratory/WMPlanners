@@ -333,6 +333,22 @@ EXPERIMENT_TYPES: Dict[str, Dict] = {
             "NUM_WORKERS": "8",
         },
     },
+    "wheeled_train": {
+        "template": "ds_3001_wheeled_train_template.slurm",
+        "description": "IsaacLab RL Training (Wheeled Agent)",
+        "defaults": {
+            "PARTITION": "c24m170-a100-2",
+            "GRES": "gpu:2",
+            "NPROC": "2",
+            "TIME": "02:00:00",
+            "MEM": "32GB",
+            "ACCOUNT": "ds_ga_3001_003-2026sp",
+            "TASK_NAME": "Template-Rloclab-Mushr-DriftRL-v0",
+            "AGENT_NAME": "rsl_rl_cfg_entry_point",
+            "EXPERIMENT_NAME": "mushr_drift_rl",
+            "EXTRA_FLAGS": "",
+        },
+    },
 }
 
 def generate_slurm_from_template(
@@ -1289,6 +1305,13 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
             defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", "8"))
             defaults["MEM"] = ui.inputbox("System RAM (e.g., 64GB)", defaults.get("MEM", "64GB"))
+            defaults["TIME"] = ui.inputbox("Walltime (HH:MM:SS)", defaults.get("TIME", "02:00:00"))
+        elif opt_choice == "wheeled_train":
+            defaults["TASK_NAME"] = ui.inputbox("Task Name", defaults["TASK_NAME"])
+            defaults["AGENT_NAME"] = ui.inputbox("Agent Name", defaults["AGENT_NAME"])
+            defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment Name", defaults["EXPERIMENT_NAME"])
+            defaults["EXTRA_FLAGS"] = ui.inputbox("Extra Args (e.g., --video)", defaults["EXTRA_FLAGS"])
+            defaults["MEM"] = ui.inputbox("System RAM (e.g., 32GB)", defaults.get("MEM", "32GB"))
             defaults["TIME"] = ui.inputbox("Walltime (HH:MM:SS)", defaults.get("TIME", "02:00:00"))
 
         ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
