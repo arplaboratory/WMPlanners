@@ -43,19 +43,34 @@ def rollout_loss(model, batch, cfg: TrainConfig, target_model=None) -> Tuple[tor
     t0 = 0
 
     target_raw = target_model.module if target_model is not None and hasattr(target_model, "module") else target_model
-    if target_raw is None:
-        target_raw = raw
 
     # Encode all steps we need (t0..t0+H)
     z_targets = []
     state_targets = []
     risk_targets = []
-    for k in range(H + 1):
+    
+    if target_raw is not None:
+        # TD-JEPA mode: encode all targets with frozen target model in pure no_grad
+        for k in range(H + 1):
+            with torch.no_grad():
+                out = target_raw.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
+            z_targets.append(out.z)
+            state_targets.append(odom[:, t0+k])  # Here we decode odom-like state; adapt if needed
+            risk_targets.append(collision[:, t0+k])
+    else:
+        # MLP / RSSM mode: anchor step (t0) retains gradients so it backprops through the vision backbone
+        out0 = raw.encode(rgb[:, t0], depth[:, t0], odom[:, t0], imu[:, t0])
+        z_targets.append(out0.z)
+        state_targets.append(odom[:, t0])
+        risk_targets.append(collision[:, t0])
+
+        # Sequence targets (t>0) are detached from the start, saving massive VRAM
         with torch.no_grad():
-            out = target_raw.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
-        z_targets.append(out.z)
-        state_targets.append(odom[:, t0+k])  # Here we decode odom-like state; adapt if needed
-        risk_targets.append(collision[:, t0+k])
+            for k in range(1, H + 1):
+                out = raw.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
+                z_targets.append(out.z)
+                state_targets.append(odom[:, t0+k])
+                risk_targets.append(collision[:, t0+k])
 
     z_targets = torch.stack(z_targets, dim=1)  # (B,H+1,z)
     state_targets = torch.stack(state_targets, dim=1)  # (B,H+1,D_odom)

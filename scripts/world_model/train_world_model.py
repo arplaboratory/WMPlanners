@@ -140,7 +140,6 @@ def main():
         ds = NPZEpisodeDataset(args.dataset, window=args.horizon + 1, img_size=args.img_size)
         collate_fn = collate_npz
 
-    # ---- Sampler: DDP uses DistributedSampler, else shuffle ----
     sampler = None
     shuffle = True
     if args.ddp:
