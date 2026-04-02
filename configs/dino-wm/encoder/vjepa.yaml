@@ -1,0 +1,2 @@
+_target_: world_model.backbones.vjepa.build_vjepa
+model_name: "vjepa2"
