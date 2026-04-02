@@ -22,8 +22,8 @@ SIF_IN="/scratch/$USER/isaac-sim_5.1.0.sif"
 # Output location on /scratch
 SIF_OUT="/scratch/$USER/isaac-sim_5.1.0_fixed.sif"
 
-# Use node-local SSD (Local disk) to avoid Lustre permission/noexec issues during conversion
-TMP_SANDBOX="${SLURM_TMPDIR}/isaac_sandbox"
+# Use node-local SSD (Local disk) if available, fallback to /tmp
+TMP_SANDBOX="${SLURM_TMPDIR:-/tmp}/isaac_sandbox"
 
 if [ ! -f "${SIF_IN}" ]; then
   echo "[NODE] Original SIF not found at ${SIF_IN}. Please ensure it exists."
