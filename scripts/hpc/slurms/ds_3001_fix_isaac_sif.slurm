@@ -16,18 +16,26 @@
 
 set -euo pipefail
 
+# Input SIF (original)
+SIF_IN="/scratch/$USER/isaac-sim_5.1.0.sif"
+
 # Output location on /scratch
 SIF_OUT="/scratch/$USER/isaac-sim_5.1.0_fixed.sif"
 
 # Use node-local SSD (Local disk) to avoid Lustre permission/noexec issues during conversion
 TMP_SANDBOX="${SLURM_TMPDIR}/isaac_sandbox"
 
-echo "[NODE] Pulling base image and building sandbox to local SSD..."
+if [ ! -f "${SIF_IN}" ]; then
+  echo "[NODE] Original SIF not found at ${SIF_IN}. Please ensure it exists."
+  exit 1
+fi
+
+echo "[NODE] Building sandbox from local SIF on local SSD..."
 # Use apptainer if available; fallback to singularity
 CMD="apptainer"
 which apptainer &>/dev/null || CMD="singularity"
 
-$CMD build --sandbox "${TMP_SANDBOX}" docker://nvcr.io/nvidia/isaac-sim:5.1.0
+$CMD build --sandbox "${TMP_SANDBOX}" "${SIF_IN}"
 
 echo "[NODE] Fixing permissions recursively on /isaac-sim inside the sandbox..."
 # Host-side chmod on the sandbox directory itself as the current user
