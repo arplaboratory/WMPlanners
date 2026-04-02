@@ -333,6 +333,26 @@ EXPERIMENT_TYPES: Dict[str, Dict] = {
             "NUM_WORKERS": "8",
         },
     },
+    "eval_vision_pose": {
+        "template": "ds_3001_eval_vision_pose_template.slurm",
+        "description": "Vision Backbone Representational Evaluation (Pose MSE MLP Probe)",
+        "defaults": {
+            "PARTITION": "c24m170-a100-2",
+            "GRES": "gpu:1",
+            "NPROC": "1",
+            "TIME": "01:00:00",
+            "MEM": "20GB",
+            "ACCOUNT": "ds_ga_3001_003-2026sp",
+            "DATASET": "lquan9/collect1",
+            "BACKBONE": "dinov2",
+            "BACKBONE_NAME": "dinov2_vitb14",
+            "EPOCHS": "10",
+            "BATCH_SIZE": "64",
+            "LR": "1e-3",
+            "IMG_SIZE": "224",
+            "NUM_WORKERS": "4",
+        },
+    },
     "wheeled_train": {
         "template": "ds_3001_wheeled_train_template.slurm",
         "description": "IsaacLab RL Training (Wheeled Agent)",
@@ -1276,7 +1296,7 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
         defaults["ACCOUNT"] = ui.inputbox("Account", defaults["ACCOUNT"])
 
         # 3. Experiment-specific parameters (pre-filled)
-        if exp_type == "train_wm":
+        if exp_type in ("train_wm", "eval_vision_pose"):
             defaults["DATASET"] = ui.inputbox("HF Dataset (e.g., lquan9/collect1)", defaults["DATASET"])
             defaults["BACKBONE"] = ui.menu("Select backbone", [
                 ("cnn", "CNN (built-in)"),
@@ -1304,7 +1324,8 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             defaults["EPOCHS"] = ui.inputbox("Epochs", defaults["EPOCHS"])
             defaults["BATCH_SIZE"] = ui.inputbox("Batch size", batch_default)
             defaults["LR"] = ui.inputbox("Learning rate", defaults["LR"])
-            defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
+            if exp_type == "train_wm":
+                defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
             defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
             defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", num_workers_default))
             
