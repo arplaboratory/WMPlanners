@@ -10,7 +10,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --job-name=ds3001_fix_isaac
 #SBATCH --account=ds_ga_3001_003-2026sp
-#SBATCH --partition=g2-standard-12
+#SBATCH --partition=n2c48m24
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 
