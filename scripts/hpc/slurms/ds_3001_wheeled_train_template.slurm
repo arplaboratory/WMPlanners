@@ -25,7 +25,7 @@ set -euo pipefail
 # -------------------------------
 PROJECT_NAME="rloclab"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
-SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
+SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0_fixed.sif"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
 
 PERSISTENT_CACHE_DIR="/scratch/$USER/isaaclab_cache"

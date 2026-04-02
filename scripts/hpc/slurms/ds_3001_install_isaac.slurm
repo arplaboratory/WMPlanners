@@ -39,7 +39,7 @@ else
   git clone https://github.com/isaac-sim/IsaacLab.git
 fi
 
-SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
+SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0_fixed.sif"
 if [ ! -f "${SIF_IMAGE}" ]; then
   echo "[NODE] Base Isaac Sim SIF not found at ${SIF_IMAGE}."
   echo "[NODE] Please pull it first: singularity pull ${SIF_IMAGE} docker://nvcr.io/nvidia/isaac-sim:5.1.0"
