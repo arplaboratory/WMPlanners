@@ -19,6 +19,26 @@
 
 set -euo pipefail
 
+echo "[NODE] Ensuring IsaacLab is cloned to /scratch..."
+cd /scratch/$USER
+
+if [ -d IsaacLab/.git ]; then
+  echo "[NODE] IsaacLab exists, updating safely..."
+  cd IsaacLab
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    STASH_FILE="../isaaclab_stash_$(date +%Y%m%d_%H%M%S).patch"
+    echo "[NODE] Local changes detected, stashing and saving to $STASH_FILE"
+    git stash push -u -m "Auto-stash before update on $(date)"
+    git stash show -p > "$STASH_FILE" || echo "[WARN] No diff to save in stash."
+  fi
+  git fetch origin
+  git merge --ff-only origin/$(git rev-parse --abbrev-ref HEAD)
+  cd ..
+else
+  echo "[NODE] Cloning IsaacLab..."
+  git clone https://github.com/isaac-sim/IsaacLab.git
+fi
+
 SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
 if [ ! -f "${SIF_IMAGE}" ]; then
   echo "[NODE] Base Isaac Sim SIF not found at ${SIF_IMAGE}."
@@ -47,7 +67,7 @@ singularity exec --nv --containall \
   "${SIF_IMAGE}" bash -lc "
 set -euo pipefail
 
-PYTHON_EXE='/isaac-sim/kit/python/bin/python3'
+PYTHON_EXE='/isaac-sim/python.sh'
 
 if [ ! -f \"${VENV_DIR}/bin/activate\" ]; then
   echo '[APPTAINER] Creating venv at ${VENV_DIR}...'
