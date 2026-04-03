@@ -164,25 +164,41 @@ source "${VENV_DIR}/bin/activate"
 cd /workspace/isaaclab || true
 export ISAACLAB_PATH=/workspace/isaaclab
 export ISAACSIM_PATH=/isaac-sim
+export OMNI_KIT_ALLOW_ROOT=1
+export EXP_PATH="${ISAACSIM_PATH}/apps"
 
-# Ensure PYTHON can see Isaac Sim packages (Required for 4.0+ in containers)
-export PYTHONPATH="${ISAACSIM_PATH}:${ISAACSIM_PATH}/exts/omni.isaac.kit/pip_packages:${PYTHONPATH:-}"
+# --- Robust discovery for Isaac Sim 4.x/5.x extensions ---
+# Start with core paths
+export PYTHONPATH="${ISAACSIM_PATH}/python_packages:${ISAACSIM_PATH}/kit/python/lib/python3.11/site-packages:${PYTHONPATH:-}"
+
+# Safely add every extension providing 'isaacsim' namespace (without newlines)
+for d in $(find "${ISAACSIM_PATH}/exts" -maxdepth 2 -name "isaacsim" -type d 2>/dev/null); do
+  EXT_DIR=$(dirname "$d")
+  export PYTHONPATH="${EXT_DIR}:${PYTHONPATH}"
+done
 
 # Ensure PYTHON can see mounted project code and isaaclab
 export PYTHONPATH="/workspace/code/src:/workspace/isaaclab:${PYTHONPATH}"
 
-echo "[APPTAINER] /tmp usage:"; df -h /tmp || true
-echo "[APPTAINER] python: $(which python)"
-echo "[APPTAINER] listing /workspace/code:"
-ls -la /workspace/code || true
-echo "[APPTAINER] checking for train script:"
-ls -la /workspace/code/scripts/rl || true
+if [ -f "${ISAACSIM_PATH}/setup_python.sh" ]; then
+  source "${ISAACSIM_PATH}/setup_python.sh" 2>/dev/null || true
+fi
 
-echo "[APPTAINER] TASK_NAME=${TASK_NAME}"
-echo "[APPTAINER] AGENT_NAME=${AGENT_NAME}"
-echo "[APPTAINER] ISAAC_ARGS=${ISAAC_ARGS}"
+# We include the venv site-packages FIRST to ensure project dependencies match the venv
+VENV_SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "${VENV_DIR}/lib/python3.11/site-packages")
+export PYTHONPATH="${VENV_SITE_PACKAGES}:${PYTHONPATH}"
 
-python /workspace/code/scripts/rl/rsl_rl/train.py \
+echo "[APPTAINER] Final PYTHONPATH clean check:"
+echo "[APPTAINER] Final PYTHONPATH clean check:"
+python3 -c "import sys; [print(p) for p in sys.path if p]"
+
+# Logic check for SimulationApp resolution
+echo "[DEBUG] SimulationApp resolution check..."
+python3 -c "try: from isaacsim import SimulationApp; print(f'[DEBUG] SimulationApp resolved: {SimulationApp}')
+except Exception as e: print(f'[DEBUG] Failed: {e}')"
+
+# Call python directly to ensure our PYTHONPATH is honored
+python3 /workspace/code/scripts/rl/rsl_rl/train.py \
   --task="${TASK_NAME}" \
   --agent="${AGENT_NAME}" \
   --headless \

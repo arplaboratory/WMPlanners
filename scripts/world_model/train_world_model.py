@@ -175,7 +175,16 @@ def main():
             p.requires_grad = False
 
     if args.ddp:
-        model = DDP(model, device_ids=[local_rank], find_unused_parameters=True)
+        # NOTE: rollout_loss accesses model.module directly (bypassing the DDP
+        # wrapper), so we must NOT use find_unused_parameters=True for standard
+        # modes — it requires the DDP forward hooks to fire.  For td-jepa the
+        # online backbone is genuinely unused; static_graph=True lets DDP learn
+        # unused params from the first backward pass without needing forward hooks.
+        if args.dynamics_type == "td-jepa":
+            model = DDP(model, device_ids=[local_rank],
+                        find_unused_parameters=True, static_graph=True)
+        else:
+            model = DDP(model, device_ids=[local_rank])
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
@@ -209,6 +218,9 @@ def main():
             print(f"Resuming from epoch {start_epoch}")
     
     # Training loop
+    if main_process:
+        print(f"[INFO] Starting training: epochs={args.epochs}, batch_size={args.batch_size}, "
+              f"backbone={args.backbone}, dynamics={args.dynamics_type}, ddp={args.ddp}")
     t0 = time.time()
     step = 0
     for epoch in range(start_epoch, args.epochs):
