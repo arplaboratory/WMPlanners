@@ -22,10 +22,12 @@ def rollout_loss(model, batch, cfg: TrainConfig, target_model=None) -> Tuple[tor
       - latent prediction: z_pred vs z_target (stop-grad)
       - state prediction: decode(z_pred) vs state_target
       - risk prediction:  risk(z_pred) vs collision_target
+
+    IMPORTANT: this function calls *model(...)* (which may be a DDP wrapper)
+    rather than *model.module.encode(...)* so that DDP's forward hooks fire
+    and gradient allreduce works correctly.
     """
-    # Unwrap DDP if needed to access sub-modules directly
     from torch.nn.parallel import DistributedDataParallel as DDP
-    raw = model.module if isinstance(model, DDP) else model
 
     device = torch.device(cfg.device)
     rgb = batch.rgb.to(device)       # (B,T,3,H,W)
@@ -39,51 +41,26 @@ def rollout_loss(model, batch, cfg: TrainConfig, target_model=None) -> Tuple[tor
     H = cfg.horizon
     assert T >= H + 1, f"Sequence length T={T} must be >= horizon+1={H+1}"
 
-    # Use the *first* part of sequence as start for simplicity
     t0 = 0
 
+    # ---------- forward pass through the DDP wrapper ----------
     target_raw = target_model.module if target_model is not None and hasattr(target_model, "module") else target_model
 
-    # Encode all steps we need (t0..t0+H)
-    z_targets = []
-    state_targets = []
-    risk_targets = []
-    
-    if target_raw is not None:
-        # TD-JEPA mode: encode all targets with frozen target model in pure no_grad
-        for k in range(H + 1):
-            with torch.no_grad():
-                out = target_raw.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
-            z_targets.append(out.z)
-            state_targets.append(odom[:, t0+k])  # Here we decode odom-like state; adapt if needed
-            risk_targets.append(collision[:, t0+k])
-    else:
-        # MLP / RSSM mode: anchor step (t0) retains gradients so it backprops through the vision backbone
-        out0 = raw.encode(rgb[:, t0], depth[:, t0], odom[:, t0], imu[:, t0])
-        z_targets.append(out0.z)
-        state_targets.append(odom[:, t0])
-        risk_targets.append(collision[:, t0])
+    # Call model(...) — which is DDP.forward() when wrapped — so that DDP's
+    # backward hooks are registered and gradient allreduce works correctly.
+    outputs = model(
+        rgb, depth, odom, imu, action,
+        horizon=H, target_model=target_raw,
+    )
 
-        # Sequence targets (t>0) are detached from the start, saving massive VRAM
-        with torch.no_grad():
-            for k in range(1, H + 1):
-                out = raw.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
-                z_targets.append(out.z)
-                state_targets.append(odom[:, t0+k])
-                risk_targets.append(collision[:, t0+k])
+    z_targets = outputs["z_targets"]
+    z_pred = outputs["z_pred"]
+    state_pred = outputs["state_pred"]
+    risk_pred = outputs["risk_pred"]
 
-    z_targets = torch.stack(z_targets, dim=1)  # (B,H+1,z)
-    state_targets = torch.stack(state_targets, dim=1)  # (B,H+1,D_odom)
-    risk_targets = torch.stack(risk_targets, dim=1)    # (B,H+1,1)
-
-    # Rollout dynamics from z0 using actions (t0..t0+H-1)
-    z0 = z_targets[:, 0]
-    a_seq = action[:, t0:t0+H]  # (B,H,act)
-    z_pred = raw.rollout(z0, a_seq)  # (B,H+1,z)
-
-    # Decode state/risk
-    state_pred = raw.state_head(z_pred)  # (B,H+1,state_dim)
-    risk_pred = raw.risk_head(z_pred)    # (B,H+1,1)
+    # ---------- build ground-truth targets ----------
+    state_targets = torch.stack([odom[:, t0 + k] for k in range(H + 1)], dim=1)
+    risk_targets = torch.stack([collision[:, t0 + k] for k in range(H + 1)], dim=1)
 
     # Targets: stop-grad on latent target to avoid collapse (JEPA-ish)
     z_tgt = z_targets.detach()

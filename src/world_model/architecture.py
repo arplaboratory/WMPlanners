@@ -117,6 +117,84 @@ class WorldModel(nn.Module):
         risk = self.risk_head(z)
         return WMOutput(z=z, state=state, risk=risk)
 
+    def forward(
+        self,
+        rgb: torch.Tensor,
+        depth: torch.Tensor,
+        odom: torch.Tensor,
+        imu: torch.Tensor,
+        action: torch.Tensor,
+        horizon: int,
+        target_model: "WorldModel | None" = None,
+    ) -> dict[str, torch.Tensor]:
+        """Full forward pass: encode targets, rollout dynamics, decode heads.
+
+        This method exists so that :class:`DDP` can wrap the complete
+        computation graph and register backward hooks for gradient sync.
+
+        When *target_model* is ``None`` (MLP / RSSM mode), step-0 targets
+        retain gradients through the backbone while steps 1..H are detached.
+
+        When *target_model* is provided (TD-JEPA mode), **all** targets come
+        from the frozen EMA model under ``no_grad``; the online backbone is
+        unused and only the dynamics + heads receive gradients.
+
+        Args:
+            rgb: ``(B, T, 3, H, W)``.
+            depth: ``(B, T, 1, H, W)``.
+            odom: ``(B, T, D_odom)``.
+            imu: ``(B, T, D_imu)``.
+            action: ``(B, T, D_act)``.
+            horizon: number of rollout steps *H*.  ``T >= H + 1``.
+            target_model: optional frozen EMA model for TD-JEPA targets.
+
+        Returns:
+            dict with ``z_targets``, ``z_pred``, ``state_pred``, ``risk_pred``.
+        """
+        t0 = 0
+        H = horizon
+
+        # ---- encode targets ----
+        if target_model is not None:
+            # TD-JEPA: all targets from frozen EMA model
+            z_targets = []
+            with torch.no_grad():
+                for k in range(H + 1):
+                    out_k = target_model.encode(
+                        rgb[:, t0 + k], depth[:, t0 + k],
+                        odom[:, t0 + k], imu[:, t0 + k],
+                    )
+                    z_targets.append(out_k.z)
+        else:
+            # MLP / RSSM: step-0 retains gradients, rest detached
+            out0 = self.encode(rgb[:, t0], depth[:, t0], odom[:, t0], imu[:, t0])
+            z_targets = [out0.z]
+            with torch.no_grad():
+                for k in range(1, H + 1):
+                    out_k = self.encode(
+                        rgb[:, t0 + k], depth[:, t0 + k],
+                        odom[:, t0 + k], imu[:, t0 + k],
+                    )
+                    z_targets.append(out_k.z)
+
+        z_targets = torch.stack(z_targets, dim=1)          # (B, H+1, z)
+
+        # ---- rollout dynamics ----
+        z0 = z_targets[:, 0]
+        a_seq = action[:, t0 : t0 + H]                     # (B, H, act)
+        z_pred = self.rollout(z0, a_seq)                    # (B, H+1, z)
+
+        # ---- decode heads ----
+        state_pred = self.state_head(z_pred)                # (B, H+1, state)
+        risk_pred = self.risk_head(z_pred)                  # (B, H+1, 1)
+
+        return {
+            "z_targets": z_targets,
+            "z_pred": z_pred,
+            "state_pred": state_pred,
+            "risk_pred": risk_pred,
+        }
+
     def rollout(self, z0: torch.Tensor, a_seq: torch.Tensor) -> torch.Tensor:
         """Roll out latent dynamics for a sequence of actions.
 

@@ -175,14 +175,12 @@ def main():
             p.requires_grad = False
 
     if args.ddp:
-        # NOTE: rollout_loss accesses model.module directly (bypassing the DDP
-        # wrapper), so we must NOT use find_unused_parameters=True for standard
-        # modes — it requires the DDP forward hooks to fire.  For td-jepa the
-        # online backbone is genuinely unused; static_graph=True lets DDP learn
-        # unused params from the first backward pass without needing forward hooks.
+        # rollout_loss calls model(...) (i.e. DDP.forward()) so DDP hooks fire
+        # correctly. For td-jepa the online backbone is unused (targets come
+        # from the frozen EMA model), so we need find_unused_parameters=True.
         if args.dynamics_type == "td-jepa":
             model = DDP(model, device_ids=[local_rank],
-                        find_unused_parameters=True, static_graph=True)
+                        find_unused_parameters=True)
         else:
             model = DDP(model, device_ids=[local_rank])
 
