@@ -20,8 +20,8 @@ from hydra.types import RunMode
 from hydra.core.hydra_config import HydraConfig
 from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
-from metrics.image_metrics import eval_images
-from utils import slice_trajdict_with_t, cfg_to_dict, seed, sample_tensors
+from world_model.metrics import eval_images
+from world_model.utils import slice_trajdict_with_t, cfg_to_dict, seed, sample_tensors
 from world_model.data.hf_datasets import collate_dinowm, HFWindowDataset
 warnings.filterwarnings("ignore")
 log = logging.getLogger(__name__)
@@ -113,15 +113,31 @@ class Trainer:
         seed(cfg.training.seed)
         log.info(f"Loading dataset from {self.cfg.env.dataset.data_path} ...")
         #TODO: change to our dataset
-        self.datasets, traj_dsets = hydra.utils.call(
-            self.cfg.env.dataset,
+        # self.datasets, traj_dsets = hydra.utils.call(
+        #     self.cfg.env.dataset,
+        #     num_hist=self.cfg.num_hist,
+        #     num_pred=self.cfg.num_pred,
+        #     frameskip=self.cfg.frameskip,
+        # )
+        self.datasets = HFWindowDataset(
+            self.cfg.env.dataset.data_path,
+            img_size=self.cfg.img_size,
             num_hist=self.cfg.num_hist,
             num_pred=self.cfg.num_pred,
             frameskip=self.cfg.frameskip,
+            odom_stats=self.cfg.env.dataset.odom_stats,
+            imu_stats=self.cfg.env.dataset.imu_stats,
+            collision_stats=self.cfg.env.dataset.collision_stats,
+            action_stats=self.cfg.env.dataset.action_stats,
+            sample_mode=True,
+            sample_k=self.cfg.trajectory_length
         )
-
-        self.train_traj_dset = traj_dsets["train"]
-        self.val_traj_dset = traj_dsets["valid"]
+        # wrap into train/valid splits (same dataset for both; val() is currently disabled)
+        _ds = self.datasets
+        self.datasets = {"train": _ds, "valid": _ds}
+        #TODO: Uncomment and implement when uncommenting val() for now not required.
+        #self.train_traj_dset = traj_dsets["train"]
+        #self.val_traj_dset = traj_dsets["valid"]
 
         self.dataloaders = {
             x: torch.utils.data.DataLoader(
@@ -129,7 +145,7 @@ class Trainer:
                 batch_size=self.cfg.gpu_batch_size,
                 shuffle=False, # already shuffled in TrajSlicerDataset
                 num_workers=self.cfg.env.num_workers,
-                collate_fn=self.da,
+                collate_fn=collate_dinowm,
             )
             for x in ["train", "valid"]
         }
@@ -244,6 +260,8 @@ class Trainer:
         # initialize predictor
         if self.encoder.latent_ndim == 1:  # if feature is 1D
             num_patches = 1
+        elif hasattr(self.encoder, 'num_patches'):
+            num_patches = self.encoder.num_patches
         else:
             decoder_scale = 16  # from vqvae
             num_side_patches = self.cfg.img_size // decoder_scale
@@ -375,7 +393,8 @@ class Trainer:
             self.accelerator.wait_for_everyone()
             self.train()
             self.accelerator.wait_for_everyone()
-            self.val()
+            #TODO: fix validation
+            #self.val() 
             self.logs_flash(step=self.epoch)
             if self.epoch % self.cfg.training.save_every_x_epoch == 0:
                 ckpt_path, model_name, model_epoch = self.save_ckpt()
@@ -734,12 +753,13 @@ class Trainer:
     def logs_flash(self, step):
         epoch_log = OrderedDict()
         for key, value in self.epoch_log.items():
-            count, sum = value
-            to_log = sum / count
-            epoch_log[key] = to_log
+            count, total = value
+            epoch_log[key] = total / count
         epoch_log["epoch"] = step
-        log.info(f"Epoch {self.epoch}  Training loss: {epoch_log['train_loss']:.4f}  \
-                Validation loss: {epoch_log['val_loss']:.4f}")
+        train_loss = epoch_log.get('train_loss', float('nan'))
+        val_loss = epoch_log.get('val_loss', float('nan'))
+        log.info(f"Epoch {self.epoch}  Training loss: {train_loss:.4f}  "
+                 f"Validation loss: {val_loss:.4f}")
 
         if self.accelerator.is_main_process:
             self.wandb_run.log(epoch_log)
@@ -811,5 +831,15 @@ class Trainer:
             normalize=True,
             value_range=(-1, 1),
         )
+
+
+@hydra.main(config_path="../../configs/dino-wm", config_name="trial", version_base=None)
+def main(cfg):
+    trainer = Trainer(cfg)
+    trainer.run()
+
+
+if __name__ == "__main__":
+    main()
 
 

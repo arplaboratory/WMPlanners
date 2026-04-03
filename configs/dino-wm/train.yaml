@@ -1,10 +1,10 @@
 defaults:
   - _self_
-  - env: point_maze #TODO: add our dataset here
+  - env: collect1 
   - encoder: dino 
   - action_encoder: proprio
   - proprio_encoder: proprio
-  - decoder: vqvae
+  - decoder: null
   - predictor: vit
   - override hydra/launcher: submitit_slurm
 

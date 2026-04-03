@@ -38,7 +38,7 @@ class HFWindowDataset(Dataset):
     # Odom-delta column names in the HF dataset
     ODOM_COLS = ["odom_dx", "odom_dy", "odom_dz", "odom_ax", "odom_ay", "odom_az"]
 
-    def __init__(self, dataset, img_size: int = 224, action_stats=None, odom_stats=None, imu_stats=None, collision_stats=None, sample_k: int = None, sample_mode: bool = False):
+    def __init__(self, dataset, img_size: int = 224, action_stats=None, odom_stats=None, imu_stats=None, collision_stats=None, sample_k: int = None, sample_mode: bool = False, num_hist=None, num_pred=None, frameskip=None):
         from datasets import load_from_disk, load_dataset, get_dataset_split_names
         from datasets import Dataset as HFDataset
         self.sample_k = sample_k
@@ -124,6 +124,9 @@ class HFWindowDataset(Dataset):
         self.D_odom = len(self.odom_cols)
         self.D_imu = len(self.imu_cols) or 6 # Default 6 if no IMU
         self.D_act = len(self.act_cols) or self.D_odom
+        # Derived dims used by the trainer
+        self.proprio_dim = self.D_odom + self.D_imu + 1  # odom + imu + collision
+        self.action_dim = self.D_act
 
     def _build_index(self) -> None:
         """Group row indices into trajectories (windows/episodes)."""
@@ -223,21 +226,21 @@ class HFWindowDataset(Dataset):
                 collisions = np.stack(collisions)
                 depths = np.stack(depths)
 
-                # Normalize/scale
+                # Normalize/scale; always keep raw copies for the state vector
+                state_odom = odoms.copy()
+                state_imu = imus.copy()
+                state_collision = collisions.copy()
                 if self.odom_stats is not None:
-                    state_odom = odoms.copy()
                     if "mean" in self.odom_stats and "std" in self.odom_stats:
                         odoms = (odoms - self.odom_stats["mean"]) / (self.odom_stats["std"] + 1e-8)
                     elif "min" in self.odom_stats and "max" in self.odom_stats:
                         odoms = (odoms - self.odom_stats["min"]) / (self.odom_stats["max"] - self.odom_stats["min"] + 1e-8)
                 if self.imu_stats is not None:
-                    state_imu = imus.copy()
                     if "mean" in self.imu_stats and "std" in self.imu_stats:
                         imus = (imus - self.imu_stats["mean"]) / (self.imu_stats["std"] + 1e-8)
                     elif "min" in self.imu_stats and "max" in self.imu_stats:
                         imus = (imus - self.imu_stats["min"]) / (self.imu_stats["max"] - self.imu_stats["min"] + 1e-8)
                 if self.collision_stats is not None:
-                    state_collision = collisions.copy()
                     if "mean" in self.collision_stats and "std" in self.collision_stats:
                         collisions = (collisions - self.collision_stats["mean"]) / (self.collision_stats["std"] + 1e-8)
                     elif "min" in self.collision_stats and "max" in self.collision_stats:
@@ -255,9 +258,8 @@ class HFWindowDataset(Dataset):
                     "odom": odoms,          # (k, D_odom)
                     "action": actions,      # (k, D_act)
                     "collision": collisions, # (k, 1)
+                    "state": torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)),  # (k, D_odom+D_imu+1)
                 }
-                if self.sample_mode:
-                    output["state"] = torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)) 
                 print(f"[HFWindowDataset] Returning output keys: {list(output.keys())}")
                 return output
             # Default: return all frames in the window (non-sample_mode)
@@ -281,92 +283,6 @@ class HFWindowDataset(Dataset):
         except Exception as e:
             print(f"[HFWindowDataset] Exception in __getitem__: {e}")
             raise
-            # Pick a random start index for k consecutive frames
-            k = self.sample_k
-            if n_frames >= k:
-                start = np.random.randint(0, n_frames - k + 1)
-                indices = np.arange(start, start + k)
-            else:
-                # Not enough frames: pad by repeating last frame
-                #TODO: Ask TA correct approach to do this.
-                indices = np.concatenate([np.arange(n_frames), np.full(k - n_frames, n_frames - 1)])
-
-            def get_frame(i):
-                img = batch_data["image"][i]
-                if img is not None:
-                    rgb = self._transform(img).numpy()
-                else:
-                    rgb = np.zeros((3, self.img_size, self.img_size), dtype=np.float32)
-                odom = np.array([batch_data[col][i] for col in self.odom_cols], dtype=np.float32)
-                if self.act_cols:
-                    action = np.array([batch_data[col][i] for col in self.act_cols], dtype=np.float32)
-                else:
-                    action = odom.copy()
-                if self.imu_cols:
-                    imu = np.array([batch_data[col][i] for col in self.imu_cols], dtype=np.float32)
-                else:
-                    imu = np.zeros((self.D_imu,), dtype=np.float32)
-                collision = np.zeros((1,), dtype=np.float32)
-                depth = np.zeros((1, self.img_size, self.img_size), dtype=np.float32)
-                return rgb, odom, imu, action, collision, depth
-
-            rgbs, odoms, imus, actions, collisions, depths = [], [], [], [], [], []
-            for i in indices:
-                rgb, odom, imu, action, collision, depth = get_frame(i)
-                rgbs.append(rgb)
-                odoms.append(odom)
-                imus.append(imu)
-                actions.append(action)
-                collisions.append(collision)
-                depths.append(depth)
-
-            rgbs = np.stack(rgbs)
-            odoms = np.stack(odoms)
-            imus = np.stack(imus)
-            actions = np.stack(actions)
-            collisions = np.stack(collisions)
-            depths = np.stack(depths)
-
-            # Normalize/scale
-
-            if self.odom_stats is not None:
-                state_odom = odoms.copy()
-                if "mean" in self.odom_stats and "std" in self.odom_stats:
-                    odoms = (odoms - self.odom_stats["mean"]) / (self.odom_stats["std"] + 1e-8)
-                elif "min" in self.odom_stats and "max" in self.odom_stats:
-                    odoms = (odoms - self.odom_stats["min"]) / (self.odom_stats["max"] - self.odom_stats["min"] + 1e-8)
-            if self.imu_stats is not None:
-                state_imu = imus.copy()
-                if "mean" in self.imu_stats and "std" in self.imu_stats:
-                    imus = (imus - self.imu_stats["mean"]) / (self.imu_stats["std"] + 1e-8)
-                elif "min" in self.imu_stats and "max" in self.imu_stats:
-                    imus = (imus - self.imu_stats["min"]) / (self.imu_stats["max"] - self.imu_stats["min"] + 1e-8)
-            if self.collision_stats is not None:
-                state_collision = collisions.copy()
-                if "mean" in self.collision_stats and "std" in self.collision_stats:
-                    collisions = (collisions - self.collision_stats["mean"]) / (self.collision_stats["std"] + 1e-8)
-                elif "min" in self.collision_stats and "max" in self.collision_stats:
-                    collisions = (collisions - self.collision_stats["min"]) / (self.collision_stats["max"] - self.collision_stats["min"] + 1e-8)
-            
-            if self.action_stats is not None:
-                if "mean" in self.action_stats and "std" in self.action_stats:
-                    actions = (actions - self.action_stats["mean"]) / (self.action_stats["std"] + 1e-8)
-                elif "min" in self.action_stats and "max" in self.action_stats:
-                    actions = (actions - self.action_stats["min"]) / (self.action_stats["max"] - self.action_stats["min"] + 1e-8)
-
-            output = {
-                "rgb": rgbs,            # (k, 3, H, W)
-                "depth": depths,        # (k, 1, H, W)
-                "imu": imus,            # (k, D_imu)
-                "odom": odoms,          # (k, D_odom)
-                "action": actions,      # (k, D_act)
-                "collision": collisions, # (k, 1)
-            }
-            if self.sample_mode:
-                output["state"] = torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)) 
-            return output
-
-        # No fallback needed: generalized logic above covers all cases
 
 def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
     """Collate a list of window dicts into a :class:`SampleBatch`."""
@@ -378,15 +294,19 @@ def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
         action=torch.from_numpy(np.stack([b["action"] for b in batch])),
         collision=torch.from_numpy(np.stack([b["collision"] for b in batch])),
     )
-def collate_dinowm(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
-    """Collate a list of window dicts into a :class:`SampleBatch` for DinoWM."""
-    # For DinoWM, we only care about visual observation (image) and proprioceptive state (odom,imu,collision)[concatenated], and action. 
-    return SampleBatch(
-        rgb=torch.from_numpy(np.stack([b["rgb"] for b in batch])),
-        proprio=torch.from_numpy(np.stack([np.concatenate([b["odom"], b["imu"], b["collision"]], axis=-1) for b in batch])),
-        action=torch.from_numpy(np.stack([b["action"] for b in batch])),
-        state  = torch.from_numpy(np.stack([b["state"] for b in batch])) if "state" in batch[0] else KeyError("Expected 'state' key in batch for DinoWM check hf_datasets.py. "),
-    )
+def collate_dinowm(batch: List[dict[str, np.ndarray]]):
+    """Collate a list of window dicts into (obs_dict, action, state) for DinoWM training."""
+    if "state" not in batch[0]:
+        raise KeyError("Expected 'state' key in batch for DinoWM — check hf_datasets.py.")
+    rgb = torch.from_numpy(np.stack([b["rgb"] for b in batch]))             # (B, T, 3, H, W)
+    proprio = torch.from_numpy(np.stack([                                      # (B, T, D_odom+D_imu+1)
+        np.concatenate([b["odom"], b["imu"], b["collision"]], axis=-1)
+        for b in batch
+    ]))
+    action = torch.from_numpy(np.stack([b["action"] for b in batch]))        # (B, T, D_act)
+    state = torch.stack([b["state"] for b in batch])                          # (B, T, D_state)
+    obs = {"visual": rgb, "proprio": proprio}
+    return obs, action, state
 
 
 def _is_local_path(s: str) -> bool:

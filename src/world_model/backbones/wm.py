@@ -19,6 +19,7 @@ class WM(nn.Module):
         proprio_encoder,
         action_encoder,
         predictor,
+        decoder=None,
         proprio_dim=0,
         action_dim=0,
         concat_dim=0,
@@ -26,6 +27,7 @@ class WM(nn.Module):
         num_proprio_repeat=7,
         train_encoder=True,
         train_predictor=False,
+        train_decoder=False,
     ):
         super().__init__()
         self.num_hist = num_hist
@@ -34,8 +36,10 @@ class WM(nn.Module):
         self.proprio_encoder = proprio_encoder
         self.action_encoder = action_encoder
         self.predictor = predictor  # predictor could be None
+        self.decoder = decoder
         self.train_encoder = train_encoder
         self.train_predictor = train_predictor
+        self.train_decoder = train_decoder
         self.num_action_repeat = num_action_repeat
         self.num_proprio_repeat = num_proprio_repeat
         self.proprio_dim = proprio_dim * num_proprio_repeat 
@@ -240,7 +244,15 @@ class WM(nn.Module):
             z_pred = None
 
         loss_components["loss"] = loss
-        return z_pred, visual_pred, loss, loss_components
+
+        # Reconstruct all frames through decoder (if present)
+        visual_reconstructed = None
+        if self.decoder is not None:
+            z_obs, _ = self.separate_emb(z)
+            obs_reconstructed, _ = self.decode_obs(z_obs)
+            visual_reconstructed = obs_reconstructed["visual"]
+
+        return z_pred, visual_pred, visual_reconstructed, loss, loss_components
 
     def replace_actions_from_z(self, z, act):
         act_emb = self.encode_act(act)
