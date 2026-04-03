@@ -28,15 +28,14 @@ SIF_IMAGE="/scratch/lq2146/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
 
 PERSISTENT_CACHE_DIR="/scratch/$USER/world_model_cache"
-PERSISTENT_LOGS_DIR="/scratch/$USER/world_model/logs/${SLURM_JOB_ID}"
+PERSISTENT_LOGS_DIR="/scratch/$USER/world_model_logs/${SLURM_JOB_ID}"
 
 DOCKER_USER_HOME="/root"
 
 # Node-local cache & execution
 SCRATCH_TMP="/scratch/$USER/tmp"
 CACHE_ROOT="${PERSISTENT_CACHE_DIR}"
-mkdir -p "${PERSISTENT_CACHE_DIR}" "${PERSISTENT_CACHE_DIR}/cache/pip" "${PERSISTENT_CACHE_DIR}/logs" "${PERSISTENT_CACHE_DIR}/data"
-mkdir -p "${SCRATCH_TMP}"
+mkdir -p "${PERSISTENT_CACHE_DIR}" "${PERSISTENT_CACHE_DIR}/cache/pip" "${PERSISTENT_CACHE_DIR}/logs"
 mkdir -p \
   "${CACHE_ROOT}/cache/pip" \
   "${CACHE_ROOT}/cache/wandb" \
@@ -68,7 +67,6 @@ CMD="--nv --containall \
   -B ${CACHE_ROOT}/cache/wandb:${DOCKER_USER_HOME}/.cache/wandb:rw \
   -B ${CACHE_ROOT}/cache/huggingface:${DOCKER_USER_HOME}/.cache/huggingface:rw \
   -B ${CACHE_ROOT}/cache/torch:${DOCKER_USER_HOME}/.cache/torch:rw \
-  -B ${CACHE_ROOT}/data:${CACHE_ROOT}/data:rw \
   -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
   -B ${PERSISTENT_LOGS_DIR}:/workspace/worldmodel/logs:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
@@ -80,6 +78,8 @@ CMD="--nv --containall \
   --env WANDB_RUN_NAME=${WANDB_RUN_NAME} \
   --env HF_TOKEN=${HF_TOKEN:-} \
   --env HF_HOME=${DOCKER_USER_HOME}/.cache/huggingface \
+  --env HF_DATASETS_OFFLINE=1 \
+  --env TRANSFORMERS_OFFLINE=1 \
   --env TORCH_HOME=${DOCKER_USER_HOME}/.cache/torch \
   --env EXPERIMENT_NAME=${EXPERIMENT_NAME}"
 

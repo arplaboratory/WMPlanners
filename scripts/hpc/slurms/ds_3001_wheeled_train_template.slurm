@@ -115,7 +115,10 @@ CMD="--nv --containall \
   --env TASK_NAME=${TASK_NAME} \
   --env AGENT_NAME=${AGENT_NAME} \
   --env EXPERIMENT_NAME=${EXPERIMENT_NAME} \
-  --env RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR=${WHEELED_ASSETS_DATA_DIR}"
+  --env RLOCLAB_WHEELEDLAB_ASSETS_DATA_DIR=${WHEELED_ASSETS_DATA_DIR} \
+  --env HF_HOME=${DOCKER_USER_HOME}/.cache/huggingface \
+  --env HF_DATASETS_OFFLINE=1 \
+  --env TRANSFORMERS_OFFLINE=1"
 
 # Ensure container sees node-local temp/caches and pip cache location
 CMD="${CMD} \

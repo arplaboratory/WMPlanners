@@ -68,6 +68,7 @@ singularity exec --nv --containall \
   --env UV_CACHE_DIR=/root/.cache/uv \
   "${SIF_IMAGE}" bash -lc "
 set -euo pipefail
+export UV_LINK_MODE=copy
 
 PYTHON_EXE='/isaac-sim/python.sh'
 

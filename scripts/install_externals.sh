@@ -7,17 +7,14 @@ set -euo pipefail
 # Get the project root (directory where this script is located's parent)
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "========================================="
 echo "Installing external packages from $PROJECT_ROOT/external..."
-echo "========================================="
 
-# Determine Python to target. Honor externally provided PYTHON_CMD if present.
 if [ -n "${PYTHON_CMD:-}" ]; then
     :
-elif [ -x "/isaac-sim/kit/python/bin/python3" ]; then
-    PYTHON_CMD="/isaac-sim/kit/python/bin/python3"
 elif command -v python3 >/dev/null 2>&1; then
     PYTHON_CMD="$(command -v python3)"
+elif [ -x "/isaac-sim/kit/python/bin/python3" ]; then
+    PYTHON_CMD="/isaac-sim/kit/python/bin/python3"
 else
     echo "Error: python3 not found."
     exit 1
