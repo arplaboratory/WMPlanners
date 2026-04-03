@@ -149,6 +149,7 @@ ls -la "${RUN_DIR}/scripts" || true
 
 singularity exec \
   $CMD \
+  --env VENV_DIR="$VENV_DIR" \
   --env ISAAC_ARGS="$ISAAC_ARGS" \
   "${APPTAINER_IMAGE}" bash -lc '
 set -euo pipefail
@@ -162,9 +163,13 @@ source "${VENV_DIR}/bin/activate"
 
 cd /workspace/isaaclab || true
 export ISAACLAB_PATH=/workspace/isaaclab
+export ISAACSIM_PATH=/isaac-sim
+
+# Ensure PYTHON can see Isaac Sim packages (Required for 4.0+ in containers)
+export PYTHONPATH="${ISAACSIM_PATH}:${ISAACSIM_PATH}/exts/omni.isaac.kit/pip_packages:${PYTHONPATH:-}"
 
 # Ensure PYTHON can see mounted project code and isaaclab
-export PYTHONPATH="/workspace/code/src:/workspace/isaaclab:${PYTHONPATH:-}"
+export PYTHONPATH="/workspace/code/src:/workspace/isaaclab:${PYTHONPATH}"
 
 echo "[APPTAINER] /tmp usage:"; df -h /tmp || true
 echo "[APPTAINER] python: $(which python)"

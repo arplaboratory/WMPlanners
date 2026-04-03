@@ -1357,7 +1357,7 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             auto_name = f"{ds_short}_{bb}_{exp_type}"
             defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
             
-        elif opt_choice == "wheeled_train":
+        elif exp_type == "wheeled_train":
             defaults["TASK_NAME"] = ui.inputbox("Task Name", defaults["TASK_NAME"])
             defaults["AGENT_NAME"] = ui.inputbox("Agent Name", defaults["AGENT_NAME"])
             defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment Name", defaults["EXPERIMENT_NAME"])
