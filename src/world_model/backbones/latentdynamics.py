@@ -1,7 +1,6 @@
 # adapted from https://github.com/gaoyuezhou/dino_wm/blob/main/models/vit.py
 # builds a causal masked ViT to model latent dynamics.
 import torch
-import torch
 from .base import ModelBundle
 from .registry import register
 from torch import nn
