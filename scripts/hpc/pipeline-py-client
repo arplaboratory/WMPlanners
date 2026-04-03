@@ -1364,39 +1364,7 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             defaults["EXTRA_FLAGS"] = ui.inputbox("Extra Args (e.g., --video)", defaults["EXTRA_FLAGS"])
 
         if exp_type in ("train_wm", "eval_vision_pose"):
-            dataset_name = defaults.get("DATASET")
-            if dataset_name and "/" in dataset_name: # Hub dataset expected
-                cuda_sif = "cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif"
-                sif_path = f"/scratch/{os.environ.get('USER')}/{cuda_sif}"
-                venv_bin = f"/scratch/{os.environ.get('USER')}/world_model_cache/venv/bin"
-                venv_path = f"{venv_bin}/activate"
-                python_exe = f"{venv_bin}/python"
-                hf_home = f"/scratch/{os.environ.get('USER')}/world_model_cache/cache/huggingface"
-                torch_home = f"/scratch/{os.environ.get('USER')}/world_model_cache/cache/torch"
-                
-                ui.msgbox(f"Auto-caching dataset and backbone for '{dataset_name}' via Singularity.\nThis leverages the login node's internet to prevent compute node connection errors.\nThis may take a minute...")
-                
-                # Pre-fill HF dataset and Backbone weights
-                bb = defaults.get("BACKBONE", "cnn")
-                bb_name = defaults.get("BACKBONE_NAME", "")
-                py_cmd = f"from datasets import load_dataset; load_dataset('{dataset_name}'); "
-                if bb == "dinov2":
-                    py_cmd += f"import torch; torch.hub.load('/workspace/run/external/dino', '{bb_name}', source='local', pretrained=True)"
-                elif bb == "vjepa2":
-                    py_cmd += f"import torch; torch.hub.load('/workspace/run/external/vjepa2', '{bb_name}', source='local', pretrained=True)"
-                
-                cmd = [
-                    "singularity", "exec", 
-                    "--bind", f"/scratch/{os.environ.get('USER')}:/scratch/{os.environ.get('USER')}:rw",
-                    "--env", f"HF_HOME={hf_home}",
-                    "--env", f"TORCH_HOME={torch_home}",
-                    sif_path, "bash", "-c", 
-                    f"mkdir -p {hf_home} {torch_home} && source {venv_path} && {python_exe} -c \"{py_cmd}\""
-                ]
-                try:
-                    subprocess.run(cmd, check=True, capture_output=True)
-                except subprocess.CalledProcessError as e:
-                    ui.msgbox(f"Warning: Auto-cache pre-fill failed (Offline compute node might crash).\nError: {e.stderr.decode('utf-8', errors='ignore') if e.stderr else 'Unknown'}")
+            pass  # Dataset and backbone weights are cached on-demand by the SLURM job itself.
 
         # Generate the SLURM script
         template_path = SLURMS_DIR / exp_cfg["template"]
