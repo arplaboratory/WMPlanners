@@ -194,8 +194,8 @@ python3 -c "import sys; [print(p) for p in sys.path if p]"
 
 # Logic check for SimulationApp resolution
 echo "[DEBUG] SimulationApp resolution check..."
-python3 -c "try: from isaacsim import SimulationApp; print(f'[DEBUG] SimulationApp resolved: {SimulationApp}')
-except Exception as e: print(f'[DEBUG] Failed: {e}')"
+python3 -c "import isaacsim; print('[DEBUG] isaacsim path:', isaacsim.__path__)"
+python3 -c "from isaacsim import SimulationApp; print('[DEBUG] SimulationApp class:', SimulationApp)"
 
 # Call python directly to ensure our PYTHONPATH is honored
 python3 /workspace/code/scripts/rl/rsl_rl/train.py \
