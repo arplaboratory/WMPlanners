@@ -22,7 +22,7 @@ from datetime import timedelta
 from concurrent.futures import ThreadPoolExecutor
 from world_model.metrics import eval_images
 from world_model.utils import slice_trajdict_with_t, cfg_to_dict, seed, sample_tensors
-from world_model.data.hf_datasets import collate_dinowm, HFWindowDataset
+from world_model.data.hf_datasets import collate_dinowm, HFWindowDataset, EpisodeDataset
 warnings.filterwarnings("ignore")
 log = logging.getLogger(__name__)
 
@@ -112,13 +112,6 @@ class Trainer:
 
         seed(cfg.training.seed)
         log.info(f"Loading dataset from {self.cfg.env.dataset.data_path} ...")
-        #TODO: change to our dataset
-        # self.datasets, traj_dsets = hydra.utils.call(
-        #     self.cfg.env.dataset,
-        #     num_hist=self.cfg.num_hist,
-        #     num_pred=self.cfg.num_pred,
-        #     frameskip=self.cfg.frameskip,
-        # )
         self.datasets = HFWindowDataset(
             self.cfg.env.dataset.data_path,
             img_size=self.cfg.img_size,
@@ -132,12 +125,22 @@ class Trainer:
             sample_mode=True,
             sample_k=self.cfg.trajectory_length
         )
-        # wrap into train/valid splits (same dataset for both; val() is currently disabled)
+        # wrap into train/valid splits (same dataset for both)
         _ds = self.datasets
         self.datasets = {"train": _ds, "valid": _ds}
-        #TODO: Uncomment and implement when uncommenting val() for now not required.
-        #self.train_traj_dset = traj_dsets["train"]
-        #self.val_traj_dset = traj_dsets["valid"]
+
+        # Episode-level dataset for openloop_rollout (full episodes, no windowing)
+        _traj_ds = HFWindowDataset(
+            self.cfg.env.dataset.data_path,
+            img_size=self.cfg.img_size,
+            odom_stats=self.cfg.env.dataset.odom_stats,
+            imu_stats=self.cfg.env.dataset.imu_stats,
+            collision_stats=self.cfg.env.dataset.collision_stats,
+            action_stats=self.cfg.env.dataset.action_stats,
+            sample_mode=False,
+        )
+        self.train_traj_dset = EpisodeDataset(_traj_ds)
+        self.val_traj_dset = EpisodeDataset(_traj_ds)
 
         self.dataloaders = {
             x: torch.utils.data.DataLoader(
@@ -212,7 +215,7 @@ class Trainer:
         return ckpt_path, model_name, model_epoch
 
     def load_ckpt(self, filename="model_latest.pth"):
-        ckpt = torch.load(filename)
+        ckpt = torch.load(filename, weights_only=False)
         for k, v in ckpt.items():
             self.__dict__[k] = v
         not_in_ckpt = set(self._keys_to_save) - set(ckpt.keys())
@@ -393,8 +396,7 @@ class Trainer:
             self.accelerator.wait_for_everyone()
             self.train()
             self.accelerator.wait_for_everyone()
-            #TODO: fix validation
-            #self.val() 
+            self.val()
             self.logs_flash(step=self.epoch)
             if self.epoch % self.cfg.training.save_every_x_epoch == 0:
                 ckpt_path, model_name, model_epoch = self.save_ckpt()
@@ -693,8 +695,7 @@ class Trainer:
                     start + horizon * self.cfg.frameskip + 1 : 
                     self.cfg.frameskip
                 ]
-            act = act[start : start + horizon * self.cfg.frameskip]
-            act = rearrange(act, "(h f) d -> h (f d)", f=self.cfg.frameskip)
+            act = act[start : start + horizon * self.cfg.frameskip : self.cfg.frameskip]
 
             obs_g = {}
             for k in obs.keys():

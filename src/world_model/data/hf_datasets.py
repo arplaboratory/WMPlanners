@@ -85,11 +85,16 @@ class HFWindowDataset(Dataset):
             T.Resize((img_size, img_size)),
             T.ToTensor(),
         ])
-        # Store normalization/scaling stats
-        self.odom_stats = odom_stats
-        self.imu_stats = imu_stats
-        self.collision_stats = collision_stats
-        self.action_stats = action_stats
+        # Store normalization/scaling stats; convert OmegaConf ListConfig → numpy
+        def _to_numpy_stats(stats):
+            if stats is None:
+                return None
+            return {k: np.array(v, dtype=np.float32) for k, v in stats.items()}
+
+        self.odom_stats = _to_numpy_stats(odom_stats)
+        self.imu_stats = _to_numpy_stats(imu_stats)
+        self.collision_stats = _to_numpy_stats(collision_stats)
+        self.action_stats = _to_numpy_stats(action_stats)
         # Detect Odom, IMU, and Action column names and dimensions
         self.odom_cols = [c for c in self._ds.column_names if c.startswith("odom_")]
         self.imu_cols = [c for c in self._ds.column_names if c.startswith("imu_")]
@@ -270,6 +275,24 @@ class HFWindowDataset(Dataset):
             imus = np.stack([[batch_data[col][i] for col in self.imu_cols] for i in range(n_frames)]).astype(np.float32) if self.imu_cols else np.zeros((n_frames, self.D_imu), dtype=np.float32)
             collisions = np.zeros((n_frames, 1), dtype=np.float32)
             depths = np.zeros((n_frames, 1, self.img_size, self.img_size), dtype=np.float32)
+            state_odom = odoms.copy()
+            state_imu = imus.copy()
+            state_collision = collisions.copy()
+            if self.odom_stats is not None:
+                if "mean" in self.odom_stats and "std" in self.odom_stats:
+                    odoms = (odoms - self.odom_stats["mean"]) / (self.odom_stats["std"] + 1e-8)
+                elif "min" in self.odom_stats and "max" in self.odom_stats:
+                    odoms = (odoms - self.odom_stats["min"]) / (self.odom_stats["max"] - self.odom_stats["min"] + 1e-8)
+            if self.imu_stats is not None:
+                if "mean" in self.imu_stats and "std" in self.imu_stats:
+                    imus = (imus - self.imu_stats["mean"]) / (self.imu_stats["std"] + 1e-8)
+                elif "min" in self.imu_stats and "max" in self.imu_stats:
+                    imus = (imus - self.imu_stats["min"]) / (self.imu_stats["max"] - self.imu_stats["min"] + 1e-8)
+            if self.action_stats is not None:
+                if "mean" in self.action_stats and "std" in self.action_stats:
+                    actions = (actions - self.action_stats["mean"]) / (self.action_stats["std"] + 1e-8)
+                elif "min" in self.action_stats and "max" in self.action_stats:
+                    actions = (actions - self.action_stats["min"]) / (self.action_stats["max"] - self.action_stats["min"] + 1e-8)
             output = {
                 "rgb": rgbs,
                 "depth": depths,
@@ -277,6 +300,7 @@ class HFWindowDataset(Dataset):
                 "odom": odoms,
                 "action": actions,
                 "collision": collisions,
+                "state": torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)),
             }
             print(f"[HFWindowDataset] Returning output keys: {list(output.keys())}")
             return output
@@ -294,6 +318,30 @@ def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
         action=torch.from_numpy(np.stack([b["action"] for b in batch])),
         collision=torch.from_numpy(np.stack([b["collision"] for b in batch])),
     )
+class EpisodeDataset(torch.utils.data.Dataset):
+    """Wraps HFWindowDataset(sample_mode=False) to return full episodes as
+    (obs_dict, act, state, {}) 4-tuples for use in openloop_rollout."""
+
+    def __init__(self, hf_window_dataset: HFWindowDataset):
+        self._ds = hf_window_dataset
+
+    def __len__(self):
+        return len(self._ds)
+
+    def __getitem__(self, idx):
+        d = self._ds[idx]  # dict: "rgb", "odom", "imu", "action", "collision", "state"
+        odom = d["odom"] if isinstance(d["odom"], torch.Tensor) else torch.from_numpy(d["odom"])
+        imu  = d["imu"]  if isinstance(d["imu"],  torch.Tensor) else torch.from_numpy(d["imu"])
+        coll = d["collision"] if isinstance(d["collision"], torch.Tensor) else torch.from_numpy(d["collision"])
+        obs = {
+            "visual": d["rgb"] if isinstance(d["rgb"], torch.Tensor) else torch.from_numpy(d["rgb"]),
+            "proprio": torch.cat([odom, imu, coll], dim=-1),
+        }
+        act   = d["action"] if isinstance(d["action"], torch.Tensor) else torch.from_numpy(d["action"])
+        state = d["state"]  if isinstance(d["state"],  torch.Tensor) else torch.from_numpy(d["state"])
+        return obs, act, state, {}
+
+
 def collate_dinowm(batch: List[dict[str, np.ndarray]]):
     """Collate a list of window dicts into (obs_dict, action, state) for DinoWM training."""
     if "state" not in batch[0]:
