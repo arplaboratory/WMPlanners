@@ -19,8 +19,6 @@ Authors are with New York University.
 
 [Code](#) | [Paper](#)
 
-`src/cjepa` is a lightweight integration layer for adapting continual learning to JEPA.
-<br>
 `external/vjepa2` official [V-JEPA 2](https://github.com/facebookresearch/vjepa2) repository.
 <br>
 `src/rloclab` package provides an Isaac Lab reinforcement learning workflow for Unitree Go2 locomotion and wheeled robots.

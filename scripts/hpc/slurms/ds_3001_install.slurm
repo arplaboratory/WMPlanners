@@ -100,7 +100,7 @@ if [ -f "$PROJECT_ROOT/external/dino/requirements.txt" ]; then
   sed -i "/--extra-index-url/d"                       "$PROJECT_ROOT/external/dino/requirements.txt"
 fi
 
-echo "[APPTAINER] Installing cjepa project..."
+echo "[APPTAINER] Installing project..."
 pip install -e "${PROJECT_ROOT}[dev]" || \
   pip install -e "${PROJECT_ROOT}"
 

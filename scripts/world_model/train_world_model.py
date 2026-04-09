@@ -89,10 +89,13 @@ def main():
     ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--out_dir', type=str, default='runs')
+    ap.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from (autodetects "latest.pt")')
     # Backbone configs
     ap.add_argument('--backbone', type=str, default='cnn', help='cnn, dinov2, or vjepa2')
     ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14', help='Specific model variant for the backbone')
     ap.add_argument('--freeze_backbone', action='store_true', help='Freeze backbone weights during training')
+    ap.add_argument('--dynamics_type', type=str, default='mlp', choices=['mlp', 'rssm', 'td-jepa'], help='Type of dynamics module')
+    ap.add_argument('--ema_tau', type=float, default=0.996, help='EMA coefficient for TD-JEPA target model')
     # Experiment / logging
     ap.add_argument('--experiment_name', type=str, default=None, help='WANDB run name (default: auto-generated)')
     ap.add_argument('--wandb', action='store_true', default=False, help='Enable WANDB logging')
@@ -137,7 +140,6 @@ def main():
         ds = NPZEpisodeDataset(args.dataset, window=args.horizon + 1, img_size=args.img_size)
         collate_fn = collate_npz
 
-    # ---- Sampler: DDP uses DistributedSampler, else shuffle ----
     sampler = None
     shuffle = True
     if args.ddp:
@@ -162,19 +164,64 @@ def main():
         backbone=args.backbone,
         backbone_kwargs={"model_name": args.backbone_name, "device": args.device},
         freeze_backbone=args.freeze_backbone,
+        dynamics_type="mlp" if args.dynamics_type == "td-jepa" else args.dynamics_type,
     ).to(args.device)
 
+    target_model = None
+    if args.dynamics_type == "td-jepa":
+        import copy
+        target_model = copy.deepcopy(model)
+        for p in target_model.parameters():
+            p.requires_grad = False
+
     if args.ddp:
-        model = DDP(model, device_ids=[local_rank])
+        # rollout_loss calls model(...) (i.e. DDP.forward()) so DDP hooks fire
+        # correctly. For td-jepa the online backbone is unused (targets come
+        # from the frozen EMA model), so we need find_unused_parameters=True.
+        if args.dynamics_type == "td-jepa":
+            model = DDP(model, device_ids=[local_rank],
+                        find_unused_parameters=True)
+        else:
+            model = DDP(model, device_ids=[local_rank])
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon)
+    
+    # Auto-resume logic
+    start_epoch = 0
+    checkpoint_path = args.resume
+    if checkpoint_path is None:
+        # Check if latest.pt exists in out_dir
+        latest = os.path.join(args.out_dir, 'latest.pt')
+        if os.path.exists(latest):
+            checkpoint_path = latest
+            if main_process:
+                print(f"[RECOVERY] Found {latest}. Resuming automatically...")
 
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        if main_process:
+            print(f"Loading checkpoint: {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=args.device)
+        
+        # Load weights into the raw model
+        raw_model = model.module if isinstance(model, DDP) else model
+        raw_model.load_state_dict(ckpt['model'])
+        
+        if 'optimizer' in ckpt:
+            opt.load_state_dict(ckpt['optimizer'])
+        
+        start_epoch = ckpt.get('epoch', -1) + 1
+        if main_process:
+            print(f"Resuming from epoch {start_epoch}")
+    
     # Training loop
+    if main_process:
+        print(f"[INFO] Starting training: epochs={args.epochs}, batch_size={args.batch_size}, "
+              f"backbone={args.backbone}, dynamics={args.dynamics_type}, ddp={args.ddp}")
     t0 = time.time()
     step = 0
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         if sampler is not None:
             sampler.set_epoch(epoch)  # Ensure proper shuffling each epoch
 
@@ -183,11 +230,16 @@ def main():
         epoch_steps = 0
 
         for batch in dl:
-            loss, logs = rollout_loss(model, batch, cfg)
+            loss, logs = rollout_loss(model, batch, cfg, target_model=target_model)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
+
+            if target_model is not None:
+                with torch.no_grad():
+                    for online_p, target_p in zip(model.parameters(), target_model.parameters()):
+                        target_p.data.mul_(args.ema_tau).add_(online_p.data, alpha=1.0 - args.ema_tau)
 
             epoch_loss += logs['loss']
             epoch_steps += 1
@@ -216,8 +268,15 @@ def main():
             raw_model = model.module if isinstance(model, DDP) else model
             ckpt = {
                 'model': raw_model.state_dict(),
+                'optimizer': opt.state_dict(),
                 'epoch': epoch,
                 'args': vars(args),
+                'model_config': {
+                    'odom_dim': odom_dim,
+                    'imu_dim': imu_dim,
+                    'act_dim': act_dim,
+                    'state_dim': state_dim,
+                },
             }
             path = os.path.join(args.out_dir, f'epoch_{epoch:03d}.pt')
             torch.save(ckpt, path)
@@ -258,7 +317,7 @@ def main():
         # Save final metrics to disk alongside checkpoint
         import json
         metrics_path = os.path.join(args.out_dir, 'eval_metrics.json')
-        with open(metrics_path, 'w') as f:
+        with open(metrics_path, 'w', encoding='utf-8') as f:
             json.dump({**eval_metrics, "train_time_s": train_time, "experiment": args.experiment_name}, f, indent=2)
         print(f"  Metrics saved to {metrics_path}")
 

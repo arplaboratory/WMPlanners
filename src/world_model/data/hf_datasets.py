@@ -5,8 +5,8 @@ from typing import List
 import numpy as np
 import os
 import torch
-from torch.utils.data import Dataset
 import torchvision.transforms as T
+from torch.utils.data import Dataset
 from .types import SampleBatch
 
 class HFWindowDataset(Dataset):
@@ -35,10 +35,8 @@ class HFWindowDataset(Dataset):
         Images are resized to ``(img_size, img_size)``.
     """
 
-    # Odom-delta column names in the HF dataset
-    ODOM_COLS = ["odom_dx", "odom_dy", "odom_dz", "odom_ax", "odom_ay", "odom_az"]
-
     def __init__(self, dataset, img_size: int = 224):
+        """Load a trajectory-window dataset from a local HF directory or Hub ID."""
         from datasets import load_from_disk, load_dataset, get_dataset_split_names
         from datasets import Dataset as HFDataset
 
@@ -50,7 +48,6 @@ class HFWindowDataset(Dataset):
                     self._ds = load_from_disk(dataset)
                 except Exception as e:
                     print(f"[HFWindowDataset] Local load failed: {e}. Falling back to Hub...")
-                    # 2. Try Hugging Face Hub if local failed
                     print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
                     try:
                         splits = get_dataset_split_names(dataset)
@@ -60,7 +57,6 @@ class HFWindowDataset(Dataset):
                         msg = f"Failed to load dataset '{dataset}' from both local disk and Hub.\nLocal error: {e}\nHub error: {hf_e}"
                         raise RuntimeError(msg) from hf_e
             else:
-                # 2. Try Hugging Face Hub (not a local dir)
                 print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
                 try:
                     splits = get_dataset_split_names(dataset)
@@ -69,8 +65,7 @@ class HFWindowDataset(Dataset):
                 except Exception as e:
                     msg = (
                         f"Failed to load dataset '{dataset}' from Hugging Face Hub.\n"
-                        f"Hub error: {e}\n\n"
-                        "TIP: If this is a private dataset, ensure you have run 'huggingface-cli login'."
+                        f"Hub error: {e}\n"
                     )
                     raise RuntimeError(msg) from e
         elif isinstance(dataset, HFDataset):
@@ -83,6 +78,7 @@ class HFWindowDataset(Dataset):
             T.Resize((img_size, img_size)),
             T.ToTensor(),
         ])
+
         # Detect Odom, IMU, and Action column names and dimensions
         self.odom_cols = [c for c in self._ds.column_names if c.startswith("odom_")]
         self.imu_cols = [c for c in self._ds.column_names if c.startswith("imu_")]
@@ -100,11 +96,11 @@ class HFWindowDataset(Dataset):
             return sorted(cols, key=lambda x: int(x.split("_")[-1]) if "_" in x and x.split("_")[-1].isdigit() else 0)
 
         if any("_" in c and c.split("_")[-1].isdigit() for c in self.odom_cols):
-             self.odom_cols = sort_indexed(self.odom_cols)
+            self.odom_cols = sort_indexed(self.odom_cols)
         if any("_" in c and c.split("_")[-1].isdigit() for c in self.imu_cols):
-             self.imu_cols = sort_indexed(self.imu_cols)
+            self.imu_cols = sort_indexed(self.imu_cols)
         if any("_" in c and c.split("_")[-1].isdigit() for c in self.act_cols):
-             self.act_cols = sort_indexed(self.act_cols)
+            self.act_cols = sort_indexed(self.act_cols)
 
         # Fallback to defaults if still not found
         if not self.odom_cols:
@@ -152,7 +148,7 @@ class HFWindowDataset(Dataset):
         batch_data = self._ds[row_indices]
         n_frames = len(row_indices)
 
-        # --- RGB images ---
+        # rgb
         rgb_list = []
         for img in batch_data["image"]:
             if img is not None:
@@ -161,13 +157,12 @@ class HFWindowDataset(Dataset):
                 rgb_list.append(np.zeros((3, self.img_size, self.img_size), dtype=np.float32))
         rgb = np.stack(rgb_list)  # (T, 3, H, W)
 
-        # --- Odom deltas (serve as odom state and action) ---
-        # Construct trajectory arrays from individual columns
+        # Odom deltas serve as odom state and action) ---
         odom = np.zeros((n_frames, self.D_odom), dtype=np.float32)
         for i, col in enumerate(self.odom_cols):
             odom[:, i] = batch_data[col]
 
-        # --- Actions ---
+        # actions
         if self.act_cols:
             action = np.zeros((n_frames, self.D_act), dtype=np.float32)
             for i, col in enumerate(self.act_cols):
@@ -175,7 +170,7 @@ class HFWindowDataset(Dataset):
         else:
             action = odom.copy()
 
-        # --- IMU ---
+        # imu    
         if self.imu_cols:
             imu = np.zeros((n_frames, self.D_imu), dtype=np.float32)
             for i, col in enumerate(self.imu_cols):
@@ -183,7 +178,7 @@ class HFWindowDataset(Dataset):
         else:
             imu = np.zeros((n_frames, self.D_imu), dtype=np.float32)
 
-        # --- Fields not in HF dataset: filled with zeros ---
+        # zeros 
         depth = np.zeros((n_frames, 1, self.img_size, self.img_size), dtype=np.float32)
         collision = np.zeros((n_frames, 1), dtype=np.float32)
 
@@ -206,14 +201,3 @@ def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
         action=torch.from_numpy(np.stack([b["action"] for b in batch])),
         collision=torch.from_numpy(np.stack([b["collision"] for b in batch])),
     )
-
-def _is_local_path(s: str) -> bool:
-    """Check if the string refers to a local directory or file."""
-    # If it exists on disk, it's local.
-    if os.path.exists(s):
-        return True
-    # If it starts with common local path markers, it's local (even if missing/typo)
-    if s.startswith("./") or s.startswith("../") or s.startswith("/"):
-        return True
-    # Otherwise, assume it's a Hugging Face Hub ID (e.g., "user/repo")
-    return False

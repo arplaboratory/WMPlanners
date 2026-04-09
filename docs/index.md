@@ -1,6 +1,6 @@
-# cjepa documentation
+# ds-ga-3001 documentation
 
-Welcome to the cjepa documentation.  This site covers the package API,
+Welcome to the ds-ga-3001 documentation.  This site covers the package API,
 
 ```{toctree}
 :maxdepth: 2

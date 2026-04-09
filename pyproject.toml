@@ -3,7 +3,7 @@ requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cjepa"
+name = "ds-ga-3001"
 version = "1.0.0"
 description = "Learning World Models Continuously from Embodied Experience"
 readme = "README.md"
@@ -32,7 +32,8 @@ dependencies = [
   "braceexpand",
   "webdataset",
   "ftfy",
-  "datasets"
+  "datasets>=4.8",
+  "pyarrow>=21",
 ]
 
 [project.optional-dependencies]
@@ -61,15 +62,10 @@ docs = [
   "sphinxcontrib-mermaid"
 ]
 
-[project.scripts]
-cjepa = "cjepa.cli:main"
-dino = "world_model.dino_demo:main"
-
 [tool.hatch.build.targets.wheel]
 packages = [
-  "src/cjepa",
   "src/world_model",
-  "src/models",
+  "src/rloclab",
   "src/wm_datasets",
   "src/utils"
 ]
@@ -86,4 +82,4 @@ line-length = 88
 [tool.mypy]
 python_version = "3.9"
 strict = true
-packages = ["cjepa", "world_model"]
+packages = ["world_model"]

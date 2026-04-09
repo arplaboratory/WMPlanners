@@ -35,7 +35,7 @@ DOCKER_USER_HOME="/root"
 # Node-local cache & execution
 SCRATCH_TMP="/scratch/$USER/tmp"
 CACHE_ROOT="${PERSISTENT_CACHE_DIR}"
-mkdir -p "${PERSISTENT_CACHE_DIR}" "${PERSISTENT_CACHE_DIR}/cache/pip" "${PERSISTENT_CACHE_DIR}/logs" "${PERSISTENT_CACHE_DIR}/data"
+mkdir -p "${PERSISTENT_CACHE_DIR}" "${PERSISTENT_CACHE_DIR}/cache/pip" "${PERSISTENT_CACHE_DIR}/logs"
 mkdir -p "${SCRATCH_TMP}"
 mkdir -p \
   "${CACHE_ROOT}/cache/pip" \
@@ -79,6 +79,8 @@ CMD="--nv --containall \
   --env WANDB_RUN_NAME=${WANDB_RUN_NAME} \
   --env HF_TOKEN=${HF_TOKEN:-} \
   --env HF_HOME=${DOCKER_USER_HOME}/.cache/huggingface \
+  --env HF_DATASETS_OFFLINE=1 \
+  --env TRANSFORMERS_OFFLINE=1 \
   --env TORCH_HOME=${DOCKER_USER_HOME}/.cache/torch \
   --env EXPERIMENT_NAME=${EXPERIMENT_NAME}"
 

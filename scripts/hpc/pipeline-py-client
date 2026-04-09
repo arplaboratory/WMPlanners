@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
-"""Orchestration.
-
-This client depends on the ``dialog`` binary install it via your package manager (e.g.,
-``apt-get install dialog``) before launching the UI.
+"""
+Awesome Orchestration.
 """
 
 from __future__ import annotations
 
+import os
+import select
+import termios
+import tempfile
+import tty
 import argparse
 import json
 import shutil
 import subprocess
-import time
 import sys
+import re
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Sequence, Tuple
-import os
-import select
-import termios
-import tty
-import subprocess
-
 
 # Resolve paths relative to the script location
 SCRIPT_PATH = Path(__file__).resolve()
@@ -30,7 +27,6 @@ PROJECT_DIR = Path(os.environ.get("PROJECT_ROOT") or DEFAULT_PROJECT_DIR).resolv
 ROOT = PROJECT_DIR / "scripts" / "hpc"
 GLOBAL_EXP_DIR = Path(os.environ.get("HPC_EXP") or (PROJECT_DIR.parent / "experiments")).resolve()
 if not GLOBAL_EXP_DIR.exists():
-    # Fallback to a sibling of the current directory if experiments is not found at the parent level
     GLOBAL_EXP_DIR = (PROJECT_DIR / "experiments").resolve()
 
 REPO_ROOT = PROJECT_DIR 
@@ -99,6 +95,7 @@ RLOCLAB_TASK_CHOICES: Tuple[Tuple[str, str], ...] = (
 )
 
 def load_config():
+    """Load the client config from disk, or return an empty dict if not found or invalid."""
     if SETTINGS.exists():
         try:
             return json.loads(SETTINGS.read_text())
@@ -107,12 +104,13 @@ def load_config():
     return {}
 
 def save_config(cfg):
+    """Save the client config to disk."""
     SETTINGS.write_text(json.dumps(cfg, indent=2))
 
 config = load_config()
 
-# First-time setup: create alias if not already done
 def ensure_alias_setup():
+    """ First-time setup to add an alias for the client to the user's shell config. """
     # Detect the user's current shell
     shell_path = os.environ.get("SHELL", "/bin/bash")
     shell_name = os.path.basename(shell_path)
@@ -153,7 +151,7 @@ def format_command(command: Sequence[str]) -> str:
 
 
 def run_command(command: Sequence[str], dry_run: bool = False, ui: 'DialogUI' = None) -> None:
-    """Execute a command list, respecting dry-run mode. If ui is provided and dry-run, show in dialog."""
+    """Execute a command list. If ui is provided and dry-run, show in dialog."""
     printable = format_command(command)
     if dry_run:
         if ui is not None:
@@ -174,7 +172,7 @@ def ensure_exists(path: Path, description: str) -> None:
 
 
 def queue_hpc_install(extra_args: Iterable[str], dry_run: bool) -> None:
-    """Queue the HPC install job through ``scripts/hpc/install.sh``."""
+    """Queue the HPC install job through install.sh"""
 
     install_script = PROJECT_DIR / "scripts" / "hpc" / "install.sh"
     ensure_exists(install_script, "Install launcher script")
@@ -197,6 +195,7 @@ def install_dependencies(pip_command: str, dry_run: bool) -> None:
         run_command(command, dry_run=dry_run if dry_run else False) if dry_run else subprocess.run(command, cwd=str(project_root), check=True)
 
 def discover_slurm_scripts(pattern: str = "*.slurm") -> List[str]:
+    """Discover existing Slurm scripts in the slurms directory matching the given pattern."""
     candidates: List[str] = []
     if SLURMS_DIR.is_dir():
         for path in sorted(SLURMS_DIR.glob(pattern)):
@@ -213,13 +212,13 @@ def download_assets(dry_run: bool, repo: str = None, out_dir: str = None, privat
         command.extend(["--out_dir", out_dir])
     if private:
         command.append("--private")
-        
+ 
     run_command(command, dry_run=dry_run)
 
 
 
 def build_pretrain_command(config: Path, datasets: Iterable[str], extra_args: Iterable[str]) -> List[str]:
-    """Construct the pretraining command using app.main (V-JEPA)."""
+    """TBD"""
     command = [get_python_exe(), "-m", "app.main"]
     if config and Path(config).is_file():
         command.extend(["--fname", str(config)])
@@ -333,6 +332,42 @@ EXPERIMENT_TYPES: Dict[str, Dict] = {
             "NUM_WORKERS": "8",
         },
     },
+    "eval_vision_pose": {
+        "template": "ds_3001_eval_vision_pose_template.slurm",
+        "description": "Vision Backbone Representational Evaluation (Pose MSE MLP Probe)",
+        "defaults": {
+            "PARTITION": "c24m170-a100-2",
+            "GRES": "gpu:1",
+            "NPROC": "1",
+            "TIME": "01:00:00",
+            "MEM": "20GB",
+            "ACCOUNT": "ds_ga_3001_003-2026sp",
+            "DATASET": "lquan9/collect1",
+            "BACKBONE": "dinov2",
+            "BACKBONE_NAME": "dinov2_vitb14",
+            "EPOCHS": "10",
+            "BATCH_SIZE": "64",
+            "LR": "1e-3",
+            "IMG_SIZE": "224",
+            "NUM_WORKERS": "4",
+        },
+    },
+    "wheeled_train": {
+        "template": "ds_3001_wheeled_train_template.slurm",
+        "description": "IsaacLab RL Training (Wheeled Agent)",
+        "defaults": {
+            "PARTITION": "c24m170-a100-2",
+            "GRES": "gpu:2",
+            "NPROC": "2",
+            "TIME": "02:00:00",
+            "MEM": "20GB",
+            "ACCOUNT": "ds_ga_3001_003-2026sp",
+            "TASK_NAME": "Template-Rloclab-Mushr-DriftRL-v0",
+            "AGENT_NAME": "rsl_rl_cfg_entry_point",
+            "EXPERIMENT_NAME": "mushr_drift_rl",
+            "EXTRA_FLAGS": "",
+        },
+    },
 }
 
 def generate_slurm_from_template(
@@ -361,16 +396,42 @@ def generate_slurm_from_template(
     return output_path
 
 
-def submit_slurm(script_path: Path, dry_run: bool) -> None:
+def submit_slurm(script_path: Path, dry_run: bool, cleanup: bool = False) -> None:
     """Submit the generated script via sbatch if available."""
 
     if not shutil.which("sbatch"):
         raise FileNotFoundError("sbatch command not found in PATH; cannot submit job.")
 
     run_command(["sbatch", str(script_path)], dry_run=dry_run)
+    if cleanup and not dry_run:
+        if script_path.exists():
+            script_path.unlink()
+            print(f"Cleaned up temporary Slurm script: {script_path}")
+
+
+def get_slurm_path(ui: DialogUI, default_name: str, prefix: str = "jepa_") -> Tuple[Path, bool]:
+    output_path = SLURMS_DIR / default_name
+    save_to_disk = ui.yesno(f"Write to {output_path.name}? (No = use temp file)", default_no=False)
+    if not save_to_disk:
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".slurm", prefix=prefix,
+            dir=str(SLURMS_DIR), delete=False
+        )
+        path = Path(tmp.name)
+        tmp.close()
+        return path, False
+    else:
+        path_str = ui.inputbox("Where should the Slurm script be written?", output_path.name)
+        if not path_str:
+            raise DialogCancelled()
+        path = Path(path_str)
+        if not path.is_absolute():
+            path = SLURMS_DIR / path
+        return path, True
 
 
 def handle_install(args: argparse.Namespace) -> None:
+    """Install HPC dependencies through the provided install.sh script."""
     command_args: List[str] = []
     if args.host:
         command_args.extend(["--host", args.host])
@@ -383,9 +444,11 @@ def handle_install(args: argparse.Namespace) -> None:
 
 
 def handle_download_assets(args: argparse.Namespace) -> None:
+    """Download project assets or HF datasets."""
     download_assets(dry_run=args.dry_run)
 
 def handle_test(args: argparse.Namespace) -> None:
+    """Run the test suite using pytest."""
     python_exe = get_python_exe()
     pytest_bin = Path(python_exe).parent / "pytest"
     command = [str(pytest_bin if pytest_bin.exists() else "pytest"), "tests/"] + args.extra_args
@@ -402,6 +465,7 @@ def handle_test(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 def handle_world_model_dataset(args: argparse.Namespace) -> None:
+    """Generate a toy dataset for world model training."""
     command = [
         get_python_exe(), "scripts/world_model/make_toy_dataset.py",
         "--out_dir", args.out_dir,
@@ -421,6 +485,7 @@ def handle_world_model_dataset(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 def handle_world_model_train(args: argparse.Namespace) -> None:
+    """Train a world model on the provided dataset and config."""
     command = [
         get_python_exe(), "scripts/world_model/train_world_model.py",
         "--data_dir", args.data_dir,
@@ -447,6 +512,7 @@ def handle_world_model_train(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 def handle_world_model_eval(args: argparse.Namespace) -> None:
+    """Evaluate a trained world model checkpoint on the vision-to-pose regression task."""
     command = [
         get_python_exe(), "scripts/world_model/eval_mpc.py",
         "--ckpt", args.ckpt,
@@ -463,25 +529,8 @@ def handle_world_model_eval(args: argparse.Namespace) -> None:
         if args.submit:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
-def handle_dino_demo(args: argparse.Namespace) -> None:
-    command = [get_python_exe(), "src/world_model/dino_demo.py"]
-    if getattr(args, "config", None):
-        command.extend(["--config", args.config])
-    command.extend(args.extra_args)
-    run_command(command, dry_run=args.dry_run)
-    if getattr(args, "slurm_path", None):
-        slurm_path = Path(args.slurm_path)
-        generate_slurm_script(
-            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
-            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
-            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
-            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
-        )
-        if args.submit:
-            submit_slurm(slurm_path, dry_run=args.dry_run)
-
-
 def handle_pretrain(args: argparse.Namespace) -> None:
+    """TBD"""
     command = build_pretrain_command(Path(args.config), args.datasets, args.extra_args)
     run_command(command, dry_run=args.dry_run)
 
@@ -509,6 +558,7 @@ def handle_pretrain(args: argparse.Namespace) -> None:
 
 
 def handle_rloclab_train(args: argparse.Namespace) -> None:
+    """Construct and run an Isaac Lab / rloclab training command, optionally queuing through Slurm."""
     train_script = PROJECT_DIR / "train.sh"
     ensure_exists(train_script, "Train launcher script")
 
@@ -554,27 +604,8 @@ def handle_rloclab_train(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 
-def handle_curate_dataset(args: argparse.Namespace) -> None:
-    command = [
-        get_python_exe(),
-        "scripts/hpc/helpers/curate_jepa_dataset.py",
-        "--input-root",
-        args.input_root,
-        "--output-manifest",
-        args.output_manifest,
-    ]
-    if args.extensions:
-        command.extend(["--extensions", *args.extensions])
-    if args.label is not None:
-        command.extend(["--label", str(args.label)])
-    if args.shuffle:
-        command.append("--shuffle")
-    if args.limit is not None:
-        command.extend(["--limit", str(args.limit)])
-    run_command(command, dry_run=args.dry_run)
-
-
 def handle_slurm(args: argparse.Namespace) -> None:
+    """Generate a Slurm script from the provided command and options, and optionally submit it."""
     if not args.command:
         raise ValueError("No command provided to embed in the Slurm script. Add arguments after --.")
 
@@ -705,14 +736,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_slurm_args(wme_parser)
     wme_parser.set_defaults(func=handle_world_model_eval)
 
-    dd_parser = subparsers.add_parser("dino-demo", parents=[common], help="Run DINO demo.")
-    dd_parser.add_argument("--config", help="Path to config yaml.")
-    dd_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
-    dd_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
-    dd_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
-    add_common_slurm_args(dd_parser)
-    dd_parser.set_defaults(func=handle_dino_demo)
-
     pretrain_parser = subparsers.add_parser("pretrain", parents=[common], help="Launch pretraining locally or via Slurm.")
     pretrain_parser.add_argument("--config", required=True, help="Path to the training config file.")
     pretrain_parser.add_argument(
@@ -770,24 +793,6 @@ def build_parser() -> argparse.ArgumentParser:
     rloclab_train_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
     add_common_slurm_args(rloclab_train_parser)
     rloclab_train_parser.set_defaults(func=handle_rloclab_train)
-
-    curate_parser = subparsers.add_parser(
-        "curate-dataset",
-        parents=[common],
-        help="Curate a HPC-compatible manifest from video files.",
-    )
-    curate_parser.add_argument("--input-root", required=True, help="Directory to scan recursively for videos.")
-    curate_parser.add_argument("--output-manifest", required=True, help="Output CSV/txt manifest path.")
-    curate_parser.add_argument(
-        "--extensions",
-        nargs="+",
-        default=[".mp4", ".avi", ".mov", ".mkv"],
-        help="Video extensions to include.",
-    )
-    curate_parser.add_argument("--label", type=int, default=0, help="Label value written for each row.")
-    curate_parser.add_argument("--shuffle", action="store_true", help="Shuffle discovered files before writing.")
-    curate_parser.add_argument("--limit", type=int, help="Optional max number of samples.")
-    curate_parser.set_defaults(func=handle_curate_dataset)
 
     slurm_parser = subparsers.add_parser(
         "slurm", parents=[common], help="Generate a Slurm script for an arbitrary command."
@@ -876,7 +881,6 @@ class DialogUI:
                 return
             text = path.read_text(encoding="utf-8")
             # Simple markdown to plain text: strip headings, code blocks, emphasis, links
-            import re
             text = re.sub(r"^#+ ", "", text, flags=re.MULTILINE)  # Remove headings
             text = re.sub(r"`([^`]*)`", r"\1", text)  # Inline code
             text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)  # Bold
@@ -889,7 +893,6 @@ class DialogUI:
             if len(text) > 20000:
                 text = text[:20000] + "\n... (truncated) ..."
             # Write to a temp file for dialog textbox
-            import tempfile
             with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
                 tmp.write(text)
                 tmp_path = tmp.name
@@ -1106,9 +1109,7 @@ def dialog_test(ui: DialogUI) -> None:
     try:
         if ui.yesno("Generate a Slurm script for this test run?", default_no=True):
             params = prompt_slurm_parameters(ui)
-            slurm_path = Path(
-                ui.inputbox("Where should the Slurm script be written?", "test.slurm")
-            )
+            slurm_path, save_to_disk = get_slurm_path(ui, "test.slurm", prefix="test_")
             generate_slurm_script(
                 slurm_path,
                 command,
@@ -1126,7 +1127,7 @@ def dialog_test(ui: DialogUI) -> None:
                 output_log=params.get("output_log"),
             )
             if ui.yesno("Submit with sbatch now?", default_no=False):
-                submit_slurm(slurm_path, dry_run=dry_run)
+                submit_slurm(slurm_path, dry_run=dry_run, cleanup=not save_to_disk)
     except DialogCancelled:
         return
     except Exception as exc:  # pragma: no cover
@@ -1134,7 +1135,6 @@ def dialog_test(ui: DialogUI) -> None:
 
 
 def dialog_pretrain(ui: DialogUI) -> None:
-    import json
     try:
         # List config files in experiments/configs
         configs_dir = CONFIGS_DIR
@@ -1199,22 +1199,20 @@ def dialog_pretrain(ui: DialogUI) -> None:
 
     try:
         command = build_pretrain_command(Path(config_path), datasets, extra_args)
-    except Exception as exc:  # pragma: no cover - surfaced to the user
+    except Exception as exc:
         ui.msgbox(f"Could not build pretraining command: {exc}")
         return
 
     try:
         run_command(command, dry_run=dry_run, ui=ui)
-    except Exception as exc:  # pragma: no cover - surfaced to the user
+    except Exception as exc:
         ui.msgbox(f"Pretrain launch failed: {exc}")
         return
 
     try:
         if ui.yesno("Generate a Slurm script for this pretrain run?", default_no=True):
             params = prompt_slurm_parameters(ui)
-            slurm_path = Path(
-                ui.inputbox("Where should the Slurm script be written?", "pretrain.slurm")
-            )
+            slurm_path, save_to_disk = get_slurm_path(ui, "pretrain.slurm", prefix="pretrain_")
             generate_slurm_script(
                 slurm_path,
                 command,
@@ -1232,7 +1230,7 @@ def dialog_pretrain(ui: DialogUI) -> None:
                 output_log=params.get("output_log"),
             )
             if ui.yesno("Submit with sbatch now?", default_no=False):
-                submit_slurm(slurm_path, dry_run=dry_run)
+                submit_slurm(slurm_path, dry_run=dry_run, cleanup=not save_to_disk)
     except DialogCancelled:
         return
     except Exception as exc:  # pragma: no cover - surfaced to the user
@@ -1241,16 +1239,15 @@ def dialog_pretrain(ui: DialogUI) -> None:
 
 def dialog_generate_slurm(ui: DialogUI) -> None:
     """Generate a SLURM script from a template"""
-    import tempfile
 
     try:
-        # 1. Experiment type selection
+        # Experiment type selection
         exp_choices = [(k, v["description"]) for k, v in EXPERIMENT_TYPES.items()]
         exp_type = ui.menu("Select experiment type", exp_choices)
         exp_cfg = EXPERIMENT_TYPES[exp_type]
         defaults = dict(exp_cfg["defaults"])  # copy
 
-        # 2. SBATCH resource parameters (pre-filled)
+        # SBATCH resource parameters
         defaults["PARTITION"] = ui.inputbox("Partition", defaults["PARTITION"])
         defaults["GRES"] = ui.inputbox("GPU resources (e.g., gpu:2)", defaults["GRES"])
         nproc_from_gres = defaults["GRES"].split(":")[-1] if ":" in defaults["GRES"] else "1"
@@ -1259,8 +1256,8 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
         defaults["MEM"] = ui.inputbox("Memory (e.g., 20GB)", defaults["MEM"])
         defaults["ACCOUNT"] = ui.inputbox("Account", defaults["ACCOUNT"])
 
-        # 3. Experiment-specific parameters (pre-filled)
-        if exp_type == "train_wm":
+        # Experiment-specific parameters
+        if exp_type in ("train_wm", "eval_vision_pose"):
             defaults["DATASET"] = ui.inputbox("HF Dataset (e.g., lquan9/collect1)", defaults["DATASET"])
             defaults["BACKBONE"] = ui.menu("Select backbone", [
                 ("cnn", "CNN (built-in)"),
@@ -1270,37 +1267,58 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             if defaults["BACKBONE"] == "dinov2":
                 defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "dinov2_vitb14")
             elif defaults["BACKBONE"] == "vjepa2":
-                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "vjepa2_vit_giant")
+                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name (vit_large, vit_huge, vit_giant)", "vjepa2_vit_large")
             else:
                 defaults["BACKBONE_NAME"] = "cnn"
 
             if defaults["BACKBONE"] in ("dinov2", "vjepa2"):
-                freeze = ui.yesno("Freeze backbone weights? (recommended for pretrained)", default_no=False)
+                msg = "Freeze backbone weights? (HIGHLY RECOMMENDED for 20GB limit)" if defaults["BACKBONE"] == "vjepa2" else "Freeze backbone weights? (recommended)"
+                freeze = ui.yesno(msg, default_no=False)
                 defaults["EXTRA_FLAGS"] = "--freeze_backbone" if freeze else ""
-                batch_default = "16"
+                batch_default = "16" if defaults["BACKBONE"] == "vjepa2" else "32"
+                num_workers_default = "4"
             else:
                 defaults["EXTRA_FLAGS"] = ""
-                batch_default = defaults["BATCH_SIZE"]
+                batch_default = "32"
+                num_workers_default = "4"
+
+            if exp_type == "train_wm":
+                dynamics_type = ui.menu("Select dynamics type", [
+                    ("mlp", "Linear MLP Predictor"),
+                    ("rssm", "Recurrent State-Space Model (GRU)"),
+                    ("td-jepa", "TD-JEPA with EMA Target Encoder"),
+                ])
+                defaults["EXTRA_FLAGS"] += f" --dynamics_type {dynamics_type}"
 
             defaults["EPOCHS"] = ui.inputbox("Epochs", defaults["EPOCHS"])
             defaults["BATCH_SIZE"] = ui.inputbox("Batch size", batch_default)
             defaults["LR"] = ui.inputbox("Learning rate", defaults["LR"])
-            defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
+            if exp_type == "train_wm":
+                defaults["HORIZON"] = ui.inputbox("Rollout horizon", defaults["HORIZON"])
             defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
-            defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", "8"))
+            defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", num_workers_default))
+            
+            ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
+            bb = defaults.get("BACKBONE", "cnn")
+            auto_name = f"{ds_short}_{bb}_{exp_type}"
+            defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
+            
+        elif exp_type == "wheeled_train":
+            defaults["TASK_NAME"] = ui.inputbox("Task Name", defaults["TASK_NAME"])
+            defaults["AGENT_NAME"] = ui.inputbox("Agent Name", defaults["AGENT_NAME"])
+            defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment Name", defaults["EXPERIMENT_NAME"])
+            defaults["EXTRA_FLAGS"] = ui.inputbox("Extra Args (e.g., --video)", defaults["EXTRA_FLAGS"])
 
-        ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
-        bb = defaults.get("BACKBONE", "cnn")
-        auto_name = f"{ds_short}_{bb}_{exp_type}"
-        defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
+        if exp_type in ("train_wm", "eval_vision_pose"):
+            pass  # Dataset and backbone weights are cached on-demand by the SLURM job itself.
 
-        # 5. Generate the SLURM script
+        # Generate the SLURM script
         template_path = SLURMS_DIR / exp_cfg["template"]
         output_name = f"ds_3001_{exp_type}_{defaults['EXPERIMENT_NAME']}.slurm"
         output_path = SLURMS_DIR / output_name
 
-        use_temp = ui.yesno(f"Write to {output_path.name}? (No = use temp file)", default_no=False)
-        if not use_temp:
+        save_to_disk = ui.yesno(f"Write to {output_path.name}? (No = use temp file)", default_no=True)
+        if not save_to_disk:
             tmp = tempfile.NamedTemporaryFile(
                 mode="w", suffix=".slurm", prefix="ds3001_",
                 dir=str(SLURMS_DIR), delete=False
@@ -1310,7 +1328,6 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
 
         generated = generate_slurm_from_template(template_path, defaults, output_path)
 
-        # 6. Show summary and optionally submit
         summary = (
             f"Generated: {generated.name}\n"
             f"Experiment: {defaults['EXPERIMENT_NAME']}\n"
@@ -1320,17 +1337,11 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
         ui.msgbox(summary)
 
         if ui.yesno("Submit with sbatch now?", default_no=False):
-            if not shutil.which("sbatch"):
-                ui.msgbox("Error: sbatch not found in PATH.\n\nAre you on a login node? Try:\n  sbatch " + str(generated))
-            else:
-                try:
-                    result = subprocess.run(
-                        ["sbatch", str(generated)],
-                        capture_output=True, text=True, check=True,
-                    )
-                    ui.msgbox(f"Job submitted!\n\n{result.stdout.strip()}")
-                except subprocess.CalledProcessError as e:
-                    ui.msgbox(f"sbatch failed:\n{e.stderr or e.stdout or str(e)}")
+            try:
+                submit_slurm(generated, dry_run=False, cleanup=not save_to_disk)
+                ui.msgbox(f"Job submitted successfully!")
+            except Exception as exc:
+                ui.msgbox(f"Submission failed: {exc}")
         else:
             ui.msgbox(f"Script saved. Submit manually:\n  sbatch {generated}")
 
@@ -1339,7 +1350,6 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
     except Exception as exc:
         ui.msgbox(f"SLURM generation failed: {exc}")
 
-# Keep old dialog_slurm for backward compatibility (wraps an arbitrary command)
 def dialog_slurm_legacy(ui: DialogUI) -> None:
     try:
         raw_command = ui.inputbox("Command to wrap (e.g., python -m jepa.datasets.download ...)")
@@ -1358,7 +1368,7 @@ def dialog_slurm_legacy(ui: DialogUI) -> None:
                 break
 
         params = prompt_slurm_parameters(ui)
-        slurm_path = Path(ui.inputbox("Where should the Slurm script be written?", default_name))
+        slurm_path, save_to_disk = get_slurm_path(ui, default_name, prefix="jepa_wrap_")
         dry_run = False
     except DialogCancelled:
         return
@@ -1384,12 +1394,11 @@ def dialog_slurm_legacy(ui: DialogUI) -> None:
             output_log=params.get("output_log"),
         )
         if ui.yesno("Submit with sbatch now?", default_no=True):
-            submit_slurm(slurm_path, dry_run=dry_run)
+            submit_slurm(slurm_path, dry_run=dry_run, cleanup=not save_to_disk)
     except Exception as exc:  # pragma: no cover - surfaced to the user
         ui.msgbox(f"Slurm generation/submission failed: {exc}")
 
 def dialog_slurm(ui: DialogUI) -> None:
-    """SLURM menu: choose between template-based generation or legacy wrapping."""
     try:
         mode = ui.menu("SLURM Script Generation", [
             ("template", "Generate from template (ds_3001)"),
