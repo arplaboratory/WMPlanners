@@ -5,8 +5,8 @@ from typing import List
 import numpy as np
 import os
 import torch
-from torch.utils.data import Dataset
 import torchvision.transforms as T
+from torch.utils.data import Dataset
 from .types import SampleBatch
 import random
 class HFWindowDataset(Dataset):
@@ -52,7 +52,6 @@ class HFWindowDataset(Dataset):
                     self._ds = load_from_disk(dataset)
                 except Exception as e:
                     print(f"[HFWindowDataset] Local load failed: {e}. Falling back to Hub...")
-                    # 2. Try Hugging Face Hub if local failed
                     print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
                     try:
                         splits = get_dataset_split_names(dataset)
@@ -62,7 +61,6 @@ class HFWindowDataset(Dataset):
                         msg = f"Failed to load dataset '{dataset}' from both local disk and Hub.\nLocal error: {e}\nHub error: {hf_e}"
                         raise RuntimeError(msg) from hf_e
             else:
-                # 2. Try Hugging Face Hub (not a local dir)
                 print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
                 try:
                     splits = get_dataset_split_names(dataset)
@@ -71,8 +69,7 @@ class HFWindowDataset(Dataset):
                 except Exception as e:
                     msg = (
                         f"Failed to load dataset '{dataset}' from Hugging Face Hub.\n"
-                        f"Hub error: {e}\n\n"
-                        "TIP: If this is a private dataset, ensure you have run 'huggingface-cli login'."
+                        f"Hub error: {e}\n"
                     )
                     raise RuntimeError(msg) from e
         elif isinstance(dataset, HFDataset):
@@ -112,11 +109,11 @@ class HFWindowDataset(Dataset):
             return sorted(cols, key=lambda x: int(x.split("_")[-1]) if "_" in x and x.split("_")[-1].isdigit() else 0)
 
         if any("_" in c and c.split("_")[-1].isdigit() for c in self.odom_cols):
-             self.odom_cols = sort_indexed(self.odom_cols)
+            self.odom_cols = sort_indexed(self.odom_cols)
         if any("_" in c and c.split("_")[-1].isdigit() for c in self.imu_cols):
-             self.imu_cols = sort_indexed(self.imu_cols)
+            self.imu_cols = sort_indexed(self.imu_cols)
         if any("_" in c and c.split("_")[-1].isdigit() for c in self.act_cols):
-             self.act_cols = sort_indexed(self.act_cols)
+            self.act_cols = sort_indexed(self.act_cols)
 
         # Fallback to defaults if still not found
         if not self.odom_cols:

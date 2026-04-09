@@ -14,10 +14,15 @@ class TrainConfig:
     lambda_state: float = 1.0
     lambda_risk: float = 0.2
 
-def rollout_loss(model, batch, cfg: TrainConfig) -> Tuple[torch.Tensor, Dict[str, float]]:
+def rollout_loss(
+    model,
+    batch,
+    cfg: TrainConfig,
+    target_model=None,
+) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Compute multi-step latent dynamics loss.
 
-    batch contains sequences length T. We take a random start and roll out H steps.
+    Rolls out ``cfg.horizon`` steps from the start of each sequence window.
     Loss terms:
       - latent prediction: z_pred vs z_target (stop-grad)
       - state prediction: decode(z_pred) vs state_target
@@ -31,42 +36,33 @@ def rollout_loss(model, batch, cfg: TrainConfig) -> Tuple[torch.Tensor, Dict[str
     action = batch.action.to(device)
     collision = batch.collision.to(device)  # (B,T,1)
 
-    B, T = rgb.shape[0], rgb.shape[1]
+    _, T = rgb.shape[0], rgb.shape[1]
     H = cfg.horizon
     assert T >= H + 1, f"Sequence length T={T} must be >= horizon+1={H+1}"
 
-    # Use the *first* part of sequence as start for simplicity
-    t0 = 0
+    # forward pass through model
+    target_raw = target_model.module if target_model is not None and hasattr(target_model, "module") else target_model
 
-    # Encode all steps we need (t0..t0+H)
-    z_targets = []
-    state_targets = []
-    risk_targets = []
-    for k in range(H + 1):
-        out = model.encode(rgb[:, t0+k], depth[:, t0+k], odom[:, t0+k], imu[:, t0+k])
-        z_targets.append(out.z)
-        state_targets.append(odom[:, t0+k])  # Here we decode odom-like state; adapt if needed
-        risk_targets.append(collision[:, t0+k])
+    outputs = model(
+        rgb, depth, odom, imu, action,
+        horizon=H, target_model=target_raw,
+    )
 
-    z_targets = torch.stack(z_targets, dim=1)  # (B,H+1,z)
-    state_targets = torch.stack(state_targets, dim=1)  # (B,H+1,D_odom)
-    risk_targets = torch.stack(risk_targets, dim=1)    # (B,H+1,1)
+    z_targets = outputs["z_targets"]
+    z_pred = outputs["z_pred"]
+    state_pred = outputs["state_pred"]
+    risk_pred = outputs["risk_pred"]
 
-    # Rollout dynamics from z0 using actions (t0..t0+H-1)
-    z0 = z_targets[:, 0]
-    a_seq = action[:, t0:t0+H]  # (B,H,act)
-    z_pred = model.rollout(z0, a_seq)  # (B,H+1,z)
+    # build gt
+    state_targets = torch.stack([odom[:, k] for k in range(H + 1)], dim=1)
+    risk_targets = torch.stack([collision[:, k] for k in range(H + 1)], dim=1)
 
-    # Decode state/risk
-    state_pred = model.state_head(z_pred)  # (B,H+1,state_dim)
-    risk_pred = model.risk_head(z_pred)    # (B,H+1,1)
-
-    # Targets: stop-grad on latent target to avoid collapse (JEPA-ish)
+    # compute losses
     z_tgt = z_targets.detach()
 
     loss_z = F.mse_loss(z_pred, z_tgt)
 
-    # Map odom targets to state_dim if necessary (here we assume state_head predicts first state_dim of odom)
+    # state loss only on state dims
     state_dim = state_pred.shape[-1]
     loss_state = F.mse_loss(state_pred, state_targets[..., :state_dim])
 

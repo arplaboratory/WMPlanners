@@ -6,19 +6,25 @@
 #SBATCH --mem=16GB
 #SBATCH --time=01:00:00
 #SBATCH --account=ds_ga_3001_003-2026sp
-#SBATCH --partition=interactive
-#SBATCH --output=../slurm_%j.out
-#SBATCH --error=../slurm_%j.err
+#SBATCH --partition=g2-standard-12
+#SBATCH --job-name=ds3001_bash
+#SBATCH --output=../%x_%j.out
+#SBATCH --error=../%x_%j.err
 #SBATCH --gres=gpu:1
 
 set -euo pipefail
+
+# Load user environment variables (e.g. WANDB_API_KEY)
+# shellcheck source=/dev/null
+[ -f "${HOME}/.envs" ] && source "${HOME}/.envs"
 
 # -------------------------------
 # Project workspace bootstrap
 # -------------------------------
 PROJECT_NAME="rloclab"
 ISAACLAB_DIR="/scratch/$USER/IsaacLab"
-SIF_IMAGE="/scratch/$USER/isaac-sim_5.1.0.sif"
+SIF_IMAGE="/scratch/$USER/isaac-sim_ds3001.sif"
+SANDBOX_DIR="/scratch/$USER/isaac_container"
 RUN_DIR="${SLURM_SUBMIT_DIR}"
 
 PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
@@ -26,8 +32,10 @@ PERSISTENT_CACHE_DIR="/scratch/$USER/docker-isaac-sim"
 DOCKER_ISAACSIM_ROOT_PATH="/isaac-sim"
 DOCKER_USER_HOME="/root"
 
-NODE_TMP="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-CACHE_ROOT="${NODE_TMP}/docker-isaac-sim"
+# Must match ds_3001_install.slurm so pre-warmed caches are reused
+CACHE_ROOT="/scratch/$USER/singularity-cache"
+SCRATCH_TMP="/scratch/$USER/tmp"
+mkdir -p "${SCRATCH_TMP}"
 mkdir -p \
   "${CACHE_ROOT}/cache/kit" \
   "${CACHE_ROOT}/cache/ov" \
@@ -40,10 +48,10 @@ mkdir -p \
   "${CACHE_ROOT}/documents" \
   "${CACHE_ROOT}/kit-data"
 
-VENV_DIR="/scratch/$USER/venvs/ds_ga_3001"
+# keep no runtime venv in baked-SIF workflow; code will be bound to /workspace/code
 
-export APPTAINER_TMPDIR="${NODE_TMP}"
-export APPTAINER_CACHEDIR="${NODE_TMP}/apptainer-cache"
+export APPTAINER_TMPDIR="${SCRATCH_TMP}"
+export APPTAINER_CACHEDIR="${SCRATCH_TMP}/apptainer-cache"
 
 # -------------------------------
 # Connection instructions
@@ -62,8 +70,17 @@ echo ""
 echo "The session will stay alive until the job walltime expires or you cancel it."
 echo "=========================================================================="
 
+# Prefer baked SIF; fall back to sandbox directory if SIF not yet built
+if [ -f "${SIF_IMAGE}" ]; then
+  APPTAINER_IMAGE="${SIF_IMAGE}"
+elif [ -d "${SANDBOX_DIR}" ]; then
+  echo "[NODE] SIF not found; using sandbox at ${SANDBOX_DIR}"
+  APPTAINER_IMAGE="${SANDBOX_DIR}"
+else
+  echo "[NODE] ERROR: neither SIF (${SIF_IMAGE}) nor sandbox (${SANDBOX_DIR}) found." >&2; exit 1
+fi
+
 CMD="--nv --containall \
-  -B ${VENV_DIR}:${VENV_DIR}:rw \
   -B ${CACHE_ROOT}/kit-data:${DOCKER_ISAACSIM_ROOT_PATH}/kit/data:rw \
   -B ${CACHE_ROOT}/cache/kit:${DOCKER_ISAACSIM_ROOT_PATH}/kit/cache:rw \
   -B ${CACHE_ROOT}/cache/ov:${DOCKER_USER_HOME}/.cache/ov:rw \
@@ -77,21 +94,26 @@ CMD="--nv --containall \
   -B ${HOME}/.config:${DOCKER_USER_HOME}/.config:rw \
   -B ${ISAACLAB_DIR}:/workspace/isaaclab:rw \
   -B ${RUN_DIR}:/workspace/run:rw \
+  -B ${RUN_DIR}:/workspace/code:rw \
+  -B ${SCRATCH_TMP}:/tmp:rw \
+  -B ${SCRATCH_TMP}:/var/tmp:rw \
   --env WANDB_CACHE_DIR=${DOCKER_USER_HOME}/.cache/wandb \
-  --env WANDB_CONFIG_DIR=${DOCKER_USER_HOME}/.config/wandb"
+  --env WANDB_CONFIG_DIR=${DOCKER_USER_HOME}/.config/wandb \
+  --env WANDB_API_KEY=${WANDB_API_KEY:-}"
 
 singularity exec \
   $CMD \
-  --env VENV_DIR="$VENV_DIR" \
-  "${SIF_IMAGE}" bash -lc '
+  "${APPTAINER_IMAGE}" bash -lc '
 set -euo pipefail
 
-source "${VENV_DIR}/bin/activate"
 export ISAACLAB_PATH=/workspace/isaaclab
 
-echo "[bash] Venv activated: $(which python)"
-echo "[bash] Python version: $(python --version)"
-echo "[bash] Sleeping until job expires. Use ssh to connect and work interactively."
+# Make sure Python can find the mounted project code
+export PYTHONPATH="/workspace/code/src:/workspace/isaaclab:${PYTHONPATH:-}"
+
+echo "[APPTAINER] python: $(which python)"
+echo "[APPTAINER] Python version: $(python --version)"
+echo "[APPTAINER] Sleeping until job expires. Use ssh to connect and work interactively."
 
 sleep infinity
 '

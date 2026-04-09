@@ -1,4 +1,4 @@
-"""Sphinx configuration for cjepa documentation."""
+"""Sphinx configuration for ds-ga-3001 documentation."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from datetime import datetime
 # sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 # sys.path.insert(0, os.path.join(PROJECT_ROOT, "external"))
 
-project = "cjepa"
+project = "ds-ga-3001"
 author = "Long Quang"
 copyright = f"{datetime.now():%Y}, {author}"
 release = "1.0.0"

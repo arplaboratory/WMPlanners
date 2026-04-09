@@ -1,9 +1,9 @@
 from __future__ import annotations
 import os
-from dataclasses import dataclass
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 import torchvision.transforms as T
 
@@ -13,7 +13,7 @@ def _as_float32(x):
     return np.asarray(x, dtype=np.float32)
 
 class NPZEpisodeDataset(Dataset):
-    """Loads episodes from .npz files and returns random windows.
+    """Loads episodes from .npz files and returns sliding windows.
 
     Expected keys per episode:
       rgb: (T,H,W,3) uint8
@@ -40,7 +40,7 @@ class NPZEpisodeDataset(Dataset):
                 T.ToTensor(),
             ])
 
-        # Light scan for shapes
+        # Light scan: read first file for dtype/dim metadata
         ex = np.load(self.files[0])
         self.has_depth = 'depth' in ex
         self.has_collision = 'collision' in ex
@@ -50,18 +50,28 @@ class NPZEpisodeDataset(Dataset):
         self.D_odom = ex['odom'].shape[-1]
         self.D_act = ex['action'].shape[-1]
 
+        # Pre-index all valid (file_idx, start_frame) windows across all episodes.
+        # This makes __len__ accurate and __getitem__ deterministic — DataLoader
+        # shuffling is then the only source of randomness, which is the correct design.
+        self._windows: List[tuple] = []
+        for file_idx, path in enumerate(self.files):
+            ep = np.load(path, mmap_mode='r')
+            T_len = ep['rgb'].shape[0]
+            for start in range(0, T_len - self.window, self.stride):
+                self._windows.append((file_idx, start))
+        if not self._windows:
+            raise ValueError(
+                f"No valid windows found in {data_dir} with window={window}, stride={stride}. "
+                "All episodes may be shorter than the requested window size."
+            )
+
     def __len__(self) -> int:
-        return len(self.files)
+        return len(self._windows)
 
     def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
-        ep = np.load(self.files[idx])
+        file_idx, start = self._windows[idx]
+        ep = np.load(self.files[file_idx], mmap_mode='r')
         rgb = ep['rgb']  # (T,H,W,3) uint8
-        T_len = rgb.shape[0]
-        if T_len < self.window + 1:
-            raise ValueError(f"Episode too short: {self.files[idx]} with T={T_len}")
-
-        # pick a random start
-        start = np.random.randint(0, T_len - self.window)
         sl = slice(start, start + self.window)
 
         out = {}
@@ -79,7 +89,6 @@ class NPZEpisodeDataset(Dataset):
             depth = _as_float32(ep['depth'][sl])
             if self.img_size is not None:
                 # Simple resize for depth (nearest)
-                import torch.nn.functional as F
                 depth_t = torch.from_numpy(depth).unsqueeze(1) # (T,1,H,W)
                 depth_t = F.interpolate(depth_t, size=(self.img_size, self.img_size), mode='nearest')
                 out['depth'] = depth_t.squeeze(1).numpy()
