@@ -53,20 +53,6 @@ Running `hpc` opens a menu with
 
 ## Commands
 
-### Curate datasets from raw videos (TODO)
-
-Example: (WIP)
-```bash
-hpc curate-dataset \
-  --input-root /datasets/raw_videos/task1 \
-  --output-manifest /datasets/manifests/task1_train.csv \
-  --extensions .mp4 .mov \
-  --shuffle
-```
-
-This calls `scripts/hpc/helpers/curate_jepa_dataset.py` and writes manifests in
-`/path/to/video.ext <label>` format compatible with V-JEPA style data loaders.
-
 ### Install environment on HPC
 
 ```bash

@@ -1,6 +1,5 @@
 from __future__ import annotations
 import argparse
-import numpy as np
 import torch
 import torch.nn.functional as F
 from world_model.architecture import WorldModel
@@ -31,12 +30,13 @@ def main():
     ckpt = torch.load(args.ckpt, map_location=args.device)
     train_args = ckpt['args']
 
-    # reconstruct model dims from train args
+    # Reconstruct model dims from saved checkpoints
+    mc = ckpt.get('model_config', {'odom_dim': 6, 'imu_dim': 6, 'act_dim': 2, 'state_dim': 6})
     model = WorldModel(
-        odom_dim=6, 
-        imu_dim=6, 
-        act_dim=2, 
-        state_dim=6,
+        odom_dim=mc['odom_dim'],
+        imu_dim=mc['imu_dim'],
+        act_dim=mc['act_dim'],
+        state_dim=mc['state_dim'],
         backbone=train_args.get('backbone', 'cnn'),
         backbone_kwargs={
             "model_name": train_args.get('backbone_name', 'dinov2_vitb14'),
@@ -54,7 +54,7 @@ def main():
     col = 0
     steps_total = 0
 
-    for ep in range(args.episodes):
+    for _ in range(args.episodes):
         obs = env.reset()
         done = False
         img_size = train_args.get('img_size', 224)
@@ -75,10 +75,10 @@ def main():
 
             goal = torch.tensor([[float(obs['odom'][4]), float(obs['odom'][5])]], device=args.device)
 
-            a0, seq = cem_plan(model, z0, goal, cost_fn, cfg, device=torch.device(args.device))
+            a0, _ = cem_plan(model, z0, goal, cost_fn, cfg, device=torch.device(args.device))
             action = a0.detach().cpu().numpy()
 
-            obs, reward, done, info = env.step(action)
+            obs, _, done, info = env.step(action)
             if info['collision'] > 0.5:
                 col += 1
                 done = True

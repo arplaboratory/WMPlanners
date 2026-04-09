@@ -6,8 +6,8 @@ set -euo pipefail
 
 SANDBOX_DIR=""
 PROJECT_ROOT=""
-RUNTIME_NAME="cjepa_runtime"
-TRAIN_NAME="cjepa_train"
+RUNTIME_NAME="wm_runtime"
+TRAIN_NAME="wm_train"
 KIT_PYTHON="/isaac-sim/kit/python/bin/python3"
 USE_FAKEROOt=false
 INSTALL_RUNTIME_PACKAGES=false
@@ -24,7 +24,7 @@ Options:
   --runtime-name NAME      Name for runtime venv under /opt/venvs (default: $RUNTIME_NAME)
   --train-name NAME        Name for train venv under /opt/venvs (default: $TRAIN_NAME)
   --fakeroot               Use --fakeroot when running apptainer exec
-  --install-runtime        Install minimal runtime packages into runtime venv (cjepa)
+  --install-runtime        Install minimal runtime packages into runtime venv
   --install-train          Install training packages into train venv (pins numpy to 1.26 and installs project)
   -h, --help               Show this message
 
@@ -82,8 +82,8 @@ export INSTALL_RUNTIME_PACKAGES INSTALL_TRAIN_PACKAGES RUNTIME_NAME TRAIN_NAME K
 apptainer exec "${APPTAINER_ARGS[@]}" "${BIND_PROJECT[@]}" "$SANDBOX_DIR" bash -s <<'INNER'
 set -euo pipefail
 PYKIT="${KIT_PYTHON:-/isaac-sim/kit/python/bin/python3}"
-RUNTIME_NAME="${RUNTIME_NAME:-cjepa_runtime}"
-TRAIN_NAME="${TRAIN_NAME:-cjepa_train}"
+RUNTIME_NAME="${RUNTIME_NAME:-wm_runtime}"
+TRAIN_NAME="${TRAIN_NAME:-wm_train}"
 
 echo "Inside container: using Python at $PYKIT"
 
@@ -117,8 +117,8 @@ fi
 if [[ "${INSTALL_RUNTIME_PACKAGES:-false}" = "true" ]]; then
   echo "Installing runtime packages into /opt/venvs/$RUNTIME_NAME"
   RUNTIME_PY="/opt/venvs/${RUNTIME_NAME}/bin/python"
-  echo "Installing cjepa into runtime venv via kit uv: $PYKIT"
-  "$PYKIT" -m uv pip install --python "$RUNTIME_PY" cjepa
+  echo "Installing project into runtime venv via kit uv: $PYKIT"
+  "$PYKIT" -m uv pip install --python "$RUNTIME_PY" ds-ga-3001
 fi
 
 if [[ "${INSTALL_TRAIN_PACKAGES:-false}" = "true" ]]; then
@@ -144,17 +144,17 @@ if [[ "${INSTALL_TRAIN_PACKAGES:-false}" = "true" ]]; then
 fi
 
 # create a small wrapper to start Isaac with the runtime venv prefixed
-cat > /usr/local/bin/isaac-with-cjepa <<'WRAP'
+cat > /usr/local/bin/isaac-with-wm <<'WRAP'
 #!/bin/bash
 export PATH=/opt/venvs/${RUNTIME_NAME}/bin:$PATH
 exec /isaac-sim/isaac-sim.streaming.sh "$@"
 WRAP
-chmod +x /usr/local/bin/isaac-with-cjepa || true
+chmod +x /usr/local/bin/isaac-with-wm || true
 
 echo "Done creating venvs and wrapper"
 INNER
 
 echo "Finished: venvs created in sandbox. Verify with:"
-echo "  apptainer exec --nv --containall -B $PROJECT_ROOT:/workspace/run:ro $SANDBOX_DIR /opt/venvs/$TRAIN_NAME/bin/python -c 'import numpy,cjepa; print(numpy.__version__)'"
+echo "  apptainer exec --nv --containall -B $PROJECT_ROOT:/workspace/run:ro $SANDBOX_DIR /opt/venvs/$TRAIN_NAME/bin/python -c 'import numpy,world_model; print(numpy.__version__)'"
 
 exit 0

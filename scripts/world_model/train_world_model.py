@@ -271,6 +271,12 @@ def main():
                 'optimizer': opt.state_dict(),
                 'epoch': epoch,
                 'args': vars(args),
+                'model_config': {
+                    'odom_dim': odom_dim,
+                    'imu_dim': imu_dim,
+                    'act_dim': act_dim,
+                    'state_dim': state_dim,
+                },
             }
             path = os.path.join(args.out_dir, f'epoch_{epoch:03d}.pt')
             torch.save(ckpt, path)
@@ -311,7 +317,7 @@ def main():
         # Save final metrics to disk alongside checkpoint
         import json
         metrics_path = os.path.join(args.out_dir, 'eval_metrics.json')
-        with open(metrics_path, 'w') as f:
+        with open(metrics_path, 'w', encoding='utf-8') as f:
             json.dump({**eval_metrics, "train_time_s": train_time, "experiment": args.experiment_name}, f, indent=2)
         print(f"  Metrics saved to {metrics_path}")
 

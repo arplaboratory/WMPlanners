@@ -14,7 +14,6 @@ import argparse
 import json
 import shutil
 import subprocess
-import time
 import sys
 import re
 from pathlib import Path
@@ -28,7 +27,6 @@ PROJECT_DIR = Path(os.environ.get("PROJECT_ROOT") or DEFAULT_PROJECT_DIR).resolv
 ROOT = PROJECT_DIR / "scripts" / "hpc"
 GLOBAL_EXP_DIR = Path(os.environ.get("HPC_EXP") or (PROJECT_DIR.parent / "experiments")).resolve()
 if not GLOBAL_EXP_DIR.exists():
-    # Fallback to a sibling of the current directory if experiments is not found at the parent level
     GLOBAL_EXP_DIR = (PROJECT_DIR / "experiments").resolve()
 
 REPO_ROOT = PROJECT_DIR 
@@ -97,6 +95,7 @@ RLOCLAB_TASK_CHOICES: Tuple[Tuple[str, str], ...] = (
 )
 
 def load_config():
+    """Load the client config from disk, or return an empty dict if not found or invalid."""
     if SETTINGS.exists():
         try:
             return json.loads(SETTINGS.read_text())
@@ -105,12 +104,13 @@ def load_config():
     return {}
 
 def save_config(cfg):
+    """Save the client config to disk."""
     SETTINGS.write_text(json.dumps(cfg, indent=2))
 
 config = load_config()
 
-# First-time setup: create alias if not already done
 def ensure_alias_setup():
+    """ First-time setup to add an alias for the client to the user's shell config. """
     # Detect the user's current shell
     shell_path = os.environ.get("SHELL", "/bin/bash")
     shell_name = os.path.basename(shell_path)
@@ -151,7 +151,7 @@ def format_command(command: Sequence[str]) -> str:
 
 
 def run_command(command: Sequence[str], dry_run: bool = False, ui: 'DialogUI' = None) -> None:
-    """Execute a command list, respecting dry-run mode. If ui is provided and dry-run, show in dialog."""
+    """Execute a command list. If ui is provided and dry-run, show in dialog."""
     printable = format_command(command)
     if dry_run:
         if ui is not None:
@@ -195,6 +195,7 @@ def install_dependencies(pip_command: str, dry_run: bool) -> None:
         run_command(command, dry_run=dry_run if dry_run else False) if dry_run else subprocess.run(command, cwd=str(project_root), check=True)
 
 def discover_slurm_scripts(pattern: str = "*.slurm") -> List[str]:
+    """Discover existing Slurm scripts in the slurms directory matching the given pattern."""
     candidates: List[str] = []
     if SLURMS_DIR.is_dir():
         for path in sorted(SLURMS_DIR.glob(pattern)):
@@ -211,7 +212,7 @@ def download_assets(dry_run: bool, repo: str = None, out_dir: str = None, privat
         command.extend(["--out_dir", out_dir])
     if private:
         command.append("--private")
-        
+ 
     run_command(command, dry_run=dry_run)
 
 
@@ -430,6 +431,7 @@ def get_slurm_path(ui: DialogUI, default_name: str, prefix: str = "jepa_") -> Tu
 
 
 def handle_install(args: argparse.Namespace) -> None:
+    """Install HPC dependencies through the provided install.sh script."""
     command_args: List[str] = []
     if args.host:
         command_args.extend(["--host", args.host])
@@ -442,9 +444,11 @@ def handle_install(args: argparse.Namespace) -> None:
 
 
 def handle_download_assets(args: argparse.Namespace) -> None:
+    """Download project assets or HF datasets."""
     download_assets(dry_run=args.dry_run)
 
 def handle_test(args: argparse.Namespace) -> None:
+    """Run the test suite using pytest."""
     python_exe = get_python_exe()
     pytest_bin = Path(python_exe).parent / "pytest"
     command = [str(pytest_bin if pytest_bin.exists() else "pytest"), "tests/"] + args.extra_args
@@ -461,6 +465,7 @@ def handle_test(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 def handle_world_model_dataset(args: argparse.Namespace) -> None:
+    """Generate a toy dataset for world model training."""
     command = [
         get_python_exe(), "scripts/world_model/make_toy_dataset.py",
         "--out_dir", args.out_dir,
@@ -480,6 +485,7 @@ def handle_world_model_dataset(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 def handle_world_model_train(args: argparse.Namespace) -> None:
+    """Train a world model on the provided dataset and config."""
     command = [
         get_python_exe(), "scripts/world_model/train_world_model.py",
         "--data_dir", args.data_dir,
@@ -506,6 +512,7 @@ def handle_world_model_train(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 def handle_world_model_eval(args: argparse.Namespace) -> None:
+    """Evaluate a trained world model checkpoint on the vision-to-pose regression task."""
     command = [
         get_python_exe(), "scripts/world_model/eval_mpc.py",
         "--ckpt", args.ckpt,
@@ -522,25 +529,8 @@ def handle_world_model_eval(args: argparse.Namespace) -> None:
         if args.submit:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
-def handle_dino_demo(args: argparse.Namespace) -> None:
-    command = [get_python_exe(), "src/world_model/dino_demo.py"]
-    if getattr(args, "config", None):
-        command.extend(["--config", args.config])
-    command.extend(args.extra_args)
-    run_command(command, dry_run=args.dry_run)
-    if getattr(args, "slurm_path", None):
-        slurm_path = Path(args.slurm_path)
-        generate_slurm_script(
-            slurm_path, command, job_name=args.job_name, nodes=args.nodes,
-            cpus=args.cpus, mem=args.mem, time=args.time, gpus=args.gpus,
-            ext3_path=args.ext3_path, sif_path=args.sif_path, account=args.account,
-            mail_user=args.mail_user, mail_type=args.mail_type, output_log=args.output_log
-        )
-        if args.submit:
-            submit_slurm(slurm_path, dry_run=args.dry_run)
-
-
 def handle_pretrain(args: argparse.Namespace) -> None:
+    """TBD"""
     command = build_pretrain_command(Path(args.config), args.datasets, args.extra_args)
     run_command(command, dry_run=args.dry_run)
 
@@ -568,6 +558,7 @@ def handle_pretrain(args: argparse.Namespace) -> None:
 
 
 def handle_rloclab_train(args: argparse.Namespace) -> None:
+    """Construct and run an Isaac Lab / rloclab training command, optionally queuing through Slurm."""
     train_script = PROJECT_DIR / "train.sh"
     ensure_exists(train_script, "Train launcher script")
 
@@ -613,27 +604,8 @@ def handle_rloclab_train(args: argparse.Namespace) -> None:
             submit_slurm(slurm_path, dry_run=args.dry_run)
 
 
-def handle_curate_dataset(args: argparse.Namespace) -> None:
-    command = [
-        get_python_exe(),
-        "scripts/hpc/helpers/curate_jepa_dataset.py",
-        "--input-root",
-        args.input_root,
-        "--output-manifest",
-        args.output_manifest,
-    ]
-    if args.extensions:
-        command.extend(["--extensions", *args.extensions])
-    if args.label is not None:
-        command.extend(["--label", str(args.label)])
-    if args.shuffle:
-        command.append("--shuffle")
-    if args.limit is not None:
-        command.extend(["--limit", str(args.limit)])
-    run_command(command, dry_run=args.dry_run)
-
-
 def handle_slurm(args: argparse.Namespace) -> None:
+    """Generate a Slurm script from the provided command and options, and optionally submit it."""
     if not args.command:
         raise ValueError("No command provided to embed in the Slurm script. Add arguments after --.")
 
@@ -764,14 +736,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_slurm_args(wme_parser)
     wme_parser.set_defaults(func=handle_world_model_eval)
 
-    dd_parser = subparsers.add_parser("dino-demo", parents=[common], help="Run DINO demo.")
-    dd_parser.add_argument("--config", help="Path to config yaml.")
-    dd_parser.add_argument("--extra-args", nargs=argparse.REMAINDER, default=[], help="Additional args.")
-    dd_parser.add_argument("--slurm-path", help="Optional path to write a Slurm script.")
-    dd_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
-    add_common_slurm_args(dd_parser)
-    dd_parser.set_defaults(func=handle_dino_demo)
-
     pretrain_parser = subparsers.add_parser("pretrain", parents=[common], help="Launch pretraining locally or via Slurm.")
     pretrain_parser.add_argument("--config", required=True, help="Path to the training config file.")
     pretrain_parser.add_argument(
@@ -829,24 +793,6 @@ def build_parser() -> argparse.ArgumentParser:
     rloclab_train_parser.add_argument("--submit", action="store_true", help="Submit generated Slurm script with sbatch.")
     add_common_slurm_args(rloclab_train_parser)
     rloclab_train_parser.set_defaults(func=handle_rloclab_train)
-
-    curate_parser = subparsers.add_parser(
-        "curate-dataset",
-        parents=[common],
-        help="Curate a HPC-compatible manifest from video files.",
-    )
-    curate_parser.add_argument("--input-root", required=True, help="Directory to scan recursively for videos.")
-    curate_parser.add_argument("--output-manifest", required=True, help="Output CSV/txt manifest path.")
-    curate_parser.add_argument(
-        "--extensions",
-        nargs="+",
-        default=[".mp4", ".avi", ".mov", ".mkv"],
-        help="Video extensions to include.",
-    )
-    curate_parser.add_argument("--label", type=int, default=0, help="Label value written for each row.")
-    curate_parser.add_argument("--shuffle", action="store_true", help="Shuffle discovered files before writing.")
-    curate_parser.add_argument("--limit", type=int, help="Optional max number of samples.")
-    curate_parser.set_defaults(func=handle_curate_dataset)
 
     slurm_parser = subparsers.add_parser(
         "slurm", parents=[common], help="Generate a Slurm script for an arbitrary command."

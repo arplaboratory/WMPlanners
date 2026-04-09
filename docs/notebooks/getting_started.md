@@ -11,7 +11,7 @@ kernelspec:
   name: python3
 ---
 
-# Getting started with cjepa
+# Getting started
 
 ```{note}
 Notebooks are stored as MyST Markdown files and can be executed during Sphinx

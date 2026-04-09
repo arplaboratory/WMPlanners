@@ -10,8 +10,7 @@ import torch.nn as nn
 
 from .backbones import ModelBundle, create_model as create_backbone
 from .backbones.cnn import VisionEncoder
-from .components import Fusion, LatentDynamics, ProprioEncoder, StateHead, RiskHead
-from .components.dynamics import RSSMDynamics
+from .components import Fusion, LatentDynamics, RSSMDynamics, ProprioEncoder, StateHead, RiskHead
 
 
 @dataclass
@@ -154,7 +153,7 @@ class WorldModel(nn.Module):
         t0 = 0
         H = horizon
 
-        # ---- encode targets ----
+        # encode targets
         if target_model is not None:
             # TD-JEPA: all targets from frozen EMA model
             z_targets = []
@@ -166,7 +165,7 @@ class WorldModel(nn.Module):
                     )
                     z_targets.append(out_k.z)
         else:
-            # MLP / RSSM: step-0 retains gradients, rest detached
+            # MLP / RSSM: retains gradients, rest detached
             out0 = self.encode(rgb[:, t0], depth[:, t0], odom[:, t0], imu[:, t0])
             z_targets = [out0.z]
             with torch.no_grad():
@@ -179,12 +178,12 @@ class WorldModel(nn.Module):
 
         z_targets = torch.stack(z_targets, dim=1)          # (B, H+1, z)
 
-        # ---- rollout dynamics ----
+        # rollout dynamics
         z0 = z_targets[:, 0]
         a_seq = action[:, t0 : t0 + H]                     # (B, H, act)
         z_pred = self.rollout(z0, a_seq)                    # (B, H+1, z)
 
-        # ---- decode heads ----
+        # decode
         state_pred = self.state_head(z_pred)                # (B, H+1, state)
         risk_pred = self.risk_head(z_pred)                  # (B, H+1, 1)
 

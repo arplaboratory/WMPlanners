@@ -1,8 +1,3 @@
-'''
-Generated. NOQA: ALL
-'''
-
-
 import os
 from typing import Any, Dict, Iterable, Optional
 

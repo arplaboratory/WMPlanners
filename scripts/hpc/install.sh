@@ -68,10 +68,8 @@ fi
 # ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "${HPC_HOST}" \
 #   "cd ~/${REPO_NAME} && sbatch --job-name="install_${USER}" --mail-user="${USER}@nyu.edu" ${INSTALL_SLURM@Q} ${INSTALL_ARGS_STR}"
 
-echo "=== DEBUG INFO ==="
 echo "PROJECT_ROOT: ${PROJECT_ROOT}"
 echo "INSTALL_SLURM: ${INSTALL_SLURM}"
 echo "PWD: $(pwd)"
-echo "=================="
 
 cd ${PROJECT_ROOT} && eval "sbatch --job-name=\"install_${USER}\" --mail-user=\"${USER}@nyu.edu\" ${INSTALL_SLURM@Q} ${INSTALL_ARGS_STR}"

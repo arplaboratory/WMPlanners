@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Tuple
 import torch
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 @dataclass
 class CEMConfig:
@@ -37,6 +38,9 @@ def cem_plan(
       best_action: (action_dim,) first action of best sequence
       best_seq:    (horizon, action_dim)
     """
+    model = model.module if isinstance(model, DDP) else model
+
+    assert cfg.iters > 0, "CEMConfig.iters must be > 0"
     assert z0.shape[0] == 1, "cem_plan currently expects batch=1 for simplicity."
 
     mean = torch.zeros(cfg.horizon, cfg.action_dim, device=device)
