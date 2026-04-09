@@ -9,6 +9,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from world_model.data import HFWindowDataset, NPZEpisodeDataset, collate_hf, collate_npz
+from world_model.data.normalization import NormStats
 from world_model.architecture import WorldModel
 from world_model.engine.trainer import TrainConfig, rollout_loss
 from world_model.utils import seed_everything
@@ -84,7 +85,7 @@ def main():
     ap.add_argument('--epochs', type=int, default=20)
     ap.add_argument('--batch_size', type=int, default=64)
     ap.add_argument('--img_size', type=int, default=224)
-    ap.add_argument('--horizon', type=int, default=8)
+    ap.add_argument('--horizon', type=int, default=16)
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
@@ -101,6 +102,8 @@ def main():
     ap.add_argument('--wandb', action='store_true', default=False, help='Enable WANDB logging')
     ap.add_argument('--pose_threshold', type=float, default=0.1, help='L2 threshold for pose accuracy metric')
     ap.add_argument('--num_workers', type=int, default=8, help='Number of dataloader workers')
+    ap.add_argument('--val_split', type=float, default=0.2, help='Fraction of episodes for validation (default: 0.2)')
+    ap.add_argument('--no_normalize', action='store_true', default=False, help='Disable data normalization')
     # DDP
     ap.add_argument('--ddp', action='store_true', default=False, help='Enable DistributedDataParallel training')
     args = ap.parse_args()
@@ -133,9 +136,43 @@ def main():
         use_wandb = False
 
     # Dataset
+    norm_stats = None
+    ds_val = None
     if args.dataset_type == 'hf':
-        ds = HFWindowDataset(args.dataset, img_size=args.img_size)
+        # Step 1: create initial dataset (no normalization) to discover episodes
+        ds_init = HFWindowDataset(args.dataset, img_size=args.img_size)
         collate_fn = collate_hf
+
+        # Step 2: split episodes — val = episode_id % 5 == 0
+        all_ids = ds_init._window_ids
+        val_ids = set(eid for eid in all_ids if eid % 5 == 0)
+        train_ids = set(eid for eid in all_ids if eid % 5 != 0)
+
+        if main_process:
+            print(f"[INFO] Episode split: {len(train_ids)} train, {len(val_ids)} val "
+                  f"(val_split by eid%%5==0)")
+
+        # Step 3: compute normalization stats from TRAINING episodes only
+        if not args.no_normalize:
+            norm_stats = ds_init.compute_norm_stats(episode_ids=list(train_ids))
+            norm_stats_path = os.path.join(args.out_dir, 'norm_stats.pt')
+            norm_stats.save(norm_stats_path)
+            if main_process:
+                print(f"[INFO] Norm stats saved to {norm_stats_path}")
+
+        # Step 4: rebuild train and val datasets WITH norm_stats
+        ds = HFWindowDataset(args.dataset, img_size=args.img_size, norm_stats=norm_stats)
+        # Filter to train episodes
+        ds._window_ids = [eid for eid in ds._window_ids if eid in train_ids]
+        ds._window_rows = {eid: ds._window_rows[eid] for eid in ds._window_ids}
+
+        ds_val = HFWindowDataset(args.dataset, img_size=args.img_size, norm_stats=norm_stats)
+        # Filter to val episodes
+        ds_val._window_ids = [eid for eid in ds_val._window_ids if eid in val_ids]
+        ds_val._window_rows = {eid: ds_val._window_rows[eid] for eid in ds_val._window_ids}
+
+        if main_process:
+            print(f"[INFO] Train windows: {len(ds)}, Val windows: {len(ds_val)}")
     else:
         ds = NPZEpisodeDataset(args.dataset, window=args.horizon + 1, img_size=args.img_size)
         collate_fn = collate_npz
@@ -271,6 +308,7 @@ def main():
                 'optimizer': opt.state_dict(),
                 'epoch': epoch,
                 'args': vars(args),
+                'has_norm_stats': norm_stats is not None,
                 'model_config': {
                     'odom_dim': odom_dim,
                     'imu_dim': imu_dim,
@@ -281,6 +319,26 @@ def main():
             path = os.path.join(args.out_dir, f'epoch_{epoch:03d}.pt')
             torch.save(ckpt, path)
             torch.save(ckpt, os.path.join(args.out_dir, 'latest.pt'))
+
+        # Validation loss (rank 0 only)
+        if main_process and ds_val is not None and len(ds_val) > 0:
+            val_dl = DataLoader(ds_val, batch_size=args.batch_size, shuffle=False,
+                                num_workers=args.num_workers, collate_fn=collate_fn,
+                                drop_last=False,
+                                pin_memory=True if "cuda" in str(args.device) else False)
+            model.eval()
+            val_loss_sum = 0.0
+            val_steps = 0
+            with torch.no_grad():
+                for val_batch in val_dl:
+                    v_loss, v_logs = rollout_loss(model, val_batch, cfg, target_model=target_model)
+                    val_loss_sum += v_logs['loss']
+                    val_steps += 1
+            avg_val_loss = val_loss_sum / max(val_steps, 1)
+            print(f"[Epoch {epoch:03d}] val_loss={avg_val_loss:.4f}")
+            if use_wandb:
+                wandb.log({"epoch/val_loss": avg_val_loss, "epoch": epoch}, step=step)
+            model.train()
 
         # Sync all ranks before next epoch
         if args.ddp:
@@ -296,7 +354,8 @@ def main():
         print("[Evaluation] Computing pose MSE and accuracy ...")
         print("=" * 60)
 
-        eval_dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
+        eval_ds = ds_val if ds_val is not None and len(ds_val) > 0 else ds
+        eval_dl = DataLoader(eval_ds, batch_size=args.batch_size, shuffle=False,
                              num_workers=args.num_workers, collate_fn=collate_fn, drop_last=False,
                              pin_memory=True if "cuda" in str(args.device) else False)
         eval_metrics = evaluate_pose(model, eval_dl, cfg, threshold=args.pose_threshold)
