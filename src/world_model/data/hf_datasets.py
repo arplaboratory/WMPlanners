@@ -7,6 +7,7 @@ import os
 import torch
 import torchvision.transforms as T
 from torch.utils.data import Dataset
+from .normalization import NormStats
 from .types import SampleBatch
 
 class HFWindowDataset(Dataset):
@@ -35,7 +36,7 @@ class HFWindowDataset(Dataset):
         Images are resized to ``(img_size, img_size)``.
     """
 
-    def __init__(self, dataset, img_size: int = 224):
+    def __init__(self, dataset, img_size: int = 224, norm_stats: NormStats | None = None):
         """Load a trajectory-window dataset from a local HF directory or Hub ID."""
         from datasets import load_from_disk, load_dataset, get_dataset_split_names
         from datasets import Dataset as HFDataset
@@ -78,6 +79,7 @@ class HFWindowDataset(Dataset):
             T.Resize((img_size, img_size)),
             T.ToTensor(),
         ])
+        self._norm_stats = norm_stats
 
         # Detect Odom, IMU, and Action column names and dimensions
         self.odom_cols = [c for c in self._ds.column_names if c.startswith("odom_")]
@@ -178,7 +180,14 @@ class HFWindowDataset(Dataset):
         else:
             imu = np.zeros((n_frames, self.D_imu), dtype=np.float32)
 
-        # zeros 
+        # Apply normalization if stats provided
+        if self._norm_stats is not None:
+            odom = self._norm_stats.normalize_odom(torch.from_numpy(odom)).numpy()
+            if self.imu_cols:
+                imu = self._norm_stats.normalize_imu(torch.from_numpy(imu)).numpy()
+            action = self._norm_stats.normalize_action(torch.from_numpy(action)).numpy()
+
+        # zeros
         depth = np.zeros((n_frames, 1, self.img_size, self.img_size), dtype=np.float32)
         collision = np.zeros((n_frames, 1), dtype=np.float32)
 
@@ -190,6 +199,51 @@ class HFWindowDataset(Dataset):
             "action": action,      # (T, D_act)
             "collision": collision, # (T, 1)
         }
+
+    def compute_norm_stats(self, episode_ids: list[int] | None = None) -> NormStats:
+        """Compute normalization stats over specified episodes (or all).
+
+        Args:
+            episode_ids: If provided, only compute stats from these episode IDs.
+                Use this to compute stats from training split only.
+        """
+        if episode_ids is not None:
+            wids = [w for w in self._window_ids if w in set(episode_ids)]
+        else:
+            wids = self._window_ids
+
+        all_odom, all_imu, all_act = [], [], []
+        for wid in wids:
+            row_indices = self._window_rows[wid]
+            batch_data = self._ds[row_indices]
+            n = len(row_indices)
+
+            odom = np.zeros((n, self.D_odom), dtype=np.float32)
+            for i, col in enumerate(self.odom_cols):
+                odom[:, i] = batch_data[col]
+            all_odom.append(odom)
+
+            if self.act_cols:
+                act = np.zeros((n, self.D_act), dtype=np.float32)
+                for i, col in enumerate(self.act_cols):
+                    act[:, i] = batch_data[col]
+            else:
+                act = odom.copy()
+            all_act.append(act)
+
+            if self.imu_cols:
+                imu = np.zeros((n, self.D_imu), dtype=np.float32)
+                for i, col in enumerate(self.imu_cols):
+                    imu[:, i] = batch_data[col]
+            else:
+                imu = np.zeros((n, self.D_imu), dtype=np.float32)
+            all_imu.append(imu)
+
+        return NormStats.from_arrays(
+            np.concatenate(all_odom),
+            np.concatenate(all_imu),
+            np.concatenate(all_act),
+        )
 
 def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
     """Collate a list of window dicts into a :class:`SampleBatch`."""
