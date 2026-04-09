@@ -33,7 +33,7 @@ singularity exec --nv \
     "$SIF" \
     /bin/bash -c "
         source /ext3/env.sh
-        export PYTHONPATH=${PROJECT}:\${PYTHONPATH:-}
+        export PYTHONPATH=${PROJECT}/src:\${PYTHONPATH:-}
 
         # Create temp caches to avoid home directory quota issues
         export HF_HOME=/tmp/hf_cache_\$\$
@@ -41,11 +41,12 @@ singularity exec --nv \
         mkdir -p \$HF_HOME \$TORCH_HOME
 
         echo '=== Training __EXPERIMENT_NAME__ ==='
-        python ${PROJECT}/train_world_model.py \
+        python ${PROJECT}/scripts/world_model/train_world_model.py \
             --dataset __DATASET__ \
+            --dataset_type hf \
             --backbone __BACKBONE__ \
             --backbone_name __BACKBONE_NAME__ \
-            --dynamics __DYNAMICS__ \
+            --dynamics_type __DYNAMICS__ \
             --batch_size __BATCH_SIZE__ \
             --img_size __IMG_SIZE__ \
             --epochs 20 \
@@ -54,10 +55,10 @@ singularity exec --nv \
             --num_workers 8 \
             --freeze_backbone \
             --experiment_name __EXPERIMENT_NAME__ \
-            --log_dir ${LOGS_DIR}
+            --out_dir ${LOGS_DIR}
 
         echo '=== Evaluating __EXPERIMENT_NAME__ ==='
-        python ${PROJECT}/eval_trajectory.py \
+        python ${PROJECT}/scripts/world_model/eval_trajectory.py \
             --checkpoint ${LOGS_DIR}/latest.pt \
             --dataset __DATASET__ \
             --horizons 8 16 25 \
