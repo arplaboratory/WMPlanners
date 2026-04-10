@@ -119,44 +119,49 @@ def evaluate_trajectories(
             n_skipped += 1
             continue
 
-        # Classify mode using raw (denormalized) odom
-        odom_tensor = torch.from_numpy(sample["odom"]).float()
+        # The dataset already converts odom positions to per-episode deltas
+        # (relative to frame 0). The model trains and predicts in this space.
+        # For mode classification we need velocity, which is NOT delta-converted.
+        odom_np = sample["odom"]  # (T, D) — may be normalized, positions are deltas
         if norm_stats is not None:
-            raw_odom = norm_stats.denormalize_odom(odom_tensor).numpy()
+            odom_denorm = norm_stats.denormalize_odom(
+                torch.from_numpy(odom_np).float()
+            ).numpy()
         else:
-            raw_odom = sample["odom"].copy()
-        mode = classify_mode(raw_odom, speed_threshold)
+            odom_denorm = odom_np.copy()
+        # Classify mode using velocity dims (7:10), which are NOT delta-converted
+        mode = classify_mode(odom_denorm, speed_threshold)
 
         # Prepare inputs — add batch dim
-        rgb = torch.from_numpy(sample["rgb"]).unsqueeze(0).to(device)      # (1,T,3,H,W)
-        depth = torch.from_numpy(sample["depth"]).unsqueeze(0).to(device)  # (1,T,1,H,W)
-        odom_in = torch.from_numpy(sample["odom"]).unsqueeze(0).to(device) # (1,T,D)
-        imu = torch.from_numpy(sample["imu"]).unsqueeze(0).to(device)     # (1,T,D)
-        action = torch.from_numpy(sample["action"]).unsqueeze(0).to(device) # (1,T,D)
+        rgb = torch.from_numpy(sample["rgb"]).unsqueeze(0).to(device)
+        depth = torch.from_numpy(sample["depth"]).unsqueeze(0).to(device)
+        odom_in = torch.from_numpy(sample["odom"]).unsqueeze(0).to(device)
+        imu = torch.from_numpy(sample["imu"]).unsqueeze(0).to(device)
+        action = torch.from_numpy(sample["action"]).unsqueeze(0).to(device)
 
         # Encode frame 0 -> z0
         out0 = model.encode(rgb[:, 0], depth[:, 0], odom_in[:, 0], imu[:, 0])
-        z0 = out0.z  # (1, z_dim)
+        z0 = out0.z
 
         # Rollout dynamics with real actions for max_h steps
-        a_seq = action[:, 0:max_h]  # (1, max_h, act_dim)
+        a_seq = action[:, 0:max_h]
         z_rollout = model.rollout(z0, a_seq)  # (1, max_h+1, z_dim)
 
-        # Decode state predictions
+        # Decode state predictions (in normalized delta space)
         state_pred = model.state_head(z_rollout)  # (1, max_h+1, state_dim)
 
-        # Denormalize predictions if norm_stats exists
-        # state_head predicts the first state_dim dims of odom
+        # Denormalize predictions back to real delta-position units (meters)
         if norm_stats is not None:
-            # Build partial mean/std for state_dim dims
             odom_mean = norm_stats.odom_mean[:state_dim].to(device)
             odom_std = norm_stats.odom_std[:state_dim].to(device)
             state_pred = state_pred * odom_std + odom_mean
 
-        # GT positions (first 3 dims of raw odom)
-        gt_pos = torch.from_numpy(raw_odom[:max_h + 1, :3]).unsqueeze(0).to(device)  # (1, max_h+1, 3)
+        # GT position deltas (first 3 dims of denormalized odom — already in delta form)
+        gt_pos = torch.from_numpy(
+            odom_denorm[:max_h + 1, :3]
+        ).unsqueeze(0).to(device)  # (1, max_h+1, 3)
 
-        # Predicted positions (first 3 dims of state prediction)
+        # Predicted position deltas (first 3 dims of decoded state)
         pred_pos = state_pred[:, :, :3]  # (1, max_h+1, 3)
 
         # Compute per-step displacement errors
@@ -182,7 +187,7 @@ def evaluate_trajectories(
     # Aggregate into summary dict keyed by horizon string
     summary = {}
     for h in horizons:
-        key = f"{h * 0.1:.1f}s"
+        key = f"{h / 5.0:.1f}s"  # 5 Hz frame rate
         r = results[h]
         summary[key] = {
             "horizon_steps": h,

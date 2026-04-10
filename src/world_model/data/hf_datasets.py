@@ -13,19 +13,18 @@ from .types import SampleBatch
 class HFWindowDataset(Dataset):
     """Load trajectory windows from a HuggingFace dataset.
 
-    The HF dataset is expected to have the schema produced by the data
-    curation pipeline (``scripts/world_model/data_pipeline/hf_upload.py``):
+    The HF dataset stores **absolute** sensor readings per frame:
 
-    - ``window_id`` (int64)
-    - ``frame_idx_in_window`` (int64)
+    - ``episode_id`` / ``window_id`` (int64)
+    - ``frame_idx`` / ``frame_idx_in_window`` (int64)
     - ``image`` (PIL Image, RGB)
-    - ``odom_dx, odom_dy, odom_dz`` (float64) — body-frame position deltas
-    - ``odom_ax, odom_ay, odom_az`` (float64) — body-frame rotation deltas
+    - ``odom_0..12`` — absolute odom: pos(3) + orient(4) + vel(3) + ang_vel(3)
+    - ``imu_0..9`` — IMU readings
+    - ``action_0..13`` — commanded actions
 
-    Each row is one frame; rows with the same ``window_id`` form a window.
-    The 6-DOF odom deltas are used as both the proprioceptive state and the
-    action signal.  Fields not present in the HF dataset (depth, IMU,
-    collision) are filled with zeros.
+    **Position deltas**: The first 3 odom dims (pos_x/y/z) are converted to
+    per-episode deltas relative to frame 0 at load time. This keeps values
+    small and meaningful for dynamics prediction and MPC planning.
 
     Parameters
     ----------
@@ -159,10 +158,17 @@ class HFWindowDataset(Dataset):
                 rgb_list.append(np.zeros((3, self.img_size, self.img_size), dtype=np.float32))
         rgb = np.stack(rgb_list)  # (T, 3, H, W)
 
-        # Odom deltas serve as odom state and action) ---
+        # Odom: load raw values, then convert positions to per-episode deltas
         odom = np.zeros((n_frames, self.D_odom), dtype=np.float32)
         for i, col in enumerate(self.odom_cols):
             odom[:, i] = batch_data[col]
+
+        # Convert absolute position (dims 0:3) to deltas relative to frame 0.
+        # This keeps position values small (meters of displacement within episode)
+        # instead of large absolute world coordinates.
+        # Orientation (3:7), velocity (7:10), angular velocity (10:13) stay as-is.
+        if self.D_odom >= 3:
+            odom[:, 0:3] = odom[:, 0:3] - odom[0, 0:3]
 
         # actions
         if self.act_cols:
@@ -221,6 +227,9 @@ class HFWindowDataset(Dataset):
             odom = np.zeros((n, self.D_odom), dtype=np.float32)
             for i, col in enumerate(self.odom_cols):
                 odom[:, i] = batch_data[col]
+            # Apply same position delta conversion as __getitem__
+            if self.D_odom >= 3:
+                odom[:, 0:3] = odom[:, 0:3] - odom[0, 0:3]
             all_odom.append(odom)
 
             if self.act_cols:
