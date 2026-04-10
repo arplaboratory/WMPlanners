@@ -4,7 +4,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
 #SBATCH --mem=32GB
-#SBATCH --time=06:00:00
+#SBATCH --time=12:00:00
 #SBATCH --gres=gpu:a100:1
 #SBATCH --job-name=EXPERIMENT_NAME_PLACEHOLDER
 #SBATCH --account=ds_ga_3001_003-2026sp
@@ -49,7 +49,7 @@ singularity exec --nv \
             --dynamics_type __DYNAMICS__ \
             --batch_size __BATCH_SIZE__ \
             --img_size __IMG_SIZE__ \
-            --epochs 20 \
+            --epochs 50 \
             --lr 3e-4 \
             --horizon 16 \
             --num_workers 8 \
