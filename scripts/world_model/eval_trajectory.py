@@ -65,25 +65,41 @@ def load_model_and_stats(checkpoint_path: str, device: str):
     return model, norm_stats, args_dict, mcfg
 
 
-def classify_mode(odom: np.ndarray, speed_threshold: float = 2.0) -> str:
-    """Classify an episode as 'ground' or 'flight' based on mean speed.
+def classify_mode(odom: np.ndarray, vz_threshold: float = 0.3, z_std_threshold: float = 1.0) -> str:
+    """Classify an episode as 'ground' or 'flight' using vertical motion.
+
+    Speed alone cannot distinguish ground driving from aerial flight (a
+    hovering drone is slow, a fast car is fast). Instead we use:
+      - Mean absolute Z-velocity (odom col 9): vertical movement = flying
+      - Std of Z-position (odom col 2): altitude variation = flying
+
+    Either signal triggers 'flight' classification.
 
     Args:
-        odom: (T, D_odom) numpy array. If D >= 10, columns 7/8/9 are
-            linear_vel_x/y/z; otherwise columns 0:3 are used.
-        speed_threshold: mean speed threshold in m/s.
+        odom: (T, D_odom) numpy array. Expected 13-dim odom with:
+            cols 0-2: position (x,y,z), col 9: linear_vel_z.
+        vz_threshold: mean |vz| threshold in m/s (default 0.3).
+        z_std_threshold: std of z-position in meters (default 1.0).
 
     Returns:
-        'flight' if mean speed >= threshold, else 'ground'.
+        'flight' if vertical motion detected, else 'ground'.
     """
     D = odom.shape[1]
+
+    # Check vertical velocity (col 9 = linear_vel_z)
     if D >= 10:
-        vel = odom[:, 7:10]
-    else:
-        vel = odom[:, 0:3]
-    speeds = np.linalg.norm(vel, axis=1)
-    mean_speed = float(np.mean(speeds))
-    return "flight" if mean_speed >= speed_threshold else "ground"
+        vz = odom[:, 9]
+        mean_abs_vz = float(np.mean(np.abs(vz)))
+        if mean_abs_vz >= vz_threshold:
+            return "flight"
+
+    # Check altitude variation (col 2 = pos_z)
+    if D >= 3:
+        z_pos = odom[:, 2]
+        if float(np.std(z_pos)) >= z_std_threshold:
+            return "flight"
+
+    return "ground"
 
 
 @torch.no_grad()
@@ -93,7 +109,6 @@ def evaluate_trajectories(
     norm_stats: NormStats | None,
     horizons: list[int],
     device: str,
-    speed_threshold: float = 2.0,
 ) -> dict:
     """Run action-conditioned rollouts and compute ADE/FDE at each horizon.
 
@@ -129,8 +144,8 @@ def evaluate_trajectories(
             ).numpy()
         else:
             odom_denorm = odom_np.copy()
-        # Classify mode using velocity dims (7:10), which are NOT delta-converted
-        mode = classify_mode(odom_denorm, speed_threshold)
+        # Classify mode using vertical motion (Z-velocity and Z-position std)
+        mode = classify_mode(odom_denorm)
 
         # Prepare inputs — add batch dim
         rgb = torch.from_numpy(sample["rgb"]).unsqueeze(0).to(device)
@@ -215,8 +230,10 @@ def main():
                     help="Evaluation horizons in timesteps (default: 8 16 25)")
     ap.add_argument("--img_size", type=int, default=224,
                     help="Image resize dimension (default: 224)")
-    ap.add_argument("--speed_threshold", type=float, default=2.0,
-                    help="Speed threshold for ground/flight classification (default: 2.0)")
+    ap.add_argument("--vz_threshold", type=float, default=0.3,
+                    help="Mean |vz| threshold for flight classification (default: 0.3 m/s)")
+    ap.add_argument("--z_std_threshold", type=float, default=1.0,
+                    help="Z-position std threshold for flight classification (default: 1.0 m)")
     ap.add_argument("--device", type=str,
                     default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
@@ -242,7 +259,7 @@ def main():
     # Evaluate
     print(f"\nEvaluating at horizons: {args.horizons}")
     summary = evaluate_trajectories(
-        model, ds, norm_stats, args.horizons, args.device, args.speed_threshold
+        model, ds, norm_stats, args.horizons, args.device,
     )
 
     # Print formatted table
