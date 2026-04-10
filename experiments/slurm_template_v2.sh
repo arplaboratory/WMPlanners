@@ -55,7 +55,8 @@ singularity exec --nv \
             --num_workers 8 \
             --freeze_backbone \
             --experiment_name __EXPERIMENT_NAME__ \
-            --out_dir ${LOGS_DIR}
+            --out_dir ${LOGS_DIR} \
+            --wandb
 
         echo '=== Evaluating __EXPERIMENT_NAME__ ==='
         python ${PROJECT}/scripts/world_model/eval_trajectory.py \
