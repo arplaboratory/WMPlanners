@@ -65,38 +65,50 @@ def load_model_and_stats(checkpoint_path: str, device: str):
     return model, norm_stats, args_dict, mcfg
 
 
-def classify_mode(odom: np.ndarray, vz_threshold: float = 0.3, z_std_threshold: float = 1.0) -> str:
-    """Classify an episode as 'ground' or 'flight' using vertical motion.
+def classify_mode(
+    raw_abs_z: float,
+    odom_denorm: np.ndarray,
+    z_altitude_threshold: float = 1.5,
+    z_std_threshold: float = 0.5,
+    vz_threshold: float = 0.3,
+) -> str:
+    """Classify an episode as 'ground' or 'flight'.
 
-    Speed alone cannot distinguish ground driving from aerial flight (a
-    hovering drone is slow, a fast car is fast). Instead we use:
-      - Mean absolute Z-velocity (odom col 9): vertical movement = flying
-      - Std of Z-position (odom col 2): altitude variation = flying
-
-    Either signal triggers 'flight' classification.
+    Uses three signals (any one triggers 'flight'):
+      1. Absolute Z altitude at episode start — if the robot starts above
+         z_altitude_threshold, it's airborne.
+      2. Z-position variation within episode — if altitude changes
+         significantly, vertical maneuvering occurred.
+      3. Mean |vz| — sustained vertical velocity means flying.
 
     Args:
-        odom: (T, D_odom) numpy array. Expected 13-dim odom with:
-            cols 0-2: position (x,y,z), col 9: linear_vel_z.
-        vz_threshold: mean |vz| threshold in m/s (default 0.3).
-        z_std_threshold: std of z-position in meters (default 1.0).
+        raw_abs_z: Absolute Z-position at frame 0 (meters, from raw HF data
+            before delta conversion). This is the primary signal.
+        odom_denorm: (T, D_odom) denormalized odom with positions as deltas.
+            Used for within-episode Z variation and velocity.
+        z_altitude_threshold: Absolute Z height to classify as flight (meters).
+        z_std_threshold: Std of Z-delta within episode (meters).
+        vz_threshold: Mean |vz| threshold (m/s).
 
     Returns:
-        'flight' if vertical motion detected, else 'ground'.
+        'flight' if any airborne signal detected, else 'ground'.
     """
-    D = odom.shape[1]
+    # Signal 1: absolute altitude at start of episode
+    if abs(raw_abs_z) >= z_altitude_threshold:
+        return "flight"
 
-    # Check vertical velocity (col 9 = linear_vel_z)
-    if D >= 10:
-        vz = odom[:, 9]
-        mean_abs_vz = float(np.mean(np.abs(vz)))
-        if mean_abs_vz >= vz_threshold:
+    D = odom_denorm.shape[1]
+
+    # Signal 2: altitude variation within episode (Z is delta from frame 0)
+    if D >= 3:
+        z_delta = odom_denorm[:, 2]
+        if float(np.std(z_delta)) >= z_std_threshold:
             return "flight"
 
-    # Check altitude variation (col 2 = pos_z)
-    if D >= 3:
-        z_pos = odom[:, 2]
-        if float(np.std(z_pos)) >= z_std_threshold:
+    # Signal 3: vertical velocity
+    if D >= 10:
+        vz = odom_denorm[:, 9]
+        if float(np.mean(np.abs(vz))) >= vz_threshold:
             return "flight"
 
     return "ground"
@@ -126,6 +138,14 @@ def evaluate_trajectories(
     n_skipped = 0
     n_evaluated = 0
 
+    # Pre-fetch raw absolute Z at frame 0 for each val episode (before delta conversion).
+    # Access the underlying HF dataset directly to get the original odom_2 values.
+    raw_z0_by_wid = {}
+    if hasattr(dataset, '_ds') and 'odom_2' in dataset._ds.column_names:
+        for wid in dataset._window_ids:
+            first_row = dataset._window_rows[wid][0]
+            raw_z0_by_wid[wid] = float(dataset._ds[first_row]['odom_2'])
+
     for idx in range(len(dataset)):
         sample = dataset[idx]
         T = sample["odom"].shape[0]
@@ -134,9 +154,7 @@ def evaluate_trajectories(
             n_skipped += 1
             continue
 
-        # The dataset already converts odom positions to per-episode deltas
-        # (relative to frame 0). The model trains and predicts in this space.
-        # For mode classification we need velocity, which is NOT delta-converted.
+        # The dataset returns odom with positions as deltas from frame 0.
         odom_np = sample["odom"]  # (T, D) — may be normalized, positions are deltas
         if norm_stats is not None:
             odom_denorm = norm_stats.denormalize_odom(
@@ -144,8 +162,13 @@ def evaluate_trajectories(
             ).numpy()
         else:
             odom_denorm = odom_np.copy()
-        # Classify mode using vertical motion (Z-velocity and Z-position std)
-        mode = classify_mode(odom_denorm)
+
+        # Get raw absolute Z at frame 0 for this episode
+        wid = dataset._window_ids[idx]
+        raw_abs_z = raw_z0_by_wid.get(wid, 0.0)
+
+        # Classify mode using absolute altitude + within-episode vertical motion
+        mode = classify_mode(raw_abs_z, odom_denorm)
 
         # Prepare inputs — add batch dim
         rgb = torch.from_numpy(sample["rgb"]).unsqueeze(0).to(device)
@@ -230,10 +253,8 @@ def main():
                     help="Evaluation horizons in timesteps (default: 8 16 25)")
     ap.add_argument("--img_size", type=int, default=224,
                     help="Image resize dimension (default: 224)")
-    ap.add_argument("--vz_threshold", type=float, default=0.3,
-                    help="Mean |vz| threshold for flight classification (default: 0.3 m/s)")
-    ap.add_argument("--z_std_threshold", type=float, default=1.0,
-                    help="Z-position std threshold for flight classification (default: 1.0 m)")
+    ap.add_argument("--z_altitude", type=float, default=1.5,
+                    help="Absolute Z height to classify as flight (default: 1.5 m)")
     ap.add_argument("--device", type=str,
                     default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
