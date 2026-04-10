@@ -49,7 +49,7 @@ singularity exec --nv \
             --dynamics_type __DYNAMICS__ \
             --batch_size __BATCH_SIZE__ \
             --img_size __IMG_SIZE__ \
-            --epochs 50 \
+            --epochs 100 \
             --lr 3e-4 \
             --horizon 16 \
             --num_workers 8 \

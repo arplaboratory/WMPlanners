@@ -99,7 +99,8 @@ def main():
     ap.add_argument('--ema_tau', type=float, default=0.996, help='EMA coefficient for TD-JEPA target model')
     # Experiment / logging
     ap.add_argument('--experiment_name', type=str, default=None, help='WANDB run name (default: auto-generated)')
-    ap.add_argument('--wandb', action='store_true', default=False, help='Enable WANDB logging')
+    ap.add_argument('--wandb', action='store_true', default=True, help='Enable WANDB logging (default: on)')
+    ap.add_argument('--no_wandb', action='store_true', default=False, help='Disable WANDB logging')
     ap.add_argument('--pose_threshold', type=float, default=0.1, help='L2 threshold for pose accuracy metric')
     ap.add_argument('--num_workers', type=int, default=8, help='Number of dataloader workers')
     ap.add_argument('--val_split', type=float, default=0.2, help='Fraction of episodes for validation (default: 0.2)')
@@ -123,6 +124,8 @@ def main():
         args.experiment_name = f"{ds_short}_{args.backbone}"
 
     # WANDB init (rank 0 only)
+    if args.no_wandb:
+        args.wandb = False
     use_wandb = args.wandb and os.environ.get('WANDB_API_KEY') and main_process
     if use_wandb:
         import wandb
