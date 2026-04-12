@@ -86,6 +86,7 @@ def main():
     ap.add_argument('--batch_size', type=int, default=64)
     ap.add_argument('--img_size', type=int, default=224)
     ap.add_argument('--horizon', type=int, default=16)
+    ap.add_argument('--num_hist', type=int, default=1, help='Number of history frames (1=original, 3=multi-frame context)')
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
@@ -226,7 +227,7 @@ def main():
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
-    cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon)
+    cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon, num_hist=args.num_hist)
     
     # Auto-resume logic
     start_epoch = 0

@@ -10,6 +10,7 @@ class TrainConfig:
     lr: float = 3e-4
     weight_decay: float = 1e-4
     horizon: int = 8   # multi-step rollout horizon during training
+    num_hist: int = 1  # number of history frames (1 = original, 3 = multi-frame)
     lambda_z: float = 1.0
     lambda_state: float = 1.0
     lambda_risk: float = 0.2
@@ -38,14 +39,16 @@ def rollout_loss(
 
     _, T = rgb.shape[0], rgb.shape[1]
     H = cfg.horizon
-    assert T >= H + 1, f"Sequence length T={T} must be >= horizon+1={H+1}"
+    nh = cfg.num_hist
+    pred_start = nh - 1
+    assert T >= nh + H, f"Sequence length T={T} must be >= num_hist+horizon={nh+H}"
 
     # forward pass through model
     target_raw = target_model.module if target_model is not None and hasattr(target_model, "module") else target_model
 
     outputs = model(
         rgb, depth, odom, imu, action,
-        horizon=H, target_model=target_raw,
+        horizon=H, target_model=target_raw, num_hist=nh,
     )
 
     z_targets = outputs["z_targets"]
@@ -53,9 +56,9 @@ def rollout_loss(
     state_pred = outputs["state_pred"]
     risk_pred = outputs["risk_pred"]
 
-    # build gt
-    state_targets = torch.stack([odom[:, k] for k in range(H + 1)], dim=1)
-    risk_targets = torch.stack([collision[:, k] for k in range(H + 1)], dim=1)
+    # build gt — targets start from pred_start (last history frame)
+    state_targets = torch.stack([odom[:, pred_start + k] for k in range(H + 1)], dim=1)
+    risk_targets = torch.stack([collision[:, pred_start + k] for k in range(H + 1)], dim=1)
 
     # compute losses
     z_tgt = z_targets.detach()
