@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Tuple
+import random
 import torch
 import torch.nn.functional as F
 
@@ -37,14 +38,31 @@ def rollout_loss(
     action = batch.action.to(device)
     collision = batch.collision.to(device)  # (B,T,1)
 
-    _, T = rgb.shape[0], rgb.shape[1]
+    B, T = rgb.shape[0], rgb.shape[1]
     H = cfg.horizon
     nh = cfg.num_hist
-    pred_start = nh - 1
-    assert T >= nh + H, f"Sequence length T={T} must be >= num_hist+horizon={nh+H}"
+    window = nh + H  # total frames needed: history + horizon
+    assert T >= window, f"Sequence length T={T} must be >= num_hist+horizon={window}"
 
-    # forward pass through model
+    # Random start offset: pick a random window within the episode.
+    # This gives ~(T - window) extra training signal per episode.
+    # At T=50, window=17: 34 possible starting points instead of always 0.
+    if model.training:
+        t0 = random.randint(0, T - window)
+    else:
+        t0 = 0  # deterministic for validation
+
+    # Slice all tensors to the random window
+    rgb = rgb[:, t0 : t0 + window]
+    depth = depth[:, t0 : t0 + window]
+    imu = imu[:, t0 : t0 + window]
+    odom = odom[:, t0 : t0 + window]
+    action = action[:, t0 : t0 + window]
+    collision = collision[:, t0 : t0 + window]
+
+    # forward pass through model (now T == window, starts from 0)
     target_raw = target_model.module if target_model is not None and hasattr(target_model, "module") else target_model
+    pred_start = nh - 1
 
     outputs = model(
         rgb, depth, odom, imu, action,
