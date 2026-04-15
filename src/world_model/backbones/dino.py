@@ -57,7 +57,7 @@ def build_dinov2(
     device: str = "cpu",
     image_size: int = 224,
     **_kwargs,
-) -> "DINOv2Encoder":
+) -> ModelBundle:
     """Load DINOv2 from the local ``dino`` submodule.
 
     Supported *model_name* values: ``dinov2_vits14``, ``dinov2_vitb14``,
@@ -88,7 +88,13 @@ def build_dinov2(
         }
         feature_dim = feature_dim_map.get(model_name)
 
-    logger.info(f"Loaded DINOv2 model: {model_name}, feature dimension: {feature_dim}")
+    logger.info("Loaded DINOv2 model: %s, feature dimension: %s", model_name, feature_dim)
     patch_size = getattr(model, "patch_size", 14)
-    return DINOv2Encoder(model=model, emb_dim=feature_dim, patch_size=patch_size, image_size=image_size)
+    encoder = DINOv2Encoder(model=model, emb_dim=feature_dim, patch_size=patch_size, image_size=image_size)
+    return ModelBundle(
+        model=encoder,
+        preprocess=default_preprocess,
+        feature_dim=feature_dim,
+        modality="image",
+    )
 

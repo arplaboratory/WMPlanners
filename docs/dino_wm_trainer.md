@@ -1,42 +1,6 @@
-# Training Guide — DinoWM World Model
+# DinoWM World Model
 
-## 1. Create the Conda Environment
-
-```bash
-conda create -n cjepa python=3.10 -y
-conda activate cjepa
-```
-
-## 2. Install the Project
-
-From the repo root:
-
-```bash
-pip install -e ".[dev]"
-```
-
-## 3. Install External Dependencies
-
-Requires [`uv`](https://github.com/astral-sh/uv). Install it if needed:
-
-```bash
-pip install uv
-```
-
-Then install the `external/dino` and `external/vjepa2` packages:
-
-```bash
-bash scripts/install_externals.sh
-```
-
-## 4. (Optional) Verify Key Package Versions
-
-```bash
-conda run -n cjepa python -c "import torch; print(torch.__version__)"
-# Expected: 2.11.0
-```
-
-## 5. Run Training
+## Run Training
 
 ```bash
 cd /path/to/NYU_DS_GA_3001

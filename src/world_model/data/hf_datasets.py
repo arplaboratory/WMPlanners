@@ -1,14 +1,17 @@
 """HuggingFace dataset loader for world-model training."""
 
 from __future__ import annotations
-from typing import List
 import numpy as np
 import os
 import torch
 import torchvision.transforms as T
+import random
+
 from torch.utils.data import Dataset
 from .types import SampleBatch
-import random
+from typing import List
+from datasets import load_from_disk, load_dataset, get_dataset_split_names
+from datasets import Dataset as HFDataset
 class HFWindowDataset(Dataset):
     """Load trajectory windows from a HuggingFace dataset.
 
@@ -38,9 +41,12 @@ class HFWindowDataset(Dataset):
     # Odom-delta column names in the HF dataset
     ODOM_COLS = ["odom_dx", "odom_dy", "odom_dz", "odom_ax", "odom_ay", "odom_az"]
 
-    def __init__(self, dataset, img_size: int = 224, action_stats=None, odom_stats=None, imu_stats=None, collision_stats=None, sample_k: int = None, sample_mode: bool = False, num_hist=None, num_pred=None, frameskip=None):
-        from datasets import load_from_disk, load_dataset, get_dataset_split_names
-        from datasets import Dataset as HFDataset
+    def __init__(self, dataset, img_size: int = 224,
+                 action_stats=None, odom_stats=None, imu_stats=None,
+                 collision_stats=None, sample_k: int = None, sample_mode: bool = False,
+                 num_hist=None, num_pred=None, frameskip=None):
+
+        """Initialize the dataset."""
         self.sample_k = sample_k
         self.sample_mode = sample_mode
 
@@ -50,7 +56,7 @@ class HFWindowDataset(Dataset):
                 print(f"[HFWindowDataset] Found local directory: {dataset}. Loading...")
                 try:
                     self._ds = load_from_disk(dataset)
-                except Exception as e:
+                except EnvironmentError as e:
                     print(f"[HFWindowDataset] Local load failed: {e}. Falling back to Hub...")
                     print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
                     try:
@@ -58,7 +64,9 @@ class HFWindowDataset(Dataset):
                         split = "train" if "train" in splits else splits[0]
                         self._ds = load_dataset(dataset, split=split)
                     except Exception as hf_e:
-                        msg = f"Failed to load dataset '{dataset}' from both local disk and Hub.\nLocal error: {e}\nHub error: {hf_e}"
+                        msg = f"Failed to load dataset '{dataset}' \
+                            from both local disk and Hub.\nLocal error: {e} \
+                            \nHub error: {hf_e}"
                         raise RuntimeError(msg) from hf_e
             else:
                 print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
@@ -82,7 +90,7 @@ class HFWindowDataset(Dataset):
             T.Resize((img_size, img_size)),
             T.ToTensor(),
         ])
-        # Store normalization/scaling stats; convert OmegaConf ListConfig → numpy
+        # Store normalization/scaling stats; convert OmegaConf ListConfig to numpy
         def _to_numpy_stats(stats):
             if stats is None:
                 return None
@@ -92,6 +100,7 @@ class HFWindowDataset(Dataset):
         self.imu_stats = _to_numpy_stats(imu_stats)
         self.collision_stats = _to_numpy_stats(collision_stats)
         self.action_stats = _to_numpy_stats(action_stats)
+
         # Detect Odom, IMU, and Action column names and dimensions
         self.odom_cols = [c for c in self._ds.column_names if c.startswith("odom_")]
         self.imu_cols = [c for c in self._ds.column_names if c.startswith("imu_")]
@@ -106,7 +115,8 @@ class HFWindowDataset(Dataset):
 
         # Ensure we sort indexed columns numerically (odom_1, odom_2, odom_10)
         def sort_indexed(cols):
-            return sorted(cols, key=lambda x: int(x.split("_")[-1]) if "_" in x and x.split("_")[-1].isdigit() else 0)
+            return sorted(cols,
+                          key=lambda x: int(x.split("_")[-1]) if "_" in x and x.split("_")[-1].isdigit() else 0)
 
         if any("_" in c and c.split("_")[-1].isdigit() for c in self.odom_cols):
             self.odom_cols = sort_indexed(self.odom_cols)
@@ -132,7 +142,6 @@ class HFWindowDataset(Dataset):
 
     def _build_index(self) -> None:
         """Group row indices into trajectories (windows/episodes)."""
-        # Support both 'window_id' and 'episode_id' for backward compatibility
         if "window_id" in self._ds.column_names:
             win_col = self._ds["window_id"]
             frame_col = self._ds["frame_idx_in_window"]
