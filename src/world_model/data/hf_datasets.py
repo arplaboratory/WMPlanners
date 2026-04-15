@@ -113,7 +113,7 @@ class HFWindowDataset(Dataset):
         # Dimensions exposed for model construction
         self.D_odom = len(self.odom_cols)
         self.D_imu = len(self.imu_cols) or 6 # Default 6 if no IMU
-        self.D_act = len(self.act_cols) or self.D_odom
+        self.D_act = len(self.act_cols) or 6  # lin_vel(3) + ang_vel(3)
 
     def _build_index(self) -> None:
         """Group row indices into trajectories (windows/episodes)."""
@@ -176,7 +176,7 @@ class HFWindowDataset(Dataset):
             for i, col in enumerate(self.act_cols):
                 action[:, i] = batch_data[col]
         else:
-            action = odom.copy()
+            action = odom[:, 7:13].copy()  # lin_vel(3) + ang_vel(3)
 
         # imu    
         if self.imu_cols:
@@ -237,7 +237,7 @@ class HFWindowDataset(Dataset):
                 for i, col in enumerate(self.act_cols):
                     act[:, i] = batch_data[col]
             else:
-                act = odom.copy()
+                act = odom[:, 7:13].copy()  # lin_vel(3) + ang_vel(3)
             all_act.append(act)
 
             if self.imu_cols:
