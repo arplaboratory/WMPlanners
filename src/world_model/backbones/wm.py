@@ -7,6 +7,7 @@ from einops import rearrange, repeat
 from logging import getLogger
 from .base import ModelBundle
 from .registry import register
+from .components import StateHead
 logger = getLogger(__name__)
 
 class WM(nn.Module):
@@ -22,6 +23,7 @@ class WM(nn.Module):
         decoder=None,
         proprio_dim=0,
         action_dim=0,
+        raw_action_dim=4,
         concat_dim=0,
         num_action_repeat=7,
         num_proprio_repeat=7,
@@ -37,6 +39,7 @@ class WM(nn.Module):
         self.action_encoder = action_encoder
         self.predictor = predictor  # predictor could be None
         self.decoder = decoder
+        self.action_decoder = StateHead(encoder.emb_dim, raw_action_dim)
         self.train_encoder = train_encoder
         self.train_predictor = train_predictor
         self.train_decoder = train_decoder
@@ -151,6 +154,14 @@ class WM(nn.Module):
         z_obs, z_act = self.separate_emb(z)
         obs, diff = self.decode_obs(z_obs)
         return obs, diff
+
+    def decode_act(self, z):
+        """
+        input :  z: (b, num_frames, num_patches, emb_dim)
+        output: act: (b, num_frames, action_dim)
+        """
+        _, z_act = self.separate_emb(z)
+        return self.action_decoder(z_act)
 
     def decode_obs(self, z_obs):
         """

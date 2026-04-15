@@ -326,6 +326,7 @@ class Trainer:
             concat_dim=self.cfg.concat_dim,
             num_action_repeat=self.cfg.num_action_repeat,
             num_proprio_repeat=self.cfg.num_proprio_repeat,
+            raw_action_dim=self.datasets["train"].action_dim,
         )
 
     def init_optimizers(self):
@@ -345,7 +346,9 @@ class Trainer:
 
             self.action_encoder_optimizer = torch.optim.AdamW(
                 itertools.chain(
-                    self.action_encoder.parameters(), self.proprio_encoder.parameters()
+                    self.action_encoder.parameters(),
+                    self.proprio_encoder.parameters(),
+                    self.model.action_decoder.parameters(),
                 ),
                 lr=self.cfg.training.action_encoder_lr,
             )
@@ -472,6 +475,13 @@ class Trainer:
                 obs, act
             )
 
+            if z_out is not None:
+                act_tgt = act[:, self.model.num_pred:].detach()
+                act_pred = self.model.decode_act(z_out)
+                action_decode_loss = torch.nn.functional.mse_loss(act_pred, act_tgt)
+                loss = loss + action_decode_loss
+                loss_components["action_decode_loss"] = action_decode_loss
+
             self.encoder_optimizer.zero_grad()
             if self.cfg.has_decoder:
                 self.decoder_optimizer.zero_grad()
@@ -583,6 +593,12 @@ class Trainer:
             z_out, visual_out, visual_reconstructed, loss, loss_components = self.model(
                 obs, act
             )
+
+            if z_out is not None:
+                act_tgt = act[:, self.model.num_pred:].detach()
+                act_pred = self.model.decode_act(z_out)
+                action_decode_loss = torch.nn.functional.mse_loss(act_pred, act_tgt)
+                loss_components["action_decode_loss"] = action_decode_loss
 
             loss = self.accelerator.gather_for_metrics(loss).mean()
 
