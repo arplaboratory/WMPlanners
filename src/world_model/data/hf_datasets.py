@@ -115,6 +115,11 @@ class HFWindowDataset(Dataset):
         self.D_imu = len(self.imu_cols) or 6 # Default 6 if no IMU
         self.D_act = len(self.act_cols) or 6  # lin_vel(3) + ang_vel(3)
 
+    def force_velocity_actions(self):
+        """Override action columns to use odom velocity (odom[:, 7:13]) instead."""
+        self.act_cols = []
+        self.D_act = 6
+
     def _build_index(self) -> None:
         """Group row indices into trajectories (windows/episodes)."""
         # Support both 'window_id' and 'episode_id' for backward compatibility

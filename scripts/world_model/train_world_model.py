@@ -106,6 +106,8 @@ def main():
     ap.add_argument('--num_workers', type=int, default=8, help='Number of dataloader workers')
     ap.add_argument('--val_split', type=float, default=0.2, help='Fraction of episodes for validation (default: 0.2)')
     ap.add_argument('--no_normalize', action='store_true', default=False, help='Disable data normalization')
+    ap.add_argument('--velocity_actions', action='store_true', default=False,
+                    help='Use odom velocity (6-dim) as actions instead of legacy action columns')
     # DDP
     ap.add_argument('--ddp', action='store_true', default=False, help='Enable DistributedDataParallel training')
     args = ap.parse_args()
@@ -145,6 +147,8 @@ def main():
     if args.dataset_type == 'hf':
         # Step 1: create initial dataset (no normalization) to discover episodes
         ds_init = HFWindowDataset(args.dataset, img_size=args.img_size)
+        if args.velocity_actions:
+            ds_init.force_velocity_actions()
         collate_fn = collate_hf
 
         # Step 2: split episodes — val = episode_id % 5 == 0
@@ -166,11 +170,15 @@ def main():
 
         # Step 4: rebuild train and val datasets WITH norm_stats
         ds = HFWindowDataset(args.dataset, img_size=args.img_size, norm_stats=norm_stats)
+        if args.velocity_actions:
+            ds.force_velocity_actions()
         # Filter to train episodes
         ds._window_ids = [eid for eid in ds._window_ids if eid in train_ids]
         ds._window_rows = {eid: ds._window_rows[eid] for eid in ds._window_ids}
 
         ds_val = HFWindowDataset(args.dataset, img_size=args.img_size, norm_stats=norm_stats)
+        if args.velocity_actions:
+            ds_val.force_velocity_actions()
         # Filter to val episodes
         ds_val._window_ids = [eid for eid in ds_val._window_ids if eid in val_ids]
         ds_val._window_rows = {eid: ds_val._window_rows[eid] for eid in ds_val._window_ids}

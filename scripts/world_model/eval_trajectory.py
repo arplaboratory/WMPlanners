@@ -255,6 +255,8 @@ def main():
                     help="Image resize dimension (default: 224)")
     ap.add_argument("--z_altitude", type=float, default=1.5,
                     help="Absolute Z height to classify as flight (default: 1.5 m)")
+    ap.add_argument("--velocity_actions", action="store_true", default=False,
+                    help="Use odom velocity (6-dim) as actions instead of legacy action columns")
     ap.add_argument("--device", type=str,
                     default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
@@ -271,6 +273,8 @@ def main():
     # Load dataset and filter to val episodes (eid % 5 == 0)
     print(f"Loading dataset: {args.dataset}")
     ds = HFWindowDataset(args.dataset, img_size=args.img_size, norm_stats=norm_stats)
+    if args.velocity_actions:
+        ds.force_velocity_actions()
     all_ids = ds._window_ids
     val_ids = set(eid for eid in all_ids if eid % 5 == 0)
     ds._window_ids = [eid for eid in ds._window_ids if eid in val_ids]
