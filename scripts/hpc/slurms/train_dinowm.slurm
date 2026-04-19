@@ -27,12 +27,14 @@ VENV_DIR="${CACHE_ROOT}/venv"
 
 mkdir -p \
   "${SCRATCH}/logs" \
+  "${VENV_DIR}" \
   "${CACHE_ROOT}/cache/pip" \
   "${CACHE_ROOT}/cache/wandb" \
   "${CACHE_ROOT}/cache/huggingface" \
   "${CACHE_ROOT}/cache/torch" \
   "${PERSISTENT_LOGS_DIR}" \
-  "${SCRATCH_TMP}"
+  "${SCRATCH_TMP}" \
+  "${HOME}/.config"
 
 # ── Load user secrets (WANDB_API_KEY, HF_TOKEN) ────────────────────────────────
 [ -f "${HOME}/.envs" ] && source "${HOME}/.envs"
