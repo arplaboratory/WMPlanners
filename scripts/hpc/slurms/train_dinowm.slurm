@@ -16,8 +16,8 @@ set -euo pipefail
 # ── Environment ────────────────────────────────────────────────────────────────
 NETID=$(whoami)
 SCRATCH=/scratch/${NETID}
-OVERLAY=${SCRATCH}/overlay-15GB-500K.ext3
-SIF=${SCRATCH}/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3.sif
+OVERLAY=${SCRATCH}/overlay-15GB-500K_elv.ext3
+SIF=${SCRATCH}/cuda13.0.1-cudnn9.13.0-ubuntu-24.04.3_elv.sif
 
 # Per-job cache and log directories
 CACHE_ROOT="${SCRATCH}/world_model_cache"
