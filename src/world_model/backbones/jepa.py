@@ -35,21 +35,30 @@ def _vjepa_import_context(repo_dir: str):
 
 
 class VJEPAWrapper(torch.nn.Module):
-    """Wrapper to handle temporal repetition and pooling for V-JEPA2."""
+    """Wrapper around V-JEPA2 that returns per-frame spatial patch tokens.
+
+    ``WM.encode_obs`` calls ``encoder.forward(visual)`` with a 4-D tensor
+    ``(B*T, C, H, W)`` and expects ``(B*T, num_patches, emb_dim)`` back —
+    the same contract as ``DINOv2Encoder``.  This wrapper tiles each frame
+    into a minimal tubelet so V-JEPA2's 3-D patch embedding can run, then
+    returns the resulting spatial tokens without any pooling.
+    """
 
     def __init__(self, encoder: torch.nn.Module, tubelet_size: int = 2):
         super().__init__()
         self.encoder = encoder
         self.tubelet_size = tubelet_size
         self.embed_dim = getattr(encoder, "embed_dim", 1408)
+        # Alias expected by WM (uses encoder.emb_dim)
+        self.emb_dim = self.embed_dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Expects (B, C, T, H, W) or (B, C, H, W).
-        If 4D, repeats frame into a tubelet.
+        x : (B, C, H, W)  — single frame per sample (as called by WM.encode_obs)
+        Returns (B, num_patches, emb_dim) spatial patch tokens.
         """
         if x.ndim == 4:
-            # (B, C, H, W) -> (B, C, 1, H, W) -> (B, C, tubelet, H, W)
+            # (B, C, H, W) -> (B, C, tubelet_size, H, W)
             x = x.unsqueeze(2).repeat(1, 1, self.tubelet_size, 1, 1)
         elif x.ndim == 5 and x.shape[2] < self.tubelet_size:
             # Pad temporal dim if too short
@@ -60,8 +69,8 @@ class VJEPAWrapper(torch.nn.Module):
         if isinstance(z, (list, tuple)):
             z = z[0]
 
-        # Global average pooling over tokens
-        return z.mean(dim=1)
+        # Return spatial patch tokens — shape (B, num_patches, emb_dim)
+        return z
 
 
 @register("vjepa2")

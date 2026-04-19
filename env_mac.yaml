@@ -1,0 +1,51 @@
+name: dino_wm
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - ffmpeg
+  - numpy=1.26.4
+  - pillow
+  - pip:
+      - accelerate==0.26.1
+      - antlr4-python3-runtime==4.9.3
+      - einops==0.4.1
+      - filelock==3.14.0
+      - fsspec==2024.5.0
+      - huggingface-hub==0.23.2
+      - hydra-core==1.2.0
+      - hydra-submitit-launcher==1.2.0
+      - imageio==2.34.1
+      - imageio-ffmpeg==0.4.9
+      - ipython==8.18.1
+      - jupyter-core==5.7.2
+      - matplotlib==3.5.3
+      - moviepy==1.0.3
+      - nbformat==5.10.4
+      - omegaconf==2.3.0
+      - opencv-python==4.6.0.66
+      - packaging==24.0
+      - psutil==5.9.8
+      - pyyaml==6.0.1
+      - requests==2.32.3
+      - rich==13.7.1
+      - safetensors==0.4.3
+      - scikit-image==0.19.3
+      - scikit-learn==1.5.0
+      - scipy==1.13.1
+      - sentry-sdk==2.3.1
+      - submitit==1.5.1
+      - tensorboard==2.15.2
+      - tensorboardx==2.6.2.2
+      - thop==0.1.1-2209072238
+      - tokenizers==0.12.1
+      - torch==2.3.0
+      - torchvision==0.18.0
+      - tqdm==4.66.4
+      - transformers==4.21.1
+      - wandb==0.13.1
+      - datasets
+</content>
+</invoke>
