@@ -1,4 +1,4 @@
-ckpt_base_path: /Users/akashguna/Documents/ELV/NYU_DS_GA_3001
+ckpt_base_path: outputs
 training:
   seed: 0
   epochs: 1
