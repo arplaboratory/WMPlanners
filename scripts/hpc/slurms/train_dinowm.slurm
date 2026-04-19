@@ -36,6 +36,7 @@ mkdir -p \
 
 # ── Load user secrets (WANDB_API_KEY, HF_TOKEN) ────────────────────────────────
 [ -f "${HOME}/.envs" ] && source "${HOME}/.envs"
+[ -f "${HOME}/.wandb_key" ] && export WANDB_API_KEY="$(cat ${HOME}/.wandb_key)"
 
 # ── Experiment configuration ───────────────────────────────────────────────────
 EXPERIMENT_NAME="dinowm_${SLURM_JOB_ID}"
