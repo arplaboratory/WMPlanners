@@ -108,16 +108,31 @@ singularity exec \
   "${SIF}" bash -lc '
 set -euo pipefail
 
-# Activate pre-built venv (created by ds_3001_install.slurm)
+# Create venv if it does not exist, then install all requirements
 if [ ! -f "${VENV_DIR}/bin/activate" ]; then
-  echo "[ERROR] Virtual environment not found at ${VENV_DIR}."
-  echo "Please run: sbatch scripts/hpc/slurms/ds_3001_install.slurm first."
-  exit 1
+  echo "[INFO] Creating virtual environment at ${VENV_DIR}..."
+  python3 -m venv "${VENV_DIR}"
 fi
 source "${VENV_DIR}/bin/activate"
 
-# Fast re-install of the local project (no deps, just entry points / editable)
+echo "[INFO] Installing requirements..."
+pip install --upgrade pip -q
+pip install -r /workspace/code/requirements_dinowm.txt -q
+
+# Install local project in editable mode (no extra deps)
 pip install -e /workspace/code --no-deps -q
+
+# Patch external/dino for Python ≥ 3.10 union-type syntax
+for f in \
+  /workspace/code/external/dino/dinov2/layers/attention.py \
+  /workspace/code/external/dino/dinov2/layers/block.py
+do
+  if [ -f "$f" ] && ! grep -q "from __future__ import annotations" "$f"; then
+    sed -i '1s/^/from __future__ import annotations\n/' "$f"
+    echo "[INFO] Patched: $f"
+  fi
+done
+
 export PYTHONPATH="/workspace/code/src:${PYTHONPATH:-}"
 
 echo "[APPTAINER] Python: $(python --version)"
