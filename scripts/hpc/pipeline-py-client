@@ -332,6 +332,28 @@ EXPERIMENT_TYPES: Dict[str, Dict] = {
             "NUM_WORKERS": "8",
         },
     },
+    "train_dinowm": {
+        "template": "ds_3001_train_dinowm_template.slurm",
+        "description": "DINO-WM Training (Hydra + Accelerate)",
+        "defaults": {
+            "PARTITION": "c24m170-a100-2",
+            "GRES": "gpu:2",
+            "NPROC": "2",
+            "TIME": "02:00:00",
+            "MEM": "20GB",
+            "ACCOUNT": "ds_ga_3001_003-2026sp",
+            "DATASET": "lquan9/collect1",
+            "BACKBONE": "dinov2",
+            "BACKBONE_NAME": "dinov2_vitb14",
+            "EPOCHS": "20",
+            "BATCH_SIZE": "64",
+            "LR": "3e-4",
+            "HORIZON": "8",
+            "IMG_SIZE": "224",
+            "NUM_WORKERS": "8",
+            "EXTRA_FLAGS": "",
+        },
+    },
     "eval_vision_pose": {
         "template": "ds_3001_eval_vision_pose_template.slurm",
         "description": "Vision Backbone Representational Evaluation (Pose MSE MLP Probe)",
@@ -1251,7 +1273,8 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
         defaults["PARTITION"] = ui.inputbox("Partition", defaults["PARTITION"])
         defaults["GRES"] = ui.inputbox("GPU resources (e.g., gpu:2)", defaults["GRES"])
         nproc_from_gres = defaults["GRES"].split(":")[-1] if ":" in defaults["GRES"] else "1"
-        defaults["NPROC"] = ui.inputbox("Processes per node (for torchrun)", nproc_from_gres)
+        nproc_label = "Processes per node (for accelerate launch)" if exp_type == "train_dinowm" else "Processes per node (for torchrun)"
+        defaults["NPROC"] = ui.inputbox(nproc_label, nproc_from_gres)
         defaults["TIME"] = ui.inputbox("Wall time (HH:MM:SS)", defaults["TIME"])
         defaults["MEM"] = ui.inputbox("Memory (e.g., 20GB)", defaults["MEM"])
         defaults["ACCOUNT"] = ui.inputbox("Account", defaults["ACCOUNT"])
@@ -1303,13 +1326,44 @@ def dialog_generate_slurm(ui: DialogUI) -> None:
             auto_name = f"{ds_short}_{bb}_{exp_type}"
             defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
             
+        elif exp_type == "train_dinowm":
+            # DINO-WM uses Hydra config; all overrides are key=value, not argparse flags.
+            defaults["DATASET"] = ui.inputbox("HF Dataset (e.g., lquan9/collect1)", defaults["DATASET"])
+            defaults["BACKBONE"] = ui.menu("Select backbone", [
+                ("dinov2", "DINOv2 (ViT)"),
+                ("vjepa2", "V-JEPA2"),
+            ])
+            if defaults["BACKBONE"] == "dinov2":
+                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name", "dinov2_vitb14")
+                batch_default = "32"
+            else:  # vjepa2
+                defaults["BACKBONE_NAME"] = ui.inputbox("Backbone model name (vjepa2_vit_large, vjepa2_vit_huge, vjepa2_vit_giant)", "vjepa2_vit_large")
+                batch_default = "16"
+
+            msg = "Freeze backbone weights? (HIGHLY RECOMMENDED for 20GB limit)" if defaults["BACKBONE"] == "vjepa2" else "Freeze backbone weights? (recommended)"
+            freeze = ui.yesno(msg, default_no=False)
+            # Hydra override — train_world_model_dinowm.py reads cfg.model.train_encoder
+            defaults["EXTRA_FLAGS"] = "model.train_encoder=False" if freeze else ""
+
+            defaults["EPOCHS"] = ui.inputbox("Epochs", defaults["EPOCHS"])
+            defaults["BATCH_SIZE"] = ui.inputbox("Batch size", batch_default)
+            defaults["LR"] = ui.inputbox("Learning rate", defaults["LR"])
+            defaults["HORIZON"] = ui.inputbox("Rollout horizon (num_hist)", defaults["HORIZON"])
+            defaults["IMG_SIZE"] = ui.inputbox("Image size", defaults["IMG_SIZE"])
+            defaults["NUM_WORKERS"] = ui.inputbox("Num workers", defaults.get("NUM_WORKERS", "4"))
+
+            ds_short = defaults.get("DATASET", "unknown").split("/")[-1]
+            bb = defaults.get("BACKBONE", "dinov2")
+            auto_name = f"{ds_short}_{bb}_dinowm"
+            defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment name", auto_name)
+
         elif exp_type == "wheeled_train":
             defaults["TASK_NAME"] = ui.inputbox("Task Name", defaults["TASK_NAME"])
             defaults["AGENT_NAME"] = ui.inputbox("Agent Name", defaults["AGENT_NAME"])
             defaults["EXPERIMENT_NAME"] = ui.inputbox("Experiment Name", defaults["EXPERIMENT_NAME"])
             defaults["EXTRA_FLAGS"] = ui.inputbox("Extra Args (e.g., --video)", defaults["EXTRA_FLAGS"])
 
-        if exp_type in ("train_wm", "eval_vision_pose"):
+        if exp_type in ("train_wm", "eval_vision_pose", "train_dinowm"):
             pass  # Dataset and backbone weights are cached on-demand by the SLURM job itself.
 
         # Generate the SLURM script

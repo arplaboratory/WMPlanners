@@ -91,6 +91,7 @@ data/*
 **/.venv
 \.*_env
 \.venv
+**/venv
 
 .jepa_config.json
 
