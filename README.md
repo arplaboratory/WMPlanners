@@ -103,6 +103,9 @@ export PATH="$HOME/.local/bin:$PATH"
 The easiest way to set up the environment and all external dependencies (DINOv2, V-JEPA2) is using the provided setup script. This requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
+export WM_VENV="$(pwd)/.venvs/wm"   # or your preferred envs path
+export WM_WS="$(pwd)"          # workspace root
+
 # This will create a .venv, install project dependencies, 
 # and set up DINOv2/V-JEPA2 in editable mode.
 bash scripts/python_setup.sh

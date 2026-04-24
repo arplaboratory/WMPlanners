@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PROJECT_ROOT
 
 # Defaults
-VENV_PATH="${WM_VENV:-$PROJECT_ROOT/.venv}"
+VENV_PATH="${WM_VENV:-$PROJECT_ROOT/.venvs/wm}"
 INSTALL_EXTERNALS=true
 
 while :; do
