@@ -93,24 +93,4 @@ for pkg in "${EXTERNALS[@]}"; do
 done
 
 cd "$PROJECT_ROOT" || exit 1
-
-# ── Patch external/dino for Python ≥ 3.10 compatibility ───────────────────────
-# DINOv2 uses the `X | Y` union type syntax in two files, which requires
-# `from __future__ import annotations` on Python < 3.10 and is fine to keep
-# as a forward-compat shim on all versions. We apply the patch here because
-# external/dino is a third-party submodule we cannot push to.
-echo "Patching external/dino for Python ≥ 3.10 union-type syntax..."
-for f in \
-    "$PROJECT_ROOT/external/dino/dinov2/layers/attention.py" \
-    "$PROJECT_ROOT/external/dino/dinov2/layers/block.py"
-do
-    if [ -f "$f" ] && ! grep -q "from __future__ import annotations" "$f"; then
-        # Insert after the first non-empty, non-comment line (the copyright block ends there)
-        sed -i '' '1s/^/from __future__ import annotations\n/' "$f"
-        echo "  Patched: $f"
-    else
-        echo "  Already patched (or not found): $f"
-    fi
-done
-
 echo "Finished installing external packages."
