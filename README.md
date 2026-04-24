@@ -108,15 +108,15 @@ The easiest way to set up the environment and all external dependencies (DINOv2,
 bash scripts/python_setup.sh
 
 # Activate the environment
-source .venv/bin/activate
+source .venvs/wm/bin/activate
 ```
 
 ### Manual Setup (Alternative)
 If you prefer to set up the environment manually:
 
 ```bash
-uv venv .venv --python 3.11
-source .venv/bin/activate
+uv venv .venvs/wm --python 3.11
+source .venvs/wm/bin/activate
 ```
 
 ```bash
