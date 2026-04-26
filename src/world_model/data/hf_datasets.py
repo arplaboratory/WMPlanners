@@ -6,6 +6,8 @@ import numpy as np
 import os
 import torch
 import torchvision.transforms as T
+import random
+
 from torch.utils.data import Dataset
 from .normalization import NormStats
 from .types import SampleBatch
@@ -37,6 +39,18 @@ class HFWindowDataset(Dataset):
         Images are resized to ``(img_size, img_size)``.
     """
 
+    # Odom-delta column names in the HF dataset
+    ODOM_COLS = ["odom_dx", "odom_dy", "odom_dz", "odom_ax", "odom_ay", "odom_az"]
+
+    def __init__(self, dataset, img_size: int = 224,
+                 action_stats=None, odom_stats=None, imu_stats=None,
+                 collision_stats=None, sample_k: int = None, sample_mode: bool = False,
+                 num_hist=None, num_pred=None, frameskip=None):
+
+        """Initialize the dataset."""
+        self.sample_k = sample_k
+        self.sample_mode = sample_mode
+        self.frameskip = frameskip if frameskip is not None else 1
     def __init__(self, dataset, img_size: int = 224, norm_stats: NormStats | None = None):
         """Load a trajectory-window dataset from a local HF directory or Hub ID."""
         from datasets import load_from_disk, load_dataset, get_dataset_split_names
@@ -116,7 +130,8 @@ class HFWindowDataset(Dataset):
         self.D_odom = len(self.odom_cols)
         self.D_imu = len(self.imu_cols) or 6 # Default 6 if no IMU
         self.D_act = len(self.act_cols) or 6  # lin_vel(3) + ang_vel(3)
-
+        self.proprio_dim = self.D_imu  # IMU only (6-dim)
+        self.action_dim = self.D_act
     def force_velocity_actions(self):
         """Override action columns to use odom velocity (odom[:, 7:13]) instead."""
         self.act_cols = []
@@ -288,7 +303,7 @@ class EpisodeDataset(torch.utils.data.Dataset):
         coll = d["collision"] if isinstance(d["collision"], torch.Tensor) else torch.from_numpy(d["collision"])
         obs = {
             "visual": d["rgb"] if isinstance(d["rgb"], torch.Tensor) else torch.from_numpy(d["rgb"]),
-            "proprio": torch.cat([odom, imu, coll], dim=-1),
+            "proprio": imu,  # IMU only (6/10-dim), consistent with collate_dinowm
         }
         act   = d["action"] if isinstance(d["action"], torch.Tensor) else torch.from_numpy(d["action"])
         state = d["state"]  if isinstance(d["state"],  torch.Tensor) else torch.from_numpy(d["state"])
@@ -300,10 +315,7 @@ def collate_dinowm(batch: List[dict[str, np.ndarray]]):
     if "state" not in batch[0]:
         raise KeyError("Expected 'state' key in batch for DinoWM — check hf_datasets.py.")
     rgb = torch.from_numpy(np.stack([b["rgb"] for b in batch]))             # (B, T, 3, H, W)
-    proprio = torch.from_numpy(np.stack([                                      # (B, T, D_odom+D_imu+1)
-        np.concatenate([b["odom"], b["imu"], b["collision"]], axis=-1)
-        for b in batch
-    ]))
+    proprio = torch.from_numpy(np.stack([ b["imu"] for b in batch]))
     action = torch.from_numpy(np.stack([b["action"] for b in batch]))        # (B, T, D_act)
     state = torch.stack([b["state"] for b in batch])                          # (B, T, D_state)
     obs = {"visual": rgb, "proprio": proprio}
