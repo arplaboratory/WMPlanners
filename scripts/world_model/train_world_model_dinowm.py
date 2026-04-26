@@ -233,6 +233,10 @@ class Trainer:
             self.encoder = hydra.utils.instantiate(
                 self.cfg.encoder,
             )
+            # builders return a ModelBundle dataclass — unwrap to the nn.Module
+            from world_model.backbones.base import ModelBundle
+            if isinstance(self.encoder, ModelBundle):
+                self.encoder = self.encoder.model
         if not self.train_encoder:
             for param in self.encoder.parameters():
                 param.requires_grad = False
@@ -328,6 +332,7 @@ class Trainer:
             num_proprio_repeat=self.cfg.num_proprio_repeat,
             raw_action_dim=self.datasets["train"].action_dim,
         )
+        self.model = self.model.to(self.device)
 
     def init_optimizers(self):
         self.encoder_optimizer = torch.optim.Adam(

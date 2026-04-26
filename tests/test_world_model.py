@@ -56,22 +56,22 @@ class TestWorldModelInstantiation:
     """WorldModel can be created with different backbone configs."""
 
     def test_default_backbone_is_cnn(self):
-        m = WorldModel(odom_dim=6, imu_dim=6, act_dim=2)
+        m = WorldModel(odom_dim=6, imu_dim=6, act_dim=6)
         from world_model.backbones.cnn import VisionEncoder
         assert isinstance(m.vision, VisionEncoder)
 
     def test_explicit_cnn_backbone(self):
-        m = WorldModel(odom_dim=6, imu_dim=6, act_dim=2, backbone="cnn")
+        m = WorldModel(odom_dim=6, imu_dim=6, act_dim=6, backbone="cnn")
         from world_model.backbones.cnn import VisionEncoder
         assert isinstance(m.vision, VisionEncoder)
 
     def test_freeze_backbone(self):
-        m = WorldModel(odom_dim=6, imu_dim=6, act_dim=2, freeze_backbone=True)
+        m = WorldModel(odom_dim=6, imu_dim=6, act_dim=6, freeze_backbone=True)
         trainable = sum(p.numel() for p in m.vision.parameters() if p.requires_grad)
         assert trainable == 0, "Expected all backbone params frozen"
 
     def test_non_frozen_backbone_has_grad(self):
-        m = WorldModel(odom_dim=6, imu_dim=6, act_dim=2, freeze_backbone=False)
+        m = WorldModel(odom_dim=6, imu_dim=6, act_dim=6, freeze_backbone=False)
         trainable = sum(p.numel() for p in m.vision.parameters() if p.requires_grad)
         assert trainable > 0
 
@@ -87,7 +87,7 @@ class TestWorldModelForward:
     @pytest.fixture()
     def model(self):
         return WorldModel(
-            odom_dim=6, imu_dim=6, act_dim=2,
+            odom_dim=6, imu_dim=6, act_dim=6,
             z_vis_dim=32, z_prop_dim=32, z_dim=64, state_dim=6,
         )
 
@@ -107,7 +107,7 @@ class TestWorldModelForward:
     def test_rollout_shapes(self, model):
         B, T = 2, 5
         z0 = torch.randn(B, 64)
-        actions = torch.randn(B, T, 2)
+        actions = torch.randn(B, T, 6)
         z_seq = model.rollout(z0, actions)
         assert z_seq.shape == (B, T + 1, 64)
 
@@ -121,9 +121,9 @@ class TestComponents:
     """Verify individual world-model components produce correct shapes."""
 
     def test_latent_dynamics(self):
-        dyn = LatentDynamics(z_dim=64, act_dim=2)
+        dyn = LatentDynamics(z_dim=64, act_dim=6)
         z = torch.randn(4, 64)
-        a = torch.randn(4, 2)
+        a = torch.randn(4, 6)
         z_next = dyn(z, a)
         assert z_next.shape == (4, 64)
 

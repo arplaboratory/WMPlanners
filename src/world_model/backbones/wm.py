@@ -7,7 +7,7 @@ from einops import rearrange, repeat
 from logging import getLogger
 from .base import ModelBundle
 from .registry import register
-from .components import StateHead
+from world_model.components.heads import StateHead
 logger = getLogger(__name__)
 
 class WM(nn.Module):
@@ -39,7 +39,7 @@ class WM(nn.Module):
         self.action_encoder = action_encoder
         self.predictor = predictor  # predictor could be None
         self.decoder = decoder
-        self.action_decoder = StateHead(encoder.emb_dim, raw_action_dim)
+        self.action_decoder = StateHead(action_dim, raw_action_dim)
         self.train_encoder = train_encoder
         self.train_predictor = train_predictor
         self.train_decoder = train_decoder
