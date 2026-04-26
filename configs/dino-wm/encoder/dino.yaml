@@ -1,0 +1,2 @@
+_target_: world_model.backbones.dino.build_dinov2
+model_name: "dinov2_vits14"

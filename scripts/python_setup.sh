@@ -51,6 +51,7 @@ fi
 echo "Installing project dependencies (including dev)..."
 cd "$PROJECT_ROOT" || exit 1
 uv pip install -e ".[dev]" || exit 1
+uv pip install --upgrade pyarrow datasets
 
 # 3. Install external packages (DINOv2, V-JEPA2)
 if [ "$INSTALL_EXTERNALS" = true ]; then

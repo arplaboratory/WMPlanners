@@ -9,7 +9,9 @@ import torchvision.transforms as T
 from torch.utils.data import Dataset
 from .normalization import NormStats
 from .types import SampleBatch
-
+from typing import List
+from datasets import load_from_disk, load_dataset, get_dataset_split_names
+from datasets import Dataset as HFDataset
 class HFWindowDataset(Dataset):
     """Load trajectory windows from a HuggingFace dataset.
 
@@ -269,3 +271,52 @@ def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
         action=torch.from_numpy(np.stack([b["action"] for b in batch])),
         collision=torch.from_numpy(np.stack([b["collision"] for b in batch])),
     )
+class EpisodeDataset(torch.utils.data.Dataset):
+    """Wraps HFWindowDataset(sample_mode=False) to return full episodes as
+    (obs_dict, act, state, {}) 4-tuples for use in openloop_rollout."""
+
+    def __init__(self, hf_window_dataset: HFWindowDataset):
+        self._ds = hf_window_dataset
+
+    def __len__(self):
+        return len(self._ds)
+
+    def __getitem__(self, idx):
+        d = self._ds[idx]  # dict: "rgb", "odom", "imu", "action", "collision", "state"
+        odom = d["odom"] if isinstance(d["odom"], torch.Tensor) else torch.from_numpy(d["odom"])
+        imu  = d["imu"]  if isinstance(d["imu"],  torch.Tensor) else torch.from_numpy(d["imu"])
+        coll = d["collision"] if isinstance(d["collision"], torch.Tensor) else torch.from_numpy(d["collision"])
+        obs = {
+            "visual": d["rgb"] if isinstance(d["rgb"], torch.Tensor) else torch.from_numpy(d["rgb"]),
+            "proprio": torch.cat([odom, imu, coll], dim=-1),
+        }
+        act   = d["action"] if isinstance(d["action"], torch.Tensor) else torch.from_numpy(d["action"])
+        state = d["state"]  if isinstance(d["state"],  torch.Tensor) else torch.from_numpy(d["state"])
+        return obs, act, state, {}
+
+
+def collate_dinowm(batch: List[dict[str, np.ndarray]]):
+    """Collate a list of window dicts into (obs_dict, action, state) for DinoWM training."""
+    if "state" not in batch[0]:
+        raise KeyError("Expected 'state' key in batch for DinoWM — check hf_datasets.py.")
+    rgb = torch.from_numpy(np.stack([b["rgb"] for b in batch]))             # (B, T, 3, H, W)
+    proprio = torch.from_numpy(np.stack([                                      # (B, T, D_odom+D_imu+1)
+        np.concatenate([b["odom"], b["imu"], b["collision"]], axis=-1)
+        for b in batch
+    ]))
+    action = torch.from_numpy(np.stack([b["action"] for b in batch]))        # (B, T, D_act)
+    state = torch.stack([b["state"] for b in batch])                          # (B, T, D_state)
+    obs = {"visual": rgb, "proprio": proprio}
+    return obs, action, state
+
+
+def _is_local_path(s: str) -> bool:
+    """Check if the string refers to a local directory or file."""
+    # If it exists on disk, it's local.
+    if os.path.exists(s):
+        return True
+    # If it starts with common local path markers, it's local (even if missing/typo)
+    if s.startswith("./") or s.startswith("../") or s.startswith("/"):
+        return True
+    # Otherwise, assume it's a Hugging Face Hub ID (e.g., "user/repo")
+    return False

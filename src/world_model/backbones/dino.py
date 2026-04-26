@@ -30,12 +30,32 @@ def default_preprocess(img, size: int = 224):
     )(img)
 
 
+class DINOv2Encoder(torch.nn.Module):
+    """Thin nn.Module wrapper around a loaded DINOv2 model.
+
+    Returns patch-level token features of shape ``(B, num_patches, emb_dim)``.
+    """
+
+    def __init__(self, model, emb_dim: int, patch_size: int = 14, image_size: int = 224):
+        super().__init__()
+        self.model = model
+        self.emb_dim = emb_dim
+        self.latent_ndim = 2  # output is (num_patches, emb_dim) per frame
+        self.num_patches = (image_size // patch_size) ** 2
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: (B, 3, H, W)  →  (B, num_patches, emb_dim) patch tokens."""
+        features = self.model.get_intermediate_layers(x, n=1)[0]  # (B, num_patches, D)
+        return features
+
+
 @register("dinov2")
 def build_dinov2(
     repo_dir: str = str(_ROOT / "external/dino"),
     model_name: str = "dinov2_vitb14",
     pretrained: bool = True,
     device: str = "cpu",
+    image_size: int = 224,
     **_kwargs,
 ) -> ModelBundle:
     """Load DINOv2 from the local ``dino`` submodule.
@@ -68,10 +88,13 @@ def build_dinov2(
         }
         feature_dim = feature_dim_map.get(model_name)
 
-    logger.info(f"Loaded DINOv2 model: {model_name}, feature dimension: {feature_dim}")
+    logger.info("Loaded DINOv2 model: %s, feature dimension: %s", model_name, feature_dim)
+    patch_size = getattr(model, "patch_size", 14)
+    encoder = DINOv2Encoder(model=model, emb_dim=feature_dim, patch_size=patch_size, image_size=image_size)
     return ModelBundle(
-        model=model,
+        model=encoder,
         preprocess=default_preprocess,
         feature_dim=feature_dim,
         modality="image",
     )
+
