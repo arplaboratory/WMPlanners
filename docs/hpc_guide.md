@@ -143,6 +143,7 @@ ssh -N -L 8211:<compute-node>:8211 $USER@dtn.torch.hpc.nyu.edu
 - **Isaac Lab Caches**: `/scratch/$USER/singularity-cache/` (kit, ov, pip)
 - **Datasets**: Downloaded via `pipeline-py-client` or `huggingface_hub`
 
+(resuming-training)=
 ## Resuming Training
 
 The training script (`train_world_model.py`) supports automatic checkpoint resumption. Every epoch, the trainer saves:
