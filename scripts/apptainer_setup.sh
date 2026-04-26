@@ -7,12 +7,12 @@
 #   cuda    - any CUDA-enabled SIF with system Python (e.g. nvcr.io/nvidia/cuda:12.8-devel)
 #
 # Key environment variables:
-#   SIF_IMAGE        Path to the base .sif file          [required]
-#   WM_SIF_IMAGE     Output .sif path                    [default: <SIF_IMAGE dir>/wm.sif]
-#   SANDBOX_DIR      Writable sandbox directory          [default: <SIF_IMAGE dir>/wm_container]
+#   BASE_SIF_IMAGE   Path to the base .sif file          [required]
+#   SIF_IMAGE        Output .sif path                    [default: <BASE_SIF_IMAGE dir>/wm.sif]
+#   SANDBOX_DIR      Writable sandbox directory          [default: <BASE_SIF_IMAGE dir>/wm_container]
 #   PROJECT_ROOT     Path to this repo on the host       [default: directory two levels up from this script]
 #   WM_VENV_NAME     Name for the wm venv inside /opt/venvs [default: wm]
-#   SCRATCH_TMP      Temp dir to bind-mount as /tmp      [default: <SIF_IMAGE dir>/.wm_scratch]
+#   SCRATCH_TMP      Temp dir to bind-mount as /tmp      [default: <BASE_SIF_IMAGE dir>/.wm_scratch]
 
 set -euo pipefail
 
@@ -22,10 +22,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
-: "${SIF_IMAGE:?'SIF_IMAGE must be set to the base .sif file path'}"
+: "${BASE_SIF_IMAGE:?'BASE_SIF_IMAGE must be set to the base .sif file path'}"
 
-SIF_DIR="$(dirname "$SIF_IMAGE")"
-: "${WM_SIF_IMAGE:=$SIF_DIR/wm.sif}"
+SIF_DIR="$(dirname "$BASE_SIF_IMAGE")"
+: "${SIF_IMAGE:=$SIF_DIR/wm.sif}"
 : "${SANDBOX_DIR:=$SIF_DIR/wm_container}"
 : "${WM_VENV_NAME:=wm}"
 : "${SCRATCH_TMP:=$SIF_DIR/.wm_scratch}"
@@ -37,15 +37,15 @@ export APPTAINER_TMPDIR APPTAINER_CACHEDIR
 echo "================================================="
 echo " wm_planner apptainer_setup.sh"
 echo "================================================="
-echo "  SIF_IMAGE    : $SIF_IMAGE"
-echo "  SANDBOX_DIR  : $SANDBOX_DIR"
-echo "  WM_SIF_IMAGE : $WM_SIF_IMAGE"
-echo "  PROJECT_ROOT : $PROJECT_ROOT"
-echo "  WM_VENV_NAME : $WM_VENV_NAME"
+echo "  BASE_SIF_IMAGE : $BASE_SIF_IMAGE"
+echo "  SANDBOX_DIR    : $SANDBOX_DIR"
+echo "  SIF_IMAGE      : $SIF_IMAGE"
+echo "  PROJECT_ROOT   : $PROJECT_ROOT"
+echo "  WM_VENV_NAME   : $WM_VENV_NAME"
 echo "================================================="
 
-if [ ! -f "$SIF_IMAGE" ]; then
-    echo "ERROR: SIF_IMAGE not found: $SIF_IMAGE" >&2
+if [ ! -f "$BASE_SIF_IMAGE" ]; then
+    echo "ERROR: BASE_SIF_IMAGE not found: $BASE_SIF_IMAGE" >&2
     exit 1
 fi
 
@@ -59,8 +59,8 @@ mkdir -p "$SCRATCH_TMP" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 # Build sandbox from base SIF
 # ---------------------------------------------------------------------------
 if [ ! -d "$SANDBOX_DIR" ]; then
-    echo "[local] Building sandbox from $SIF_IMAGE..."
-    apptainer build --fakeroot --sandbox "$SANDBOX_DIR" "$SIF_IMAGE"
+    echo "[local] Building sandbox from $BASE_SIF_IMAGE..."
+    apptainer build --fakeroot --sandbox "$SANDBOX_DIR" "$BASE_SIF_IMAGE"
 else
     echo "[local] Sandbox $SANDBOX_DIR already exists, skipping build."
 fi
@@ -142,17 +142,18 @@ echo \"wm venv ready at \$VENV\"
 # ---------------------------------------------------------------------------
 # Convert sandbox to final SIF
 # ---------------------------------------------------------------------------
-echo "[local] Converting sandbox to SIF: $WM_SIF_IMAGE"
-apptainer build --fakeroot "$WM_SIF_IMAGE" "$SANDBOX_DIR"
+echo "[local] Converting sandbox to SIF: $SIF_IMAGE"
+[ -f "$SIF_IMAGE" ] && rm -f "$SIF_IMAGE"
+apptainer build --fakeroot "$SIF_IMAGE" "$SANDBOX_DIR"
 
 echo ""
 echo "[local] Build complete!"
-echo "  Output SIF : $WM_SIF_IMAGE"
+echo "  Output SIF : $SIF_IMAGE"
 echo "  wm venv    : /opt/venvs/$WM_VENV_NAME (inside container)"
 echo ""
 echo "To run with GPU:"
 echo "  apptainer exec --nv -B $PROJECT_ROOT:/workspace/run:ro \\"
-echo "    $WM_SIF_IMAGE /opt/venvs/$WM_VENV_NAME/bin/python <script>"
+echo "    $SIF_IMAGE /opt/venvs/$WM_VENV_NAME/bin/python <script>"
 echo ""
 
 exit 0

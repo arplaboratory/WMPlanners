@@ -124,8 +124,8 @@ export TMPDIR="$HOME/tmp"
 export SCRATCH_TMP=$TMPDIR
 export APPTAINER_TMPDIR=$TMPDIR
 export APPTAINER_CACHEDIR="$HOME/apptainer-cache"
-export SIF_IMAGE="$HOME/isaac-sim_5.1.0.sif"
-export BUILT_SIF="$HOME/isaac-sim_ds3001.sif"
+export BASE_SIF_IMAGE="$HOME/isaac-sim_5.1.0.sif"
+export SIF_IMAGE="$HOME/wm.sif"
 export SANDBOX_DIR="$HOME/isaac_container"
 export ISAACLAB_DIR="$HOME/IsaacLab"
 export TMPDIR="$SCRATCH_TMP"
@@ -160,7 +160,7 @@ apptainer pull isaac-sim_5.1.0.sif docker://nvcr.io/nvidia/isaac-sim:5.1.0
 ```
 
 This produces `isaac-sim_5.1.0.sif` in the current directory.
-Move it to `$HOME` or whichever path you set for `SIF_IMAGE`.
+Move it to `$HOME` or whichever path you set for `BASE_SIF_IMAGE`.
 
 ## Clone IsaacLab
 
@@ -173,7 +173,7 @@ git clone https://github.com/isaac-sim/IsaacLab.git "$ISAACLAB_DIR"
 Extract the base SIF into a writable sandbox directory:
 
 ```bash
-apptainer build --sandbox "$SANDBOX_DIR" "$SIF_IMAGE"
+apptainer build --sandbox "$SANDBOX_DIR" "$BASE_SIF_IMAGE"
 ```
 
 This may take several minutes depending on image size.
@@ -261,7 +261,8 @@ cd /workspace/run
 ## Convert Sandbox to SIF
 
 ```bash
-apptainer build "$BUILT_SIF" "$SANDBOX_DIR"
+[ -f "$SIF_IMAGE" ] && rm -f "$SIF_IMAGE"
+apptainer build "$SIF_IMAGE" "$SANDBOX_DIR"
 ```
 
 ## Verify the Image
@@ -280,7 +281,7 @@ apptainer exec --nv --containall \
   -B "$CACHE_ROOT/data":${USER_HOME}/.local/share/ov/data:rw \
   -B "$ISAACLAB_DIR":/workspace/isaaclab:rw \
   -B "$PROJECT_ROOT":/workspace/run:rw \
-  "$BUILT_SIF" /isaac-sim/kit/python/bin/python3 -c \
+  "$SIF_IMAGE" /isaac-sim/kit/python/bin/python3 -c \
   "import torch, isaaclab; print('[verify] torch', torch.__version__, '| isaaclab', isaaclab.__file__)"
 ```
 `--containall` blocks all automatic mounts (home dir, CWD, default bind paths), making this test representative of the HPC SLURM environment. Every path the container needs must be explicitly bound.
@@ -303,7 +304,7 @@ apptainer exec --nv --containall \
   -B "$CACHE_ROOT/cache/computecache":${USER_HOME}/.nv/ComputeCache:rw \
   -B "$CACHE_ROOT/logs":${USER_HOME}/.nvidia-omniverse/logs:rw \
   -B "$CACHE_ROOT/data":${USER_HOME}/.local/share/ov/data:rw \
-  "$BUILT_SIF" /isaac-sim/isaac-sim.streaming.sh --allow-root
+  "$SIF_IMAGE" /isaac-sim/isaac-sim.streaming.sh --allow-root
 ```
 
 Download the WebRTC client from [here](https://docs.isaacsim.omniverse.nvidia.com/5.1.0/installation/download.html). 
