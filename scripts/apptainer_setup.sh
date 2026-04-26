@@ -13,7 +13,6 @@
 #   PROJECT_ROOT     Path to this repo on the host       [default: directory two levels up from this script]
 #   WM_VENV_NAME     Name for the wm venv inside /opt/venvs [default: wm]
 #   SCRATCH_TMP      Temp dir to bind-mount as /tmp      [default: <SIF_IMAGE dir>/.wm_scratch]
-#   KEEP_SANDBOX     Set to 1 to skip sandbox deletion   [default: unset]
 
 set -euo pipefail
 
@@ -155,10 +154,5 @@ echo "To run with GPU:"
 echo "  apptainer exec --nv -B $PROJECT_ROOT:/workspace/run:ro \\"
 echo "    $WM_SIF_IMAGE /opt/venvs/$WM_VENV_NAME/bin/python <script>"
 echo ""
-
-if [ "${KEEP_SANDBOX:-0}" != "1" ]; then
-    echo "[local] Removing sandbox to save space (set KEEP_SANDBOX=1 to skip)..."
-    rm -rf "$SANDBOX_DIR"
-fi
 
 exit 0
