@@ -16,13 +16,13 @@
 
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# Resolve defaults
-# ---------------------------------------------------------------------------
+unset SANDBOX_DIR SCRATCH_TMP APPTAINER_TMPDIR APPTAINER_CACHEDIR
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 : "${BASE_SIF_IMAGE:?'BASE_SIF_IMAGE must be set to the base .sif file path'}"
+BASE_SIF_IMAGE="$(cd "$(dirname "$BASE_SIF_IMAGE")" && pwd)/$(basename "$BASE_SIF_IMAGE")"
 
 SIF_DIR="$(dirname "$BASE_SIF_IMAGE")"
 : "${SIF_IMAGE:=$SIF_DIR/wm.sif}"
@@ -49,33 +49,22 @@ if [ ! -f "$BASE_SIF_IMAGE" ]; then
     exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# Host directories
-# ---------------------------------------------------------------------------
-echo "[local] Creating host directories..."
+echo "Creating host directories..."
 mkdir -p "$SCRATCH_TMP" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 
-# ---------------------------------------------------------------------------
-# Build sandbox from base SIF
-# ---------------------------------------------------------------------------
 if [ ! -d "$SANDBOX_DIR" ]; then
-    echo "[local] Building sandbox from $BASE_SIF_IMAGE..."
+    echo "Building sandbox from $BASE_SIF_IMAGE..."
     apptainer build --fakeroot --sandbox "$SANDBOX_DIR" "$BASE_SIF_IMAGE"
 else
-    echo "[local] Sandbox $SANDBOX_DIR already exists, skipping build."
+    echo "Sandbox $SANDBOX_DIR already exists, skipping build."
 fi
 
-# Ensure /opt/venvs mount point exists inside sandbox
 mkdir -p "$SANDBOX_DIR/opt/venvs"
 mkdir -p "$SANDBOX_DIR/workspace/run"
 chmod 1777 "$SCRATCH_TMP"
 
-# ---------------------------------------------------------------------------
-# Install wm_planner dependencies inside sandbox
-# ---------------------------------------------------------------------------
-echo "[local] Installing wm_planner dependencies..."
+echo "Installing wm_planner dependencies..."
 
-# Common apptainer exec flags
 EXEC_FLAGS=(
     --fakeroot --writable
     -B "$SCRATCH_TMP":/tmp:rw
@@ -109,6 +98,16 @@ else
 fi
 
 VENV_PY=\"\$VENV/bin/python\"
+if [ ! -x \"\$VENV_PY\" ] || ! \"\$VENV_PY\" --version >/dev/null 2>&1; then
+    echo \"Fixing broken venv python symlink...\"
+    REAL_PY=\$(readlink -f \"\$VENV_PY\" 2>/dev/null || true)
+    SYS_PY=\$(command -v python3.11 || command -v python3)
+    rm -f \"\$VENV_PY\" \"\$VENV/bin/python3\" \"\$VENV/bin/python3.11\"
+    cp \"\$SYS_PY\" \"\$VENV_PY\"
+    ln -s python \"\$VENV/bin/python3\"
+    ln -s python \"\$VENV/bin/python3.11\"
+    echo \"Replaced with copy of \$SYS_PY\"
+fi
 
 echo \"Installing wm_planner into \$VENV...\"
 uv pip install --python \"\$VENV_PY\" \
@@ -139,21 +138,11 @@ echo \"Verifying installation...\"
 echo \"wm venv ready at \$VENV\"
 "
 
-# ---------------------------------------------------------------------------
-# Convert sandbox to final SIF
-# ---------------------------------------------------------------------------
-echo "[local] Converting sandbox to SIF: $SIF_IMAGE"
+echo "Converting sandbox to SIF: $SIF_IMAGE"
 [ -f "$SIF_IMAGE" ] && rm -f "$SIF_IMAGE"
 apptainer build --fakeroot "$SIF_IMAGE" "$SANDBOX_DIR"
 
 echo ""
-echo "[local] Build complete!"
-echo "  Output SIF : $SIF_IMAGE"
-echo "  wm venv    : /opt/venvs/$WM_VENV_NAME (inside container)"
-echo ""
-echo "To run with GPU:"
-echo "  apptainer exec --nv -B $PROJECT_ROOT:/workspace/run:ro \\"
-echo "    $SIF_IMAGE /opt/venvs/$WM_VENV_NAME/bin/python <script>"
-echo ""
+echo "Build complete!"
 
 exit 0
