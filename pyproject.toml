@@ -36,6 +36,7 @@ dependencies = [
   "webdataset",
   "ftfy",
   "datasets",
+  "pyarrow",
   "accelerate>=0.26.1",
   "hydra-core>=1.2.0",
   "hydra-submitit-launcher>=1.2.0",
