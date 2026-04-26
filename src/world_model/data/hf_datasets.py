@@ -49,6 +49,7 @@ class HFWindowDataset(Dataset):
         """Initialize the dataset."""
         self.sample_k = sample_k
         self.sample_mode = sample_mode
+        self.frameskip = frameskip if frameskip is not None else 1
 
         if isinstance(dataset, str):
             dataset = dataset.strip("'\"")
@@ -137,7 +138,7 @@ class HFWindowDataset(Dataset):
         self.D_imu = len(self.imu_cols) or 6 # Default 6 if no IMU
         self.D_act = len(self.act_cols) or self.D_odom
         # Derived dims used by the trainer
-        self.proprio_dim = self.D_odom + self.D_imu + 1  # odom + imu + collision
+        self.proprio_dim = self.D_imu  # IMU only (6-dim)
         self.action_dim = self.D_act
 
     def _build_index(self) -> None:
@@ -195,11 +196,18 @@ class HFWindowDataset(Dataset):
         try:
             if self.sample_mode and self.sample_k is not None and n_frames > 0:
                 k = self.sample_k
-                if n_frames >= k:
-                    start = np.random.randint(0, n_frames - k + 1)
-                    indices = np.arange(start, start + k)
+                fs = self.frameskip
+                span = (k - 1) * fs + 1  # raw frames needed to cover k steps at stride fs
+                if n_frames >= span:
+                    start = np.random.randint(0, n_frames - span + 1)
+                    indices = np.arange(start, start + span, fs)
                 else:
-                    indices = np.concatenate([np.arange(n_frames), np.full(k - n_frames, n_frames - 1)])
+                    # Not enough frames for full stride; take what's available then pad
+                    avail = np.arange(0, n_frames, fs)
+                    if len(avail) >= k:
+                        indices = avail[:k]
+                    else:
+                        indices = np.concatenate([avail, np.full(k - len(avail), n_frames - 1)])
 
                 def get_frame(i):
                     img = batch_data["image"][i]
@@ -236,6 +244,10 @@ class HFWindowDataset(Dataset):
                 actions = np.stack(actions)
                 collisions = np.stack(collisions)
                 depths = np.stack(depths)
+
+                # Derive action as delta to goal: action[t] = odom[-1] - odom[t]
+                if not self.act_cols:
+                    actions = odoms[-1:] - odoms  # broadcast subtract last frame
 
                 # Normalize/scale; always keep raw copies for the state vector
                 state_odom = odoms.copy()
@@ -277,7 +289,11 @@ class HFWindowDataset(Dataset):
             images = batch_data["image"]
             rgbs = np.stack([self._transform(img).numpy() if img is not None else np.zeros((3, self.img_size, self.img_size), dtype=np.float32) for img in images])
             odoms = np.stack([[batch_data[col][i] for col in self.odom_cols] for i in range(n_frames)]).astype(np.float32)
-            actions = np.stack([[batch_data[col][i] for col in self.act_cols] for i in range(n_frames)]).astype(np.float32) if self.act_cols else odoms.copy()
+            if self.act_cols:
+                actions = np.stack([[batch_data[col][i] for col in self.act_cols] for i in range(n_frames)]).astype(np.float32)
+            else:
+                # Derive action as delta to goal: action[t] = odom[-1] - odom[t]
+                actions = odoms[-1:] - odoms  # broadcast subtract last frame
             imus = np.stack([[batch_data[col][i] for col in self.imu_cols] for i in range(n_frames)]).astype(np.float32) if self.imu_cols else np.zeros((n_frames, self.D_imu), dtype=np.float32)
             collisions = np.zeros((n_frames, 1), dtype=np.float32)
             depths = np.zeros((n_frames, 1, self.img_size, self.img_size), dtype=np.float32)
@@ -341,7 +357,7 @@ class EpisodeDataset(torch.utils.data.Dataset):
         coll = d["collision"] if isinstance(d["collision"], torch.Tensor) else torch.from_numpy(d["collision"])
         obs = {
             "visual": d["rgb"] if isinstance(d["rgb"], torch.Tensor) else torch.from_numpy(d["rgb"]),
-            "proprio": torch.cat([odom, imu, coll], dim=-1),
+            "proprio": imu,  # IMU only (6/10-dim), consistent with collate_dinowm
         }
         act   = d["action"] if isinstance(d["action"], torch.Tensor) else torch.from_numpy(d["action"])
         state = d["state"]  if isinstance(d["state"],  torch.Tensor) else torch.from_numpy(d["state"])
@@ -353,10 +369,7 @@ def collate_dinowm(batch: List[dict[str, np.ndarray]]):
     if "state" not in batch[0]:
         raise KeyError("Expected 'state' key in batch for DinoWM — check hf_datasets.py.")
     rgb = torch.from_numpy(np.stack([b["rgb"] for b in batch]))             # (B, T, 3, H, W)
-    proprio = torch.from_numpy(np.stack([                                      # (B, T, D_odom+D_imu+1)
-        np.concatenate([b["odom"], b["imu"], b["collision"]], axis=-1)
-        for b in batch
-    ]))
+    proprio = torch.from_numpy(np.stack([ b["imu"] for b in batch]))
     action = torch.from_numpy(np.stack([b["action"] for b in batch]))        # (B, T, D_act)
     state = torch.stack([b["state"] for b in batch])                          # (B, T, D_state)
     obs = {"visual": rgb, "proprio": proprio}

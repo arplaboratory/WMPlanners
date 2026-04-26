@@ -1,0 +1,160 @@
+ckpt_base_path: outputs
+training:
+  seed: 0
+  epochs: 1
+  batch_size: 2
+  save_every_x_epoch: 1
+  reconstruct_every_x_batch: 10
+  num_reconstruct_samples: 2
+  encoder_lr: 1.0e-06
+  decoder_lr: 0.0003
+  predictor_lr: 0.0005
+  action_encoder_lr: 0.0005
+img_size: 224
+frameskip: 5
+concat_dim: 1
+normalize_action: true
+action_emb_dim: 10
+num_action_repeat: 1
+proprio_emb_dim: 10
+num_proprio_repeat: 1
+num_hist: 3
+num_pred: 1
+trajectory_length: 4
+has_predictor: true
+has_decoder: false
+model:
+  _target_: world_model.backbones.wm.WM
+  image_size: 224
+  num_hist: 3
+  num_pred: 1
+  train_encoder: false
+  train_predictor: true
+  train_decoder: false
+debug: true
+plan_settings:
+  plan_cfg_path: null
+  planner:
+  - gd
+  - cem
+  goal_source:
+  - dset
+  - random_state
+  goal_H:
+  - 5
+  alpha:
+  - 0.1
+  - 1
+env:
+  name: collect1
+  num_workers: 0
+  decoder_path: null
+  dataset:
+    data_path: lquan9/collect1
+    odom_stats:
+      mean:
+      - 8.2521
+      - -8.7959
+      - 4.0899
+      - -0.0034
+      - 0.0025
+      - 0.3368
+      - 0.3907
+      - 0.503
+      - 0.0686
+      - -0.0195
+      - 0.0079
+      - -0.0002
+      - -0.0033
+      std:
+      - 62.1941
+      - 86.9492
+      - 10.1459
+      - 0.079
+      - 0.1024
+      - 0.5851
+      - 0.612
+      - 1.8989
+      - 1.2242
+      - 0.7451
+      - 0.3444
+      - 0.3458
+      - 0.3957
+    imu_stats:
+      mean:
+      - 0.0043
+      - 0.0334
+      - -0.0012
+      - 0.2248
+      - 0.0035
+      - -0.0002
+      - -0.0023
+      - 0.136
+      - -4.8097
+      - 3.9993
+      std:
+      - 0.3253
+      - 0.3077
+      - 0.0199
+      - 0.4098
+      - 0.3289
+      - 0.3188
+      - 0.3858
+      - 1.7707
+      - 5.1886
+      - 5.2892
+    collision_stats: null
+    action_stats:
+      mean:
+      - 8.2521
+      - -8.7959
+      - 4.0899
+      - -0.0034
+      - 0.0025
+      - 0.3368
+      - 0.3907
+      - 0.503
+      - 0.0686
+      - -0.0195
+      - 0.0079
+      - -0.0002
+      - -0.0033
+      std:
+      - 62.1941
+      - 86.9492
+      - 10.1459
+      - 0.079
+      - 0.1024
+      - 0.5851
+      - 0.612
+      - 1.8989
+      - 1.2242
+      - 0.7451
+      - 0.3444
+      - 0.3458
+      - 0.3957
+encoder:
+  _target_: world_model.backbones.dino.build_dinov2
+  model_name: dinov2_vits14
+action_encoder:
+  _target_: world_model.backbones.proprio.ProprioceptiveEmbedding
+  num_frames: 1
+  tubelet_size: 1
+  use_3d_pos: false
+proprio_encoder:
+  _target_: world_model.backbones.proprio.ProprioceptiveEmbedding
+  num_frames: 1
+  tubelet_size: 1
+  use_3d_pos: false
+predictor:
+  _target_: world_model.backbones.latentdynamics.ViTPredictor
+  depth: 6
+  heads: 16
+  mlp_dim: 2048
+  dropout: 0.1
+  emb_dropout: 0
+  pool: mean
+saved_folder: /Users/akashguna/Documents/ELV/NYU_DS_GA_3001
+effective_batch_size: 2
+gpu_batch_size: 2
+wandb_run_id: 0nf6y907
