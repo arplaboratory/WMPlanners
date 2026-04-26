@@ -125,18 +125,14 @@ class WorldModel(nn.Module):
         action: torch.Tensor,
         horizon: int,
         target_model: "WorldModel | None" = None,
+        num_hist: int = 1,
     ) -> dict[str, torch.Tensor]:
         """Full forward pass: encode targets, rollout dynamics, decode heads.
 
-        This method exists so that :class:`DDP` can wrap the complete
-        computation graph and register backward hooks for gradient sync.
-
-        When *target_model* is ``None`` (MLP / RSSM mode), step-0 targets
-        retain gradients through the backbone while steps 1..H are detached.
-
-        When *target_model* is provided (TD-JEPA mode), **all** targets come
-        from the frozen EMA model under ``no_grad``; the online backbone is
-        unused and only the dynamics + heads receive gradients.
+        Supports multi-frame history (``num_hist``). When ``num_hist > 1``,
+        the first ``num_hist`` frames are encoded with gradients and used to
+        warm up the dynamics model (building RSSM hidden state). Prediction
+        targets start from the last history frame onward.
 
         Args:
             rgb: ``(B, T, 3, H, W)``.
@@ -144,48 +140,72 @@ class WorldModel(nn.Module):
             odom: ``(B, T, D_odom)``.
             imu: ``(B, T, D_imu)``.
             action: ``(B, T, D_act)``.
-            horizon: number of rollout steps *H*.  ``T >= H + 1``.
+            horizon: number of rollout steps *H*.  ``T >= num_hist + H``.
             target_model: optional frozen EMA model for TD-JEPA targets.
+            num_hist: number of history frames to encode (default 1).
 
         Returns:
             dict with ``z_targets``, ``z_pred``, ``state_pred``, ``risk_pred``.
+            All prediction tensors have shape ``(B, H+1, ...)``.
         """
-        t0 = 0
         H = horizon
+        nh = num_hist
+        # Prediction starts at frame (nh-1) and goes H steps forward
+        pred_start = nh - 1
 
-        # encode targets
+        # ── Encode history frames (with gradients) ──
+        z_hist = []
+        for k in range(nh):
+            out_k = self.encode(rgb[:, k], depth[:, k], odom[:, k], imu[:, k])
+            z_hist.append(out_k.z)
+
+        # ── Encode target frames (no gradients) ──
+        # Targets: frames pred_start .. pred_start+H (H+1 frames total)
         if target_model is not None:
-            # TD-JEPA: all targets from frozen EMA model
             z_targets = []
             with torch.no_grad():
-                for k in range(H + 1):
+                for k in range(pred_start, pred_start + H + 1):
                     out_k = target_model.encode(
-                        rgb[:, t0 + k], depth[:, t0 + k],
-                        odom[:, t0 + k], imu[:, t0 + k],
+                        rgb[:, k], depth[:, k], odom[:, k], imu[:, k],
                     )
                     z_targets.append(out_k.z)
         else:
-            # MLP / RSSM: retains gradients, rest detached
-            out0 = self.encode(rgb[:, t0], depth[:, t0], odom[:, t0], imu[:, t0])
-            z_targets = [out0.z]
+            # First target is z_hist[-1] (last history frame, has gradients)
+            z_targets = [z_hist[-1]]
             with torch.no_grad():
-                for k in range(1, H + 1):
+                for k in range(pred_start + 1, pred_start + H + 1):
                     out_k = self.encode(
-                        rgb[:, t0 + k], depth[:, t0 + k],
-                        odom[:, t0 + k], imu[:, t0 + k],
+                        rgb[:, k], depth[:, k], odom[:, k], imu[:, k],
                     )
                     z_targets.append(out_k.z)
 
-        z_targets = torch.stack(z_targets, dim=1)          # (B, H+1, z)
+        z_targets = torch.stack(z_targets, dim=1)  # (B, H+1, z)
 
-        # rollout dynamics
-        z0 = z_targets[:, 0]
-        a_seq = action[:, t0 : t0 + H]                     # (B, H, act)
-        z_pred = self.rollout(z0, a_seq)                    # (B, H+1, z)
+        # ── Warm up dynamics with history ──
+        B = rgb.shape[0]
+        h0 = None  # RSSM hidden state
 
-        # decode
-        state_pred = self.state_head(z_pred)                # (B, H+1, state)
-        risk_pred = self.risk_head(z_pred)                  # (B, H+1, 1)
+        if nh > 1 and hasattr(self.dynamics, "get_initial_state"):
+            # RSSM: step through history frames to build hidden state
+            h = self.dynamics.get_initial_state(B, rgb.device)
+            z = z_hist[0]
+            for k in range(nh - 1):
+                z, h = self.dynamics(z, action[:, k], h)
+            h0 = h  # warm hidden state for rollout
+        elif nh > 1:
+            # MLP: step through history (no hidden state, but refines z)
+            z = z_hist[0]
+            for k in range(nh - 1):
+                z = self.dynamics(z, action[:, k])
+
+        # ── Rollout predictions from last history frame ──
+        z_start = z_hist[-1]
+        a_seq = action[:, pred_start : pred_start + H]  # (B, H, act)
+        z_pred = self.rollout(z_start, a_seq, h0=h0)    # (B, H+1, z)
+
+        # ── Decode ──
+        state_pred = self.state_head(z_pred)   # (B, H+1, state)
+        risk_pred = self.risk_head(z_pred)      # (B, H+1, 1)
 
         return {
             "z_targets": z_targets,
@@ -194,12 +214,14 @@ class WorldModel(nn.Module):
             "risk_pred": risk_pred,
         }
 
-    def rollout(self, z0: torch.Tensor, a_seq: torch.Tensor) -> torch.Tensor:
+    def rollout(self, z0: torch.Tensor, a_seq: torch.Tensor, h0=None) -> torch.Tensor:
         """Roll out latent dynamics for a sequence of actions.
 
         Args:
             z0: ``(B, z_dim)``.
             a_seq: ``(B, T, act_dim)``.
+            h0: optional pre-warmed RSSM hidden state ``(B, hidden_dim)``.
+                If ``None`` and dynamics has hidden state, starts from zeros.
 
         Returns:
             ``(B, T+1, z_dim)`` including *z0*.
@@ -207,10 +229,9 @@ class WorldModel(nn.Module):
         B, T, _ = a_seq.shape
         z = z0
         zs = [z0]
-        
-        # Check if the dynamics model requires a hidden state (e.g., RSSM)
+
         if hasattr(self.dynamics, "get_initial_state"):
-            h = self.dynamics.get_initial_state(B, z0.device)
+            h = h0 if h0 is not None else self.dynamics.get_initial_state(B, z0.device)
             for t in range(T):
                 z, h = self.dynamics(z, a_seq[:, t], h)
                 zs.append(z)
@@ -218,5 +239,5 @@ class WorldModel(nn.Module):
             for t in range(T):
                 z = self.dynamics(z, a_seq[:, t])
                 zs.append(z)
-                
+
         return torch.stack(zs, dim=1)
