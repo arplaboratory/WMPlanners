@@ -41,7 +41,7 @@ fi
 # 1. Create virtual environment
 if [ ! -d "$VENV_PATH" ]; then
     echo "Creating virtual environment with Python 3.11..."
-    uv venv "$VENV_PATH" --python 3.11 || exit 1
+    uv venv "$VENV_PATH" --python "${WM_PYTHON:-3.11}" || exit 1
 fi
 
 # Activate environment
