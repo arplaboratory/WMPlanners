@@ -69,6 +69,7 @@ fi
 # Ensure /opt/venvs mount point exists inside sandbox
 mkdir -p "$SANDBOX_DIR/opt/venvs"
 mkdir -p "$SANDBOX_DIR/workspace/run"
+chmod 1777 "$SCRATCH_TMP"
 
 # ---------------------------------------------------------------------------
 # Install wm_planner dependencies inside sandbox
@@ -95,21 +96,23 @@ echo \"Installing system Python and build tools...\"
 apt-get update -qq
 apt-get install -y -qq python3 python3-pip python3-venv python3-dev curl
 
-echo \"Installing uv into system Python...\"
-python3 -m pip install --quiet --upgrade uv pip
+echo \"Installing uv via official installer...\"
+export HOME=/root
+curl -sSf https://astral.sh/uv/install.sh | sh
+export PATH=\"/root/.local/bin:\$PATH\"
 
 # Create venv with Python 3.11 if possible, else fall back to system default
-if python3 -m uv venv --python 3.11 \"\$VENV\" 2>/dev/null; then
+if uv venv --python 3.11 \"\$VENV\" 2>/dev/null; then
     echo \"Created venv with Python 3.11\"
 else
     echo \"Python 3.11 not available; falling back to system Python\"
-    python3 -m uv venv \"\$VENV\"
+    uv venv \"\$VENV\"
 fi
 
 VENV_PY=\"\$VENV/bin/python\"
 
 echo \"Installing wm_planner into \$VENV...\"
-python3 -m uv pip install --python \"\$VENV_PY\" \
+uv pip install --python \"\$VENV_PY\" \
     --no-cache-dir \
     -e '/workspace/run[dev]'
 
@@ -126,7 +129,7 @@ for ext in dino vjepa2; do
             sed -i '/--extra-index-url.*nvidia.com/d' \"\$ext_dir/requirements.txt\"
             sed -i '/cuml-cu11/d' \"\$ext_dir/requirements.txt\"
         fi
-        python3 -m uv pip install --python \"\$VENV_PY\" \
+        uv pip install --python \"\$VENV_PY\" \
             --no-cache-dir -e \"\$ext_dir\" || echo \"Warning: external \$ext install failed (non-fatal)\"
     fi
 done
