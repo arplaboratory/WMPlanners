@@ -102,11 +102,11 @@ curl -sSf https://astral.sh/uv/install.sh | sh
 export PATH=\"/root/.local/bin:\$PATH\"
 
 # Create venv with Python 3.11 if possible, else fall back to system default
-if uv venv --python 3.11 \"\$VENV\" 2>/dev/null; then
+if uv venv --seed --python 3.11 \"\$VENV\" 2>/dev/null; then
     echo \"Created venv with Python 3.11\"
 else
     echo \"Python 3.11 not available; falling back to system Python\"
-    uv venv \"\$VENV\"
+    uv venv --seed \"\$VENV\"
 fi
 
 VENV_PY=\"\$VENV/bin/python\"
