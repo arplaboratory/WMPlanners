@@ -20,6 +20,7 @@ unset SANDBOX_DIR SCRATCH_TMP APPTAINER_TMPDIR APPTAINER_CACHEDIR
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+WM_WS="${WM_WS:-$(cd "$PROJECT_ROOT/../.." && pwd)}"
 
 : "${BASE_SIF_IMAGE:?'BASE_SIF_IMAGE must be set to the base .sif file path'}"
 BASE_SIF_IMAGE="$(cd "$(dirname "$BASE_SIF_IMAGE")" && pwd)/$(basename "$BASE_SIF_IMAGE")"
@@ -33,16 +34,6 @@ SIF_DIR="$(dirname "$BASE_SIF_IMAGE")"
 : "${APPTAINER_CACHEDIR:=$SIF_DIR/.apptainer_cache}"
 
 export APPTAINER_TMPDIR APPTAINER_CACHEDIR
-
-echo "================================================="
-echo " wm_planner apptainer_setup.sh"
-echo "================================================="
-echo "  BASE_SIF_IMAGE : $BASE_SIF_IMAGE"
-echo "  SANDBOX_DIR    : $SANDBOX_DIR"
-echo "  SIF_IMAGE      : $SIF_IMAGE"
-echo "  PROJECT_ROOT   : $PROJECT_ROOT"
-echo "  WM_VENV_NAME   : $WM_VENV_NAME"
-echo "================================================="
 
 if [ ! -f "$BASE_SIF_IMAGE" ]; then
     echo "ERROR: BASE_SIF_IMAGE not found: $BASE_SIF_IMAGE" >&2
@@ -68,7 +59,7 @@ echo "Installing wm_planner dependencies..."
 EXEC_FLAGS=(
     --fakeroot --writable
     -B "$SCRATCH_TMP":/tmp:rw
-    -B "$PROJECT_ROOT":/workspace/run:rw
+    -B "$WM_WS":/workspace/run:rw
 )
 
 apptainer exec "${EXEC_FLAGS[@]}" "$SANDBOX_DIR" bash -c "
@@ -77,17 +68,33 @@ export DEBIAN_FRONTEND=noninteractive
 export TMPDIR=/tmp
 export UV_CACHE_DIR=/tmp/uv-cache
 export UV_LINK_MODE=copy
-
+WM_REPO_NAME='$(basename "$PROJECT_ROOT")'
 VENV=\"/opt/venvs/${WM_VENV_NAME}\"
 
-echo \"Installing system Python and build tools...\"
-apt-get update -qq
-apt-get install -y -qq python3 python3-pip python3-venv python3-dev curl
+echo \"Checking required system dependencies...\"
+MISSING_PKGS=\"\"
+for pkg in python3 python3-pip python3-venv python3-dev curl; do
+    if ! dpkg -s \"\$pkg\" >/dev/null 2>&1; then
+        MISSING_PKGS=\"\$MISSING_PKGS \$pkg\"
+    fi
+done
+if [ -n \"\$MISSING_PKGS\" ]; then
+    echo \"Installing missing system packages:\$MISSING_PKGS\"
+    apt-get -o APT::Sandbox::User=root update -qq
+    apt-get -o APT::Sandbox::User=root install -y -qq \$MISSING_PKGS
+else
+    echo \"All required system packages already present, skipping apt-get.\"
+fi
 
-echo \"Installing uv via official installer...\"
+echo \"Checking for uv...\"
 export HOME=/root
-curl -sSf https://astral.sh/uv/install.sh | sh
 export PATH=\"/root/.local/bin:\$PATH\"
+if ! command -v uv >/dev/null 2>&1; then
+    echo \"uv not found, installing via official installer...\"
+    curl -sSf https://astral.sh/uv/install.sh | sh
+else
+    echo \"uv already installed: \$(uv --version)\"
+fi
 
 # Create venv with Python 3.11 if possible, else fall back to system default
 if uv venv --seed --python 3.11 \"\$VENV\" 2>/dev/null; then
@@ -98,25 +105,24 @@ else
 fi
 
 VENV_PY=\"\$VENV/bin/python\"
-if [ ! -x \"\$VENV_PY\" ] || ! \"\$VENV_PY\" --version >/dev/null 2>&1; then
-    echo \"Fixing broken venv python symlink...\"
-    REAL_PY=\$(readlink -f \"\$VENV_PY\" 2>/dev/null || true)
-    SYS_PY=\$(command -v python3.11 || command -v python3)
-    rm -f \"\$VENV_PY\" \"\$VENV/bin/python3\" \"\$VENV/bin/python3.11\"
-    cp \"\$SYS_PY\" \"\$VENV_PY\"
-    ln -s python \"\$VENV/bin/python3\"
-    ln -s python \"\$VENV/bin/python3.11\"
-    echo \"Replaced with copy of \$SYS_PY\"
-fi
+SYS_PY=\$(command -v python3.11 2>/dev/null || command -v python3)
+echo \"Pinning venv python to \$SYS_PY (copy, not symlink)...\"
+rm -f \"\$VENV_PY\" \"\$VENV/bin/python3\" \"\$VENV/bin/python3.11\"
+cp \"\$SYS_PY\" \"\$VENV_PY\"
+ln -sf python \"\$VENV/bin/python3\"
+ln -sf python \"\$VENV/bin/python3.11\"
+echo \"Venv python pinned: \$(\$VENV_PY --version)\"
 
 echo \"Installing wm_planner into \$VENV...\"
+uv pip install --python \"\$VENV_PY\" --no-cache-dir setuptools wheel hatchling editables
 uv pip install --python \"\$VENV_PY\" \
     --no-cache-dir \
-    -e '/workspace/run[dev]'
+    --no-build-isolation \
+    -e "/workspace/run/src/\$WM_REPO_NAME[dev]"
 
 # Install external packages if present
 for ext in dino vjepa2; do
-    ext_dir=\"/workspace/run/external/\$ext\"
+    ext_dir="/workspace/run/src/\$WM_REPO_NAME/external/\$ext"
     if [ -d \"\$ext_dir\" ]; then
         echo \"Installing external: \$ext\"
         if [ -f \"\$ext_dir/requirements.txt\" ]; then
@@ -128,7 +134,7 @@ for ext in dino vjepa2; do
             sed -i '/cuml-cu11/d' \"\$ext_dir/requirements.txt\"
         fi
         uv pip install --python \"\$VENV_PY\" \
-            --no-cache-dir -e \"\$ext_dir\" || echo \"Warning: external \$ext install failed (non-fatal)\"
+            --no-cache-dir --no-build-isolation -e \"\$ext_dir\" || echo \"Warning: external \$ext install failed (non-fatal)\"
     fi
 done
 
