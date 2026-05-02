@@ -243,6 +243,7 @@ def main():
 
     print(f"Loading dataset: {args.dataset}")
     ds = HFWindowDataset(args.dataset, img_size=img_size, norm_stats=norm_stats)
+    ds.force_velocity_actions()  # actions = odom[7:13] (6-dim velocity)
 
     # Filter to val episodes
     val_ids = set(eid for eid in ds._window_ids if eid % 5 == 0)

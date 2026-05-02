@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling>=1.24"]
+requires = ["hatchling>=1.24", "editables"]
 build-backend = "hatchling.build"
 
 [project]
 name = "ds-ga-3001"
-version = "1.0.0"
+version = "1.1.0"
 description = "Learning World Models Continuously from Embodied Experience"
 readme = "README.md"
 requires-python = ">=3.9"

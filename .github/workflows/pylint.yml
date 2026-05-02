@@ -19,7 +19,7 @@ jobs:
         bash scripts/python_setup.sh --no-externals
     - name: Analysing the code with pylint
       run: |
-        source .venv/bin/activate
+        source .venvs/wm/bin/activate
         pylint src/**/*.py --extension-pkg-whitelist=cv2 > pylint_report.txt || true
         cat pylint_report.txt
         SCORE=$(sed -n 's/^Your code has been rated at \([-0-9.]*\)\/10.*/\1/p' pylint_report.txt)
