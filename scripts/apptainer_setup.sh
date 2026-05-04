@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-unset SANDBOX_DIR SCRATCH_TMP APPTAINER_TMPDIR APPTAINER_CACHEDIR
+unset SCRATCH_TMP APPTAINER_TMPDIR APPTAINER_CACHEDIR
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -97,7 +97,10 @@ else
 fi
 
 # Create venv with Python 3.11 if possible, else fall back to system default
-if uv venv --seed --python 3.11 \"\$VENV\" 2>/dev/null; then
+# --allow-existing skips recreation if the venv already exists
+if [ -d \"\$VENV\" ]; then
+    echo \"Venv already exists at \$VENV, skipping creation.\"
+elif uv venv --seed --python 3.11 \"\$VENV\" 2>/dev/null; then
     echo \"Created venv with Python 3.11\"
 else
     echo \"Python 3.11 not available; falling back to system Python\"
