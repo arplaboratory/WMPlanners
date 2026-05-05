@@ -60,6 +60,18 @@ fi
 # 2. Install main project and dependencies
 echo "Installing project dependencies (including dev)..."
 cd "$PROJECT_ROOT" || exit 1
+
+# On Jetson (aarch64), PyTorch must come from NVIDIA's JetPack wheel index
+# before uv resolves the rest of the deps (PyPI torch won't work on ARM)
+ARCH=$(uname -m)
+if [ "$ARCH" = "aarch64" ]; then
+    JP_TORCH_INDEX="${JP_TORCH_INDEX:-https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/}"
+    echo "[Jetson] Pre-installing PyTorch from $JP_TORCH_INDEX"
+    uv pip install --index-url "$JP_TORCH_INDEX" \
+        "torch>=2.3" "torchvision" --no-deps || \
+        echo "[WARN] Jetson torch install failed — falling back to uv"
+fi
+
 uv pip install -e ".[dev]" || exit 1
 uv pip install --upgrade pyarrow datasets
 
