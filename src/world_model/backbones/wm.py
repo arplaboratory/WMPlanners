@@ -194,10 +194,11 @@ class WM(nn.Module):
         z_obs = {"visual": z_visual, "proprio": z_proprio}
         return z_obs, z_act
 
-    def forward(self, obs, act):
+    def forward(self, obs, act, target_encoder=None):
         """
         input:  obs (dict):  "visual", "proprio" (b, num_frames, 3, img_size, img_size)
                 act: (b, num_frames, action_dim)
+                target_encoder: optional EMA encoder for I-JEPA-style stable latent targets
         output: z_pred: (b, num_hist, num_patches, emb_dim)
                 visual_pred: (b, num_hist, 3, img_size, img_size)
                 visual_reconstructed: (b, num_frames, 3, img_size, img_size)
@@ -206,9 +207,24 @@ class WM(nn.Module):
         loss_components = {}
         z = self.encode(obs, act)
         z_src = z[:, : self.num_hist, :, :]  # (b, num_hist, num_patches, dim)
-        z_tgt = z[:, self.num_pred :, :, :]  # (b, num_hist, num_patches, dim)
-        visual_src = obs['visual'][:, : self.num_hist, ...]  # (b, num_hist, 3, img_size, img_size)
-        visual_tgt = obs['visual'][:, self.num_pred :, ...]  # (b, num_hist, 3, img_size, img_size)
+        visual_src = obs['visual'][:, : self.num_hist, ...]
+        visual_tgt = obs['visual'][:, self.num_pred :, ...]
+
+        if target_encoder is not None:
+            # I-JEPA: encode target frames with frozen EMA encoder for stable prediction targets
+            b = visual_tgt.shape[0]
+            vt_flat = rearrange(visual_tgt, "b t ... -> (b t) ...")
+            vt_flat = self.encoder_transform(vt_flat)
+            with torch.no_grad():
+                tgt_visual_embs = target_encoder(vt_flat)
+            tgt_visual_embs = rearrange(tgt_visual_embs, "(b t) p d -> b t p d", b=b)
+            z_tgt = z[:, self.num_pred :, :, :].clone()
+            if self.concat_dim == 0:
+                z_tgt[:, :, :-2, :] = tgt_visual_embs.detach()
+            else:  # concat_dim == 1
+                z_tgt[:, :, :, :-(self.proprio_dim + self.action_dim)] = tgt_visual_embs.detach()
+        else:
+            z_tgt = z[:, self.num_pred :, :, :]  # (b, num_hist, num_patches, dim)
 
         if self.predictor is not None:
             z_pred = self.predict(z_src)
