@@ -9,7 +9,6 @@ from logging import getLogger
 from .base import ModelBundle
 from .registry import register
 from world_model.components.heads import StateHead, RiskHead
-from world_model.components.dynamics import LatentDynamics, RSSMDynamics
 logger = getLogger(__name__)
 
 class WM(nn.Module):
@@ -59,6 +58,11 @@ class WM(nn.Module):
 
         # Predictor mode: "patch" (ViT causal attention) or "frame" (MLP/RSSM frame-level dynamics)
         assert predictor_mode in ("patch", "frame"), f"predictor_mode must be 'patch' or 'frame', got {predictor_mode!r}"
+        if predictor_mode == "frame":
+            assert concat_dim == 1, (
+                "predictor_mode='frame' requires concat_dim=1 so that action embeddings have "
+                "dimension action_emb_dim (not encoder.emb_dim). Set concat_dim=1 in your config."
+            )
         self.predictor_mode = predictor_mode
 
         # State and risk auxiliary heads (disabled when state_dim=0)

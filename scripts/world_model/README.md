@@ -314,7 +314,7 @@ cfg = DinoWMConfig(dataset="...", predictor_type="mlp")
 
 Loss keys: same as ViT (frame-level MSE is broadcast back to patch shape for the JEPA loss)
 
-**When to use:** Fast ablations, compute-limited environments, or when frame-level dynamics suffice. Requires `concat_dim=1`.
+**When to use:** Fast ablations, compute-limited environments, or when frame-level dynamics suffice. **Requires `concat_dim=1`** (enforced at startup).
 
 ### `"rssm"` — Recurrent State-Space Model (GRU)
 
@@ -326,7 +326,7 @@ cfg = DinoWMConfig(dataset="...", predictor_type="rssm")
 
 Loss keys: same as ViT
 
-**When to use:** Sequences with memory requirements (occlusions, long-horizon planning). Comparable compute to MLP. Requires `concat_dim=1`.
+**When to use:** Sequences with memory requirements (occlusions, long-horizon planning). Comparable compute to MLP. **Requires `concat_dim=1`** (enforced at startup).
 
 ### Predictor comparison
 
@@ -336,7 +336,7 @@ Loss keys: same as ViT
 | Temporal modelling | attention (all-to-all) | feedforward (single step) | recurrent (GRU) |
 | Memory across steps | none (context window) | none | GRU hidden state |
 | Parameter count | ~20M | ~800K | ~1M |
-| `concat_dim` | 0 or 1 | 1 recommended | 1 recommended |
+| `concat_dim` | 0 or 1 | **must be 1** | **must be 1** |
 | Best for | rich spatial prediction | fast ablations | partially-observable scenes |
 
 ---
@@ -451,30 +451,35 @@ Applies a linear warmup over the first `lr_warmup_epochs` epochs, then cosine an
 
 ## Checkpoint Structure
 
-Checkpoints are saved to `{out_dir}/{experiment_name}/`:
+Checkpoints are saved to `{out_dir}/checkpoints/` as single-dict `.pth` files containing all components.
 
 ```
 runs/
-└── lquan9_collect1_dinov2_vits14_20260527_143021/
-    ├── encoder.pt           # DINOv2 encoder state dict
-    ├── predictor.pt         # ViT / MLP / RSSM predictor state dict
-    ├── action_encoder.pt    # ProprioceptiveEmbedding (action)
-    ├── proprio_encoder.pt   # ProprioceptiveEmbedding (proprio)
-    ├── action_decoder.pt    # StateHead used for action decode loss
-    ├── state_head.pt        # (only when state_dim > 0)
-    ├── risk_head.pt         # (only when state_dim > 0)
-    ├── decoder.pt           # (only when has_decoder=True)
-    ├── target_encoder.pt    # (only when ema_tau > 0)
-    ├── args.json            # Full DinoWMConfig serialised to JSON
-    └── epoch_{N}/           # Per-epoch snapshots (every save_every_x_epoch epochs)
-        ├── encoder.pt
-        └── ...
+└── checkpoints/
+    ├── model_latest.pth    # overwritten every save_every_x_epoch epochs
+    ├── model_{N}.pth       # per-epoch snapshot (every save_every_x_epoch epochs)
+    └── model_best.pth      # saved whenever val loss improves
 ```
 
-The `args.json` file records every config field so runs are fully reproducible:
+Each `.pth` file is a `torch.load`-able dict with the following keys depending on the training config:
 
-```bash
-python -c "import json; print(json.load(open('runs/.../args.json')))"
+| Key | Present when |
+|-----|-------------|
+| `epoch` | always |
+| `encoder` / `encoder_optimizer` | `train_encoder=True` |
+| `predictor` / `predictor_optimizer` | `train_predictor=True` and `has_predictor=True` |
+| `decoder` / `decoder_optimizer` | `train_decoder=True` and `has_decoder=True` |
+| `action_encoder` | always |
+| `proprio_encoder` | always |
+| `state_head` / `risk_head` | `state_dim > 0` |
+| `sched_{component}` | `lr_schedule != "none"` |
+
+Loading a checkpoint:
+
+```python
+ckpt = torch.load("runs/checkpoints/model_latest.pth", weights_only=False)
+trainer.encoder.load_state_dict(ckpt["encoder"].state_dict())
+# or use trainer.load_ckpt("runs/checkpoints/model_latest.pth")
 ```
 
 ---

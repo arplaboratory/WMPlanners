@@ -353,7 +353,7 @@ class DinoWMTrainer:
         gpu_batch_size = args.batch_size // world_size
 
         self._sampler_train = (
-            DistributedSampler(_window_ds, shuffle=False) if args.ddp else None
+            DistributedSampler(_window_ds, shuffle=True) if args.ddp else None
         )
         self._sampler_valid = (
             DistributedSampler(_window_ds, shuffle=False) if args.ddp else None
@@ -398,6 +398,13 @@ class DinoWMTrainer:
         self._keys_to_save += ["action_encoder", "proprio_encoder"]
         if getattr(args, "state_dim", 0) > 0:
             self._keys_to_save += ["state_head", "risk_head"]
+            if getattr(args, "lambda_risk", 0.2) > 0:
+                log.warning(
+                    "state_dim > 0 and lambda_risk > 0, but HFWindowDataset currently "
+                    "hard-codes collision labels to 0 for all frames. The risk head will "
+                    "train to output 0 and provide no useful signal. Set lambda_risk=0 to "
+                    "suppress this loss until real collision labels are available."
+                )
 
         # Model attributes populated by init_models()
         self.encoder = None
@@ -410,8 +417,9 @@ class DinoWMTrainer:
 
         self.init_models()
         self.init_optimizers()
-        # AMP scaler (no-op when use_amp=False)
-        self._scaler = torch.cuda.amp.GradScaler(enabled=getattr(args, 'use_amp', False))
+        # AMP scaler — disable on CPU; use device-agnostic API to avoid FutureWarning
+        _use_amp = getattr(args, 'use_amp', False) and "cuda" in args.device
+        self._scaler = torch.amp.GradScaler("cuda", enabled=_use_amp)
         self._best_val_loss = float("inf")
         self.epoch_log = OrderedDict()
 
@@ -824,7 +832,14 @@ class DinoWMTrainer:
                     and ckpt_path is not None
                     and self.main_process
                 ):
-                    from plan import build_plan_cfg_dicts, launch_plan_jobs  # noqa: PLC0415
+                    try:
+                        from plan import build_plan_cfg_dicts, launch_plan_jobs  # noqa: PLC0415
+                    except ImportError as exc:
+                        raise ImportError(
+                            "Planning eval integration requires the 'plan' module, which is not "
+                            "currently available in this repository. Set plan_cfg_path=None to "
+                            "disable planning evals."
+                        ) from exc
 
                     cfg_dicts = build_plan_cfg_dicts(
                         plan_cfg_path=self.args.plan_cfg_path,
@@ -892,7 +907,7 @@ class DinoWMTrainer:
                 odom      = None
                 collision = None
 
-            with torch.cuda.amp.autocast(enabled=use_amp):
+            with torch.amp.autocast("cuda", enabled=use_amp and "cuda" in self.args.device):
                 z_out, visual_out, visual_reconstructed, loss, loss_components = self.model(
                     obs, act,
                     target_encoder=self.target_encoder,
@@ -905,11 +920,17 @@ class DinoWMTrainer:
                     act_pred = self.model.decode_act(z_out)
                     action_decode_loss = F.mse_loss(act_pred, act_tgt)
                     loss_components["action_decode_loss"] = action_decode_loss
-                    # Weighted JEPA + action-decode loss
+                    # Weighted JEPA + action-decode + auxiliary supervision losses
                     loss = (
                         lambda_z * loss_components["z_loss"]
                         + lambda_act * action_decode_loss
                     )
+                    lambda_state = getattr(args, "lambda_state", 1.0)
+                    lambda_risk = getattr(args, "lambda_risk", 0.2)
+                    if "state_loss" in loss_components:
+                        loss = loss + lambda_state * loss_components["state_loss"]
+                    if "risk_loss" in loss_components:
+                        loss = loss + lambda_risk * loss_components["risk_loss"]
 
                 scaled_loss = loss / accum_steps  # normalize for gradient accumulation
 
@@ -987,7 +1008,7 @@ class DinoWMTrainer:
                 collision_val = None
 
             with torch.no_grad():
-                with torch.cuda.amp.autocast(enabled=use_amp):
+                with torch.amp.autocast("cuda", enabled=use_amp and "cuda" in self.args.device):
                     z_out, visual_out, visual_reconstructed, loss, loss_components = self.model(
                         obs, act,
                         odom=odom_val,
@@ -999,6 +1020,16 @@ class DinoWMTrainer:
                         act_pred = self.model.decode_act(z_out)
                         action_decode_loss = F.mse_loss(act_pred, act_tgt)
                         loss_components["action_decode_loss"] = action_decode_loss
+                        # Recompute val loss with same composition as train loss
+                        lambda_z = getattr(self.args, 'lambda_z', 1.0)
+                        lambda_act = getattr(self.args, 'lambda_action_decode', 1.0)
+                        lambda_state = getattr(self.args, 'lambda_state', 1.0)
+                        lambda_risk = getattr(self.args, 'lambda_risk', 0.2)
+                        loss = lambda_z * loss_components["z_loss"] + lambda_act * action_decode_loss
+                        if "state_loss" in loss_components:
+                            loss = loss + lambda_state * loss_components["state_loss"]
+                        if "risk_loss" in loss_components:
+                            loss = loss + lambda_risk * loss_components["risk_loss"]
 
                 val_losses.append(loss.item())
 
