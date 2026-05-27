@@ -1330,6 +1330,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="[wm] L2 threshold for post-training pose accuracy metric")
     wm.add_argument("--resume", type=str, default=None,
                     help="[wm] Checkpoint path to resume from (auto-detects latest.pt)")
+    wm.add_argument("--no_wandb", action="store_true", default=False,
+                    help="[wm] Disable WandB logging even if --wandb is set")
+    wm.add_argument("--val_split", type=float, default=0.2,
+                    help="[wm] Fraction of episodes held out for validation")
+    wm.add_argument("--no_normalize", action="store_true", default=False,
+                    help="[wm] Disable data normalisation")
+    wm.add_argument("--velocity_actions", action="store_true", default=False,
+                    help="[wm] Use odom velocity (6-dim) as actions instead of legacy action columns")
 
     # ── DINO-WM mode args ─────────────────────────────────────────────────────
     dw = ap.add_argument_group("dinowm mode options")
@@ -1435,40 +1443,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--dataset', '--data_dir', type=str, required=True, dest='dataset',
-                    help='Path to dataset (HuggingFace dir/ID or local .npz dir)')
-    ap.add_argument('--dataset_type', type=str, default='hf', choices=['hf', 'npz'],
-                    help='Type of dataset to load')
-    ap.add_argument('--epochs', type=int, default=20)
-    ap.add_argument('--batch_size', type=int, default=64)
-    ap.add_argument('--img_size', type=int, default=224)
-    ap.add_argument('--horizon', type=int, default=16)
-    ap.add_argument('--num_hist', type=int, default=1, help='Number of history frames (1=original, 3=multi-frame context)')
-    ap.add_argument('--lr', type=float, default=3e-4)
-    ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
-    ap.add_argument('--seed', type=int, default=0)
-    ap.add_argument('--out_dir', type=str, default='runs')
-    ap.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from (autodetects "latest.pt")')
-    # Backbone configs
-    ap.add_argument('--backbone', type=str, default='cnn', help='cnn, dinov2, or vjepa2')
-    ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14', help='Specific model variant for the backbone')
-    ap.add_argument('--freeze_backbone', action='store_true', help='Freeze backbone weights during training')
-    ap.add_argument('--dynamics_type', type=str, default='mlp', choices=['mlp', 'rssm', 'td-jepa'], help='Type of dynamics module')
-    ap.add_argument('--ema_tau', type=float, default=0.996, help='EMA coefficient for TD-JEPA target model')
-    # Experiment / logging
-    ap.add_argument('--experiment_name', type=str, default=None, help='WANDB run name (default: auto-generated)')
-    ap.add_argument('--wandb', action='store_true', default=True, help='Enable WANDB logging (default: on)')
-    ap.add_argument('--no_wandb', action='store_true', default=False, help='Disable WANDB logging')
-    ap.add_argument('--pose_threshold', type=float, default=0.1, help='L2 threshold for pose accuracy metric')
-    ap.add_argument('--num_workers', type=int, default=8, help='Number of dataloader workers')
-    ap.add_argument('--val_split', type=float, default=0.2, help='Fraction of episodes for validation (default: 0.2)')
-    ap.add_argument('--no_normalize', action='store_true', default=False, help='Disable data normalization')
-    ap.add_argument('--velocity_actions', action='store_true', default=False,
-                    help='Use odom velocity (6-dim) as actions instead of legacy action columns')
-    # DDP
-    ap.add_argument('--ddp', action='store_true', default=False, help='Enable DistributedDataParallel training')
-    args = ap.parse_args()
+    args = build_arg_parser().parse_args()
 
     # ── DDP setup ─────────────────────────────────────────────────────────────
     local_rank = 0
