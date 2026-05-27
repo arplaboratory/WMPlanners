@@ -31,6 +31,9 @@ class Fusion(nn.Module):
         self.net = mlp(z_vis + z_prop, 256, z_out, depth=3)
 
     def forward(self, z_vis: torch.Tensor, z_prop: torch.Tensor) -> torch.Tensor:
+        # z_vis may be (B, N, D) for patch-based backbones (e.g. DINOv2); pool to (B, D)
+        if z_vis.ndim == 3:
+            z_vis = z_vis.mean(dim=1)
         z = self.net(torch.cat([z_vis, z_prop], dim=-1))
         z = F.layer_norm(z, z.shape[-1:])
         return z

@@ -40,21 +40,8 @@ from einops import rearrange
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from torchvision import utils as vutils
-from tqdm import tqdm
-
-# Shared data / training utilities
-from world_model.data import NPZEpisodeDataset, collate_npz
-from world_model.data.hf_datasets import (
-    HFWindowDataset,
-    EpisodeDataset,
-    collate_hf,
-    collate_dinowm,
-)
-from world_model.utils import seed_everything, slice_trajdict_with_t, seed, sample_tensors
-from world_model.metrics import eval_images
-
-# WM mode imports
+from world_model.data import HFWindowDataset, NPZEpisodeDataset, collate_hf, collate_npz
+from world_model.data.normalization import NormStats
 from world_model.architecture import WorldModel
 from world_model.engine.trainer import TrainConfig, rollout_loss
 
@@ -1417,7 +1404,39 @@ def build_arg_parser() -> argparse.ArgumentParser:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main():
-    ap = build_arg_parser()
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--dataset', '--data_dir', type=str, required=True, dest='dataset',
+                    help='Path to dataset (HuggingFace dir/ID or local .npz dir)')
+    ap.add_argument('--dataset_type', type=str, default='hf', choices=['hf', 'npz'],
+                    help='Type of dataset to load')
+    ap.add_argument('--epochs', type=int, default=20)
+    ap.add_argument('--batch_size', type=int, default=64)
+    ap.add_argument('--img_size', type=int, default=224)
+    ap.add_argument('--horizon', type=int, default=16)
+    ap.add_argument('--num_hist', type=int, default=1, help='Number of history frames (1=original, 3=multi-frame context)')
+    ap.add_argument('--lr', type=float, default=3e-4)
+    ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
+    ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--out_dir', type=str, default='runs')
+    ap.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from (autodetects "latest.pt")')
+    # Backbone configs
+    ap.add_argument('--backbone', type=str, default='cnn', help='cnn, dinov2, or vjepa2')
+    ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14', help='Specific model variant for the backbone')
+    ap.add_argument('--freeze_backbone', action='store_true', help='Freeze backbone weights during training')
+    ap.add_argument('--dynamics_type', type=str, default='mlp', choices=['mlp', 'rssm', 'td-jepa'], help='Type of dynamics module')
+    ap.add_argument('--ema_tau', type=float, default=0.996, help='EMA coefficient for TD-JEPA target model')
+    # Experiment / logging
+    ap.add_argument('--experiment_name', type=str, default=None, help='WANDB run name (default: auto-generated)')
+    ap.add_argument('--wandb', action='store_true', default=True, help='Enable WANDB logging (default: on)')
+    ap.add_argument('--no_wandb', action='store_true', default=False, help='Disable WANDB logging')
+    ap.add_argument('--pose_threshold', type=float, default=0.1, help='L2 threshold for pose accuracy metric')
+    ap.add_argument('--num_workers', type=int, default=8, help='Number of dataloader workers')
+    ap.add_argument('--val_split', type=float, default=0.2, help='Fraction of episodes for validation (default: 0.2)')
+    ap.add_argument('--no_normalize', action='store_true', default=False, help='Disable data normalization')
+    ap.add_argument('--velocity_actions', action='store_true', default=False,
+                    help='Use odom velocity (6-dim) as actions instead of legacy action columns')
+    # DDP
+    ap.add_argument('--ddp', action='store_true', default=False, help='Enable DistributedDataParallel training')
     args = ap.parse_args()
 
     # ── DDP setup ─────────────────────────────────────────────────────────────
@@ -1444,7 +1463,10 @@ def main():
         ds_short = args.dataset.replace("/", "_")
         args.experiment_name = f"{ds_short}_{args.backbone}"
 
-    use_wandb = args.wandb and os.environ.get("WANDB_API_KEY") and main_process
+    # WANDB init (rank 0 only)
+    if args.no_wandb:
+        args.wandb = False
+    use_wandb = args.wandb and os.environ.get('WANDB_API_KEY') and main_process
     if use_wandb:
         import wandb
         wandb.init(
@@ -1456,9 +1478,50 @@ def main():
         print("[WARN] --wandb enabled but WANDB_API_KEY not set. Logging disabled.")
         use_wandb = False
 
-    if args.dataset_type == "hf":
-        ds = HFWindowDataset(args.dataset, img_size=args.img_size)
+    # Dataset
+    norm_stats = None
+    ds_val = None
+    if args.dataset_type == 'hf':
+        # Step 1: create initial dataset (no normalization) to discover episodes
+        ds_init = HFWindowDataset(args.dataset, img_size=args.img_size)
+        if args.velocity_actions:
+            ds_init.force_velocity_actions()
         collate_fn = collate_hf
+
+        # Step 2: split episodes — val = episode_id % 5 == 0
+        all_ids = ds_init._window_ids
+        val_ids = set(eid for eid in all_ids if eid % 5 == 0)
+        train_ids = set(eid for eid in all_ids if eid % 5 != 0)
+
+        if main_process:
+            print(f"[INFO] Episode split: {len(train_ids)} train, {len(val_ids)} val "
+                  f"(val_split by eid%%5==0)")
+
+        # Step 3: compute normalization stats from TRAINING episodes only
+        if not args.no_normalize:
+            norm_stats = ds_init.compute_norm_stats(episode_ids=list(train_ids))
+            norm_stats_path = os.path.join(args.out_dir, 'norm_stats.pt')
+            norm_stats.save(norm_stats_path)
+            if main_process:
+                print(f"[INFO] Norm stats saved to {norm_stats_path}")
+
+        # Step 4: rebuild train and val datasets WITH norm_stats
+        ds = HFWindowDataset(args.dataset, img_size=args.img_size, norm_stats=norm_stats)
+        if args.velocity_actions:
+            ds.force_velocity_actions()
+        # Filter to train episodes
+        ds._window_ids = [eid for eid in ds._window_ids if eid in train_ids]
+        ds._window_rows = {eid: ds._window_rows[eid] for eid in ds._window_ids}
+
+        ds_val = HFWindowDataset(args.dataset, img_size=args.img_size, norm_stats=norm_stats)
+        if args.velocity_actions:
+            ds_val.force_velocity_actions()
+        # Filter to val episodes
+        ds_val._window_ids = [eid for eid in ds_val._window_ids if eid in val_ids]
+        ds_val._window_rows = {eid: ds_val._window_rows[eid] for eid in ds_val._window_ids}
+
+        if main_process:
+            print(f"[INFO] Train windows: {len(ds)}, Val windows: {len(ds_val)}")
     else:
         ds = NPZEpisodeDataset(args.dataset, window=args.horizon + 1, img_size=args.img_size)
         collate_fn = collate_npz
@@ -1510,9 +1573,10 @@ def main():
         )
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-    cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon)
 
-    # Auto-resume
+    cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon, num_hist=args.num_hist)
+    
+    # Auto-resume logic
     start_epoch = 0
     checkpoint_path = args.resume
     if checkpoint_path is None:
@@ -1595,20 +1659,42 @@ def main():
 
             raw_model = model.module if isinstance(model, DDP) else model
             ckpt = {
-                "model": raw_model.state_dict(),
-                "optimizer": opt.state_dict(),
-                "epoch": epoch,
-                "args": vars(args),
-                "model_config": {
-                    "odom_dim": odom_dim,
-                    "imu_dim": imu_dim,
-                    "act_dim": act_dim,
-                    "state_dim": state_dim,
+                'model': raw_model.state_dict(),
+                'optimizer': opt.state_dict(),
+                'epoch': epoch,
+                'args': vars(args),
+                'has_norm_stats': norm_stats is not None,
+                'model_config': {
+                    'odom_dim': odom_dim,
+                    'imu_dim': imu_dim,
+                    'act_dim': act_dim,
+                    'state_dim': state_dim,
                 },
             }
             torch.save(ckpt, os.path.join(args.out_dir, f"epoch_{epoch:03d}.pt"))
             torch.save(ckpt, os.path.join(args.out_dir, "latest.pt"))
 
+        # Validation loss (rank 0 only)
+        if main_process and ds_val is not None and len(ds_val) > 0:
+            val_dl = DataLoader(ds_val, batch_size=args.batch_size, shuffle=False,
+                                num_workers=args.num_workers, collate_fn=collate_fn,
+                                drop_last=False,
+                                pin_memory=True if "cuda" in str(args.device) else False)
+            model.eval()
+            val_loss_sum = 0.0
+            val_steps = 0
+            with torch.no_grad():
+                for val_batch in val_dl:
+                    v_loss, v_logs = rollout_loss(model, val_batch, cfg, target_model=target_model)
+                    val_loss_sum += v_logs['loss']
+                    val_steps += 1
+            avg_val_loss = val_loss_sum / max(val_steps, 1)
+            print(f"[Epoch {epoch:03d}] val_loss={avg_val_loss:.4f}")
+            if use_wandb:
+                wandb.log({"epoch/val_loss": avg_val_loss, "epoch": epoch}, step=step)
+            model.train()
+
+        # Sync all ranks before next epoch
         if args.ddp:
             dist.barrier()
 
@@ -1620,15 +1706,10 @@ def main():
         print("[Evaluation] Computing pose MSE and accuracy ...")
         print("=" * 60)
 
-        eval_dl = DataLoader(
-            ds,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=args.num_workers,
-            collate_fn=collate_fn,
-            drop_last=False,
-            pin_memory="cuda" in str(args.device),
-        )
+        eval_ds = ds_val if ds_val is not None and len(ds_val) > 0 else ds
+        eval_dl = DataLoader(eval_ds, batch_size=args.batch_size, shuffle=False,
+                             num_workers=args.num_workers, collate_fn=collate_fn, drop_last=False,
+                             pin_memory=True if "cuda" in str(args.device) else False)
         eval_metrics = evaluate_pose(model, eval_dl, cfg, threshold=args.pose_threshold)
 
         print(f"  Pose MSE:      {eval_metrics['pose_mse']:.6f}")

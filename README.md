@@ -102,21 +102,54 @@ export PATH="$HOME/.local/bin:$PATH"
 ### Setup Python workspace (Recommended)
 The easiest way to set up the environment and all external dependencies (DINOv2, V-JEPA2) is using the provided setup script. This requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
+### Setup Workspace
+```bash
+mkdir -p wm_ws/src
+git clone git@github.com:lquan9/NYU_DS_GA_3001.git -b devel
+```
+
+```bash
+export WM_VENV="$(pwd)/.venvs/wm"   # or your preferred envs path
+export WM_WS="$(pwd)"          # workspace root
+```
 ```bash
 # This will create a .venv, install project dependencies, 
 # and set up DINOv2/V-JEPA2 in editable mode.
-bash scripts/python_setup.sh
+bash src/ds_ga_3001/scripts/python_setup.sh
 
 # Activate the environment
-source .venv/bin/activate
+source .venvs/wm/bin/activate
 ```
+
+Also fast, using [Apptainer](https://apptainer.org/).
+
+This is a **two-stage build**. First build the GAS SIF (Isaac Sim + ROS 2 + GAS venv), then build the WM SIF on top of it (adds the world model venv at `/opt/venvs/wm`):
+
+```bash
+# Stage 1: build gas.sif (from the gas repo)
+export BASE_SIF_IMAGE="/path/to/isaac-sim_5.1.0.sif"
+export SIF_IMAGE="$(pwd)/gas.sif"
+bash /path/to/gas/scripts/apptainer_setup.sh
+
+# Stage 2: build wm.sif on top of gas.sif
+export BASE_SIF_IMAGE="$(pwd)/gas.sif"
+export SIF_IMAGE="$(pwd)/wm.sif"
+bash ./scripts/apptainer_setup.sh
+```
+
+Then update `SIF_IMAGE` in your `.env` to point to `wm.sif` for WM experiments:
+```bash
+sed -i "s|^export SIF_IMAGE=.*|export SIF_IMAGE=\"$(pwd)/wm.sif\"|" "$GAS_WS/.env"
+```
+
+For detailed Apptainer build, see [docs/building_sif.md](docs/building_sif.md).
 
 ### Manual Setup (Alternative)
 If you prefer to set up the environment manually:
 
 ```bash
-uv venv .venv --python 3.11
-source .venv/bin/activate
+uv venv .venvs/wm --python 3.11
+source .venvs/wm/bin/activate
 ```
 
 ```bash

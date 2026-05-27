@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 export PROJECT_ROOT
 
 # Defaults
-VENV_PATH="${WM_VENV:-$PROJECT_ROOT/.venv}"
+VENV_PATH="${WM_VENV:-$PROJECT_ROOT/.venvs/wm}"
 INSTALL_EXTERNALS=true
 
 while :; do
@@ -41,7 +41,7 @@ fi
 # 1. Create virtual environment
 if [ ! -d "$VENV_PATH" ]; then
     echo "Creating virtual environment with Python 3.11..."
-    uv venv "$VENV_PATH" --python 3.11 || exit 1
+    uv venv "$VENV_PATH" --python "${WM_PYTHON:-3.11}" || exit 1
 fi
 
 # Activate environment
@@ -51,6 +51,7 @@ fi
 echo "Installing project dependencies (including dev)..."
 cd "$PROJECT_ROOT" || exit 1
 uv pip install -e ".[dev]" || exit 1
+uv pip install --upgrade pyarrow datasets
 
 # 3. Install external packages (DINOv2, V-JEPA2)
 if [ "$INSTALL_EXTERNALS" = true ]; then

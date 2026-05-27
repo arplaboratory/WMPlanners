@@ -10,7 +10,7 @@ class CEMConfig:
     iters: int = 5
     population: int = 256
     elites: int = 32
-    action_dim: int = 2
+    action_dim: int = 6  # lin_vel(3) + ang_vel(3)
     action_min: float = -4.0
     action_max: float = 4.0
     init_std: float = 2.0
