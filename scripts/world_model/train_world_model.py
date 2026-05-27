@@ -251,6 +251,14 @@ class DinoWMConfig:
     lambda_z: float = 1.0
     lambda_action_decode: float = 1.0
 
+    # ── Swappable predictor ───────────────────────────────────────────────────
+    predictor_type: str = "vit"     # "vit" | "mlp" | "rssm"
+
+    # ── State / risk auxiliary supervision ───────────────────────────────────
+    state_dim:    int   = 0         # 0 = disabled; e.g. 6 for 6-DOF odom
+    lambda_state: float = 1.0
+    lambda_risk:  float = 0.2
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # DINO-WM Trainer (Hydra-free)
@@ -333,6 +341,8 @@ class DinoWMTrainer:
             sample_k=trajectory_length,
         )
         self.datasets = {"train": _window_ds, "valid": _window_ds}
+        # Odom slice width — used to extract odom from the state tensor in train/val
+        self.D_odom = _window_ds.D_odom
 
         # Episode-level dataset for open-loop rollout (full trajectories)
         _traj_ds = HFWindowDataset(
@@ -399,6 +409,8 @@ class DinoWMTrainer:
         if self.train_decoder and args.has_decoder:
             self._keys_to_save += ["decoder", "decoder_optimizer"]
         self._keys_to_save += ["action_encoder", "proprio_encoder"]
+        if getattr(args, "state_dim", 0) > 0:
+            self._keys_to_save += ["state_head", "risk_head"]
 
         # Model attributes populated by init_models()
         self.encoder = None
@@ -479,6 +491,8 @@ class DinoWMTrainer:
             self.wandb_run.watch(self.proprio_encoder)
 
         # ── Predictor ─────────────────────────────────────────────────────────
+        predictor_type = getattr(args, "predictor_type", "vit")
+
         if self.encoder.latent_ndim == 1:
             num_patches = 1
         elif hasattr(self.encoder, "num_patches"):
@@ -496,17 +510,32 @@ class DinoWMTrainer:
         ) * args.concat_dim
 
         if args.has_predictor and self.predictor is None:
-            self.predictor = ViTPredictor(
-                num_patches=num_patches,
-                num_frames=args.num_hist,
-                dim=predictor_dim,
-                depth=args.predictor_depth,
-                heads=args.predictor_heads,
-                mlp_dim=args.predictor_mlp_dim,
-                dropout=args.predictor_dropout,
-                emb_dropout=0.0,
-                pool="mean",
-            )
+            if predictor_type == "vit":
+                self.predictor = ViTPredictor(
+                    num_patches=num_patches,
+                    num_frames=args.num_hist,
+                    dim=predictor_dim,
+                    depth=args.predictor_depth,
+                    heads=args.predictor_heads,
+                    mlp_dim=args.predictor_mlp_dim,
+                    dropout=args.predictor_dropout,
+                    emb_dropout=0.0,
+                    pool="mean",
+                )
+            else:
+                # Frame-level dynamics: MLP or RSSM
+                # z_dim = visual encoder output dim, act_dim = raw action embedding dim
+                from world_model.components.dynamics import LatentDynamics, RSSMDynamics
+                z_dim = self.encoder.emb_dim
+                if predictor_type == "rssm":
+                    self.predictor = RSSMDynamics(z_dim=z_dim, act_dim=action_emb_dim)
+                else:  # "mlp"
+                    self.predictor = LatentDynamics(z_dim=z_dim, act_dim=action_emb_dim)
+                log.info(
+                    f"Using frame-level {predictor_type.upper()} predictor: "
+                    f"z_dim={z_dim}, act_dim={action_emb_dim}"
+                )
+
         if self.predictor is not None:
             if not self.train_predictor:
                 for p in self.predictor.parameters():
@@ -535,6 +564,7 @@ class DinoWMTrainer:
             self.decoder = self.decoder.to(self.device)
 
         # ── Composite WM model ────────────────────────────────────────────────
+        predictor_mode = "frame" if predictor_type in ("mlp", "rssm") else "patch"
         self.model = WM(
             image_size=args.img_size,
             num_hist=args.num_hist,
@@ -553,7 +583,15 @@ class DinoWMTrainer:
             train_encoder=args.train_encoder,
             train_predictor=args.train_predictor,
             train_decoder=args.has_decoder and args.train_decoder,
+            predictor_mode=predictor_mode,
+            state_dim=getattr(args, "state_dim", 0),
+            lambda_state=getattr(args, "lambda_state", 1.0),
+            lambda_risk=getattr(args, "lambda_risk", 0.2),
         ).to(self.device)
+
+        # Expose state/risk heads as trainer attributes so save_ckpt() can persist them
+        self.state_head = self.model.state_head
+        self.risk_head  = self.model.risk_head
 
         # DDP-wrap per-component (mirrors Accelerator.prepare behaviour)
         if args.ddp:
@@ -595,12 +633,19 @@ class DinoWMTrainer:
                 if isinstance(self.proprio_encoder, DDP)
                 else self.proprio_encoder
             )
+            aux_params = itertools.chain(
+                raw_act.parameters(),
+                raw_prop.parameters(),
+                self.model.action_decoder.parameters(),
+            )
+            if self.model.state_head is not None:
+                aux_params = itertools.chain(
+                    aux_params,
+                    self.model.state_head.parameters(),
+                    self.model.risk_head.parameters(),
+                )
             self.action_encoder_optimizer = torch.optim.AdamW(
-                itertools.chain(
-                    raw_act.parameters(),
-                    raw_prop.parameters(),
-                    self.model.action_decoder.parameters(),
-                ),
+                aux_params,
                 lr=args.action_encoder_lr,
             )
 
@@ -852,9 +897,20 @@ class DinoWMTrainer:
 
             self.model.train()
 
+            state_dim = getattr(args, "state_dim", 0)
+            if state_dim > 0:
+                odom      = state[:, :, :self.D_odom].to(self.device)
+                collision = state[:, :, -1:].to(self.device)
+            else:
+                odom      = None
+                collision = None
+
             with torch.cuda.amp.autocast(enabled=use_amp):
                 z_out, visual_out, visual_reconstructed, loss, loss_components = self.model(
-                    obs, act, target_encoder=self.target_encoder
+                    obs, act,
+                    target_encoder=self.target_encoder,
+                    odom=odom,
+                    collision=collision,
                 )
 
                 if z_out is not None:
@@ -935,10 +991,20 @@ class DinoWMTrainer:
             obs, act, state = data
             plot = (i == 0)
 
+            state_dim = getattr(self.args, "state_dim", 0)
+            if state_dim > 0:
+                odom_val      = state[:, :, :self.D_odom].to(self.device)
+                collision_val = state[:, :, -1:].to(self.device)
+            else:
+                odom_val      = None
+                collision_val = None
+
             with torch.no_grad():
                 with torch.cuda.amp.autocast(enabled=use_amp):
                     z_out, visual_out, visual_reconstructed, loss, loss_components = self.model(
-                        obs, act
+                        obs, act,
+                        odom=odom_val,
+                        collision=collision_val,
                     )
 
                     if z_out is not None:
@@ -1330,6 +1396,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="[dinowm] Weight for the JEPA embedding prediction loss")
     dw.add_argument("--lambda_action_decode", type=float, default=1.0,
                     help="[dinowm] Weight for the action decode auxiliary loss")
+    # Swappable predictor
+    dw.add_argument(
+        "--predictor_type", type=str, default="vit", choices=["vit", "mlp", "rssm"],
+        help="[dinowm] Dynamics predictor: 'vit' (patch-level JEPA), 'mlp' (frame-level residual), 'rssm' (recurrent)",
+    )
+    # State / risk auxiliary supervision
+    dw.add_argument("--state_dim", type=int, default=0,
+                    help="[dinowm] Odom dimensions to supervise via state_head (0 = disabled)")
+    dw.add_argument("--lambda_state", type=float, default=1.0,
+                    help="[dinowm] Weight for state prediction MSE loss")
+    dw.add_argument("--lambda_risk", type=float, default=0.2,
+                    help="[dinowm] Weight for collision risk BCE loss")
 
     return ap
 

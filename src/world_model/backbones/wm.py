@@ -2,12 +2,14 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision import transforms
 from einops import rearrange, repeat
 from logging import getLogger
 from .base import ModelBundle
 from .registry import register
-from world_model.components.heads import StateHead
+from world_model.components.heads import StateHead, RiskHead
+from world_model.components.dynamics import LatentDynamics, RSSMDynamics
 logger = getLogger(__name__)
 
 class WM(nn.Module):
@@ -30,6 +32,12 @@ class WM(nn.Module):
         train_encoder=True,
         train_predictor=False,
         train_decoder=False,
+        # Predictor mode: "patch" (ViT, default) or "frame" (MLP/RSSM)
+        predictor_mode="patch",
+        # State/risk auxiliary supervision (disabled when state_dim=0)
+        state_dim=0,
+        lambda_state=1.0,
+        lambda_risk=0.2,
     ):
         super().__init__()
         self.num_hist = num_hist
@@ -45,9 +53,20 @@ class WM(nn.Module):
         self.train_decoder = train_decoder
         self.num_action_repeat = num_action_repeat
         self.num_proprio_repeat = num_proprio_repeat
-        self.proprio_dim = proprio_dim * num_proprio_repeat 
-        self.action_dim = action_dim * num_action_repeat 
+        self.proprio_dim = proprio_dim * num_proprio_repeat
+        self.action_dim = action_dim * num_action_repeat
         self.emb_dim = self.encoder.emb_dim + (self.action_dim + self.proprio_dim) * (concat_dim) # Not used
+
+        # Predictor mode: "patch" (ViT causal attention) or "frame" (MLP/RSSM frame-level dynamics)
+        assert predictor_mode in ("patch", "frame"), f"predictor_mode must be 'patch' or 'frame', got {predictor_mode!r}"
+        self.predictor_mode = predictor_mode
+
+        # State and risk auxiliary heads (disabled when state_dim=0)
+        self.state_dim = state_dim
+        self.state_head = StateHead(self.encoder.emb_dim, state_dim) if state_dim > 0 else None
+        self.risk_head  = RiskHead(self.encoder.emb_dim)             if state_dim > 0 else None
+        self.lambda_state = lambda_state
+        self.lambda_risk  = lambda_risk
 
         print(f"num_action_repeat: {self.num_action_repeat}")
         print(f"num_proprio_repeat: {self.num_proprio_repeat}")
@@ -56,9 +75,11 @@ class WM(nn.Module):
         print(f"proprio_dim: {proprio_dim}, after repeat: {self.proprio_dim}")
         print(f"action_dim: {action_dim}, after repeat: {self.action_dim}")
         print(f"emb_dim: {self.emb_dim}")
+        print(f"predictor_mode: {self.predictor_mode}")
+        print(f"state_dim: {self.state_dim}")
 
-        logger.info(f"Initialized WM with encoder: {encoder}, predictor: {predictor}, proprio_encoder: {proprio_encoder}, action_encoder: {action_encoder}, concat_dim: {concat_dim}, num_action_repeat: {num_action_repeat}, num_proprio_repeat: {num_proprio_repeat}")
-        
+        logger.info(f"Initialized WM with encoder: {encoder}, predictor: {predictor}, proprio_encoder: {proprio_encoder}, action_encoder: {action_encoder}, concat_dim: {concat_dim}, num_action_repeat: {num_action_repeat}, num_proprio_repeat: {num_proprio_repeat}, predictor_mode: {predictor_mode}, state_dim: {state_dim}")
+
         self.concat_dim = concat_dim # 0 or 1
         assert concat_dim == 0 or concat_dim == 1, f"concat_dim {concat_dim} not supported."
         print("Model emb_dim: ", self.emb_dim)
@@ -88,9 +109,9 @@ class WM(nn.Module):
         self.proprio_encoder.eval()
         self.action_encoder.eval()
 
-    def encode(self, obs, act): 
+    def encode(self, obs, act):
         """
-        input :  obs (dict): "visual", "proprio", (b, num_frames, 3, img_size, img_size) 
+        input :  obs (dict): "visual", "proprio", (b, num_frames, 3, img_size, img_size)
         output:    z (tensor): (b, num_frames, num_patches, emb_dim)
         """
         z_dct = self.encode_obs(obs)
@@ -108,11 +129,11 @@ class WM(nn.Module):
                 [z_dct['visual'], proprio_repeated, act_repeated], dim=3
             )  # (b, num_frames, num_patches, dim + action_dim)
         return z
-    
+
     def encode_act(self, act):
         act = self.action_encoder(act) # (b, num_frames, action_emb_dim)
         return act
-    
+
     def encode_proprio(self, proprio):
         proprio = self.proprio_encoder(proprio)
         return proprio
@@ -133,11 +154,62 @@ class WM(nn.Module):
         proprio_emb = self.encode_proprio(proprio)
         return {"visual": visual_embs, "proprio": proprio_emb}
 
+    def _predict_frame_level(self, z):
+        """
+        Frame-level dynamics path for MLP and RSSM predictors.
+
+        Pools patch tokens to frame vectors, runs dynamics autoregressively,
+        then broadcasts predicted frame vectors back to patch token shape.
+
+        input : z (b, T, P, D) — full latent (visual + proprio + action)
+        output: z (b, T, P, D) — same shape, with visual tokens predicted
+        """
+        B, T, P, D = z.shape
+        z_obs, z_act = self.separate_emb(z)
+        z_frame = z_obs["visual"].mean(dim=2)       # (B, T, emb_dim) — pool over patches
+
+        # z_act: (B, T, action_emb_dim) for concat_dim=1 (clean separation)
+        # For concat_dim=0, z_act has dim = encoder.emb_dim (action stored as a patch token)
+
+        preds = []
+        h = (
+            self.predictor.get_initial_state(B, z.device)
+            if hasattr(self.predictor, "get_initial_state")
+            else None
+        )
+        for t in range(T):
+            if h is not None:
+                z_next, h = self.predictor(z_frame[:, t], z_act[:, t], h)
+            else:
+                z_next = self.predictor(z_frame[:, t], z_act[:, t])
+            preds.append(z_next)    # each: (B, emb_dim)
+
+        z_pred_frame = torch.stack(preds, dim=1)                           # (B, T, emb_dim)
+        z_pred_visual = z_pred_frame.unsqueeze(2).expand(B, T, P, -1)     # (B, T, P, emb_dim)
+
+        # Reconstruct full z with predicted visual tokens + original proprio/action
+        if self.concat_dim == 0:
+            return torch.cat(
+                [z_pred_visual, z_obs["proprio"].unsqueeze(2), z_act.unsqueeze(2)], dim=2
+            )
+        else:  # concat_dim == 1
+            proprio_tiled = repeat(
+                z_obs["proprio"].unsqueeze(2), "b t 1 a -> b t f a", f=P
+            ).repeat(1, 1, 1, self.num_proprio_repeat)
+            act_tiled = repeat(
+                z_act.unsqueeze(2), "b t 1 a -> b t f a", f=P
+            ).repeat(1, 1, 1, self.num_action_repeat)
+            return torch.cat([z_pred_visual, proprio_tiled, act_tiled], dim=3)
+
     def predict(self, z):  # in embedding space
         """
         input : z: (b, num_hist, num_patches, emb_dim)
         output: z: (b, num_hist, num_patches, emb_dim)
         """
+        if self.predictor_mode == "frame":
+            return self._predict_frame_level(z)
+
+        # Original ViT patch-level path
         T = z.shape[1]
         # reshape to a batch of windows of inputs
         z = rearrange(z, "b t p d -> b (t p) d")
@@ -176,7 +248,7 @@ class WM(nn.Module):
             "proprio": z_obs["proprio"], # Note: no decoder for proprio for now!
         }
         return obs, diff
-    
+
     def separate_emb(self, z):
         """
         input: z (tensor)
@@ -194,11 +266,13 @@ class WM(nn.Module):
         z_obs = {"visual": z_visual, "proprio": z_proprio}
         return z_obs, z_act
 
-    def forward(self, obs, act, target_encoder=None):
+    def forward(self, obs, act, target_encoder=None, odom=None, collision=None):
         """
         input:  obs (dict):  "visual", "proprio" (b, num_frames, 3, img_size, img_size)
                 act: (b, num_frames, action_dim)
                 target_encoder: optional EMA encoder for I-JEPA-style stable latent targets
+                odom: optional (b, num_frames, D_odom) for state prediction auxiliary loss
+                collision: optional (b, num_frames, 1) binary labels for risk head BCE loss
         output: z_pred: (b, num_hist, num_patches, emb_dim)
                 visual_pred: (b, num_hist, 3, img_size, img_size)
                 visual_reconstructed: (b, num_frames, 3, img_size, img_size)
@@ -254,11 +328,11 @@ class WM(nn.Module):
                     z_tgt[:, :, :, :-(self.proprio_dim + self.action_dim)].detach()
                 )
                 z_proprio_loss = self.emb_criterion(
-                    z_pred[:, :, :, -(self.proprio_dim + self.action_dim): -self.action_dim], 
+                    z_pred[:, :, :, -(self.proprio_dim + self.action_dim): -self.action_dim],
                     z_tgt[:, :, :, -(self.proprio_dim + self.action_dim): -self.action_dim].detach()
                 )
                 z_loss = self.emb_criterion(
-                    z_pred[:, :, :, :-self.action_dim], 
+                    z_pred[:, :, :, :-self.action_dim],
                     z_tgt[:, :, :, :-self.action_dim].detach()
                 )
 
@@ -266,6 +340,24 @@ class WM(nn.Module):
             loss_components["z_loss"] = z_loss
             loss_components["z_visual_loss"] = z_visual_loss
             loss_components["z_proprio_loss"] = z_proprio_loss
+
+            # ── Auxiliary state and risk heads ────────────────────────────────
+            if self.state_head is not None and odom is not None:
+                z_obs_pred, _ = self.separate_emb(z_pred)
+                z_pooled = z_obs_pred["visual"].mean(dim=2)     # (B, num_hist, emb_dim)
+
+                state_pred = self.state_head(z_pooled)          # (B, num_hist, state_dim)
+                state_tgt  = odom[:, self.num_pred:, :self.state_dim].detach()
+                loss_state = F.mse_loss(state_pred, state_tgt)
+                loss_components["state_loss"] = loss_state
+                loss = loss + self.lambda_state * loss_state
+
+                if collision is not None:
+                    risk_pred = self.risk_head(z_pooled)        # (B, num_hist, 1)
+                    risk_tgt  = collision[:, self.num_pred:].detach()
+                    loss_risk = F.binary_cross_entropy(risk_pred, risk_tgt)
+                    loss_components["risk_loss"] = loss_risk
+                    loss = loss + self.lambda_risk * loss_risk
         else:
             visual_pred = None
             z_pred = None
@@ -302,7 +394,7 @@ class WM(nn.Module):
         """
         num_obs_init = obs_0['visual'].shape[1]
         act_0 = act[:, :num_obs_init]
-        action = act[:, num_obs_init:] 
+        action = act[:, num_obs_init:]
         z = self.encode(obs_0, act_0)
         t = 0
         inc = 1
@@ -327,6 +419,10 @@ def build_wm(
     concat_dim=0,
     num_action_repeat=7,
     num_proprio_repeat=7,
+    predictor_mode="patch",
+    state_dim=0,
+    lambda_state=1.0,
+    lambda_risk=0.2,
     **kwargs
 ) -> ModelBundle:
     model = WM(
@@ -337,7 +433,11 @@ def build_wm(
         concat_dim=concat_dim,
         num_action_repeat=num_action_repeat,
         num_proprio_repeat=num_proprio_repeat,
+        predictor_mode=predictor_mode,
+        state_dim=state_dim,
+        lambda_state=lambda_state,
+        lambda_risk=lambda_risk,
         **kwargs
     )
-    logger.info(f"Built WM model with encoder: {encoder}, predictor: {predictor}, proprio_encoder: {proprio_encoder}, action_encoder: {action_encoder}, concat_dim: {concat_dim}, num_action_repeat: {num_action_repeat}, num_proprio_repeat: {num_proprio_repeat}")
-    return ModelBundle(model=model) 
+    logger.info(f"Built WM model with encoder: {encoder}, predictor: {predictor}, proprio_encoder: {proprio_encoder}, action_encoder: {action_encoder}, concat_dim: {concat_dim}, num_action_repeat: {num_action_repeat}, num_proprio_repeat: {num_proprio_repeat}, predictor_mode: {predictor_mode}, state_dim: {state_dim}")
+    return ModelBundle(model=model)
