@@ -110,6 +110,9 @@ class WorldModel(nn.Module):
         z_vis = self.vision(x)
         if hasattr(self, "vision_proj"):
             z_vis = self.vision_proj(z_vis)
+        # Pool patch-level features (ViT/DINOv2) → single vector per image
+        if z_vis.ndim == 3:
+            z_vis = z_vis.mean(dim=1)
         z_prop = self.proprio(odom, imu)
         z = self.fusion(z_vis, z_prop)
         state = self.state_head(z)

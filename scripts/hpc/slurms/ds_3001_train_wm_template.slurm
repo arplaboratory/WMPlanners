@@ -118,8 +118,9 @@ export PYTHONPATH="/workspace/run/src:${PYTHONPATH:-}"
 
 echo "[APPTAINER] Starting experiment: ${EXPERIMENT_NAME}"
 
+# ---- Standard WorldModel (train_wm.py --method wm) ----
 torchrun --standalone --nproc_per_node={{NPROC}} \
-  /workspace/run/scripts/world_model/train_world_model.py --ddp \
+  /workspace/run/scripts/world_model/train_wm.py --method wm --ddp \
   --dataset {{DATASET}} \
   --backbone {{BACKBONE}} \
   --backbone_name {{BACKBONE_NAME}} \
@@ -133,4 +134,23 @@ torchrun --standalone --nproc_per_node={{NPROC}} \
   {{EXTRA_FLAGS}} \
   --wandb \
   --out_dir /workspace/worldmodel/logs/{{EXPERIMENT_NAME}}
+
+# ---- DinoWM (train_wm.py --method dinowm) ----
+# torchrun --standalone --nproc_per_node={{NPROC}} \
+#   /workspace/run/scripts/world_model/train_wm.py --method dinowm \
+#   --data_path {{DATASET}} \
+#   --encoder {{ENCODER:-dino}} \
+#   --encoder_name {{ENCODER_NAME:-dinov2_vits14}} \
+#   --env_name {{ENV_NAME:-collect1}} \
+#   --epochs {{EPOCHS}} \
+#   --batch_size {{BATCH_SIZE}} \
+#   --num_workers {{NUM_WORKERS}} \
+#   --num_hist {{NUM_HIST:-3}} \
+#   --num_pred {{NUM_PRED:-1}} \
+#   --frameskip {{FRAMESKIP:-5}} \
+#   --img_size {{IMG_SIZE}} \
+#   --stats_file {{STATS_FILE:-}} \
+#   {{EXTRA_FLAGS}} \
+#   --wandb \
+#   --out_dir /workspace/worldmodel/logs/{{EXPERIMENT_NAME}}
 '

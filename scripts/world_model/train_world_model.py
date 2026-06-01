@@ -1,5 +1,7 @@
 from __future__ import annotations
 import argparse
+import copy
+import json
 import os
 import time
 import torch
@@ -21,8 +23,10 @@ def setup_ddp():
     torch.cuda.set_device(local_rank)
     return local_rank
 
+
 def cleanup_ddp():
     dist.destroy_process_group()
+
 
 def is_main_process(args) -> bool:
     if not args.ddp:
@@ -30,15 +34,8 @@ def is_main_process(args) -> bool:
     return int(os.environ.get("RANK", 0)) == 0
 
 
-# Post-training evaluation
 @torch.no_grad()
 def evaluate_pose(model, dataloader, cfg: TrainConfig, threshold: float = 0.1):
-    """Evaluate pose prediction quality over the full dataset.
-
-    Returns a dict with:
-      - pose_mse: mean squared error of state_head predictions vs GT odom
-      - pose_accuracy: fraction of predictions within `threshold` (L2 norm)
-    """
     raw_model = model.module if isinstance(model, DDP) else model
     raw_model.eval()
     device = torch.device(cfg.device)
@@ -53,35 +50,249 @@ def evaluate_pose(model, dataloader, cfg: TrainConfig, threshold: float = 0.1):
         odom = batch.odom.to(device)
 
         B, T = rgb.shape[0], rgb.shape[1]
-
         for t in range(T):
             out = raw_model.encode(rgb[:, t], depth[:, t], odom[:, t], imu[:, t])
-            pred_state = out.state                          # (B, state_dim)
-            gt_state = odom[:, t, :pred_state.shape[-1]]    # (B, state_dim)
-
+            pred_state = out.state
+            gt_state = odom[:, t, :pred_state.shape[-1]]
             mse = F.mse_loss(pred_state, gt_state, reduction='sum').item()
-            l2 = torch.norm(pred_state - gt_state, dim=-1)  # (B,)
+            l2 = torch.norm(pred_state - gt_state, dim=-1)
             within = (l2 < threshold).sum().item()
-
             total_mse += mse
             total_within += within
             total_count += B
 
     if total_count == 0:
         return {"pose_mse": 0.0, "pose_accuracy": 0.0}
-
     return {
         "pose_mse": total_mse / total_count,
         "pose_accuracy": total_within / total_count,
     }
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--dataset', '--data_dir', type=str, required=True, dest='dataset',
-                    help='Path to dataset (HuggingFace dir/ID or local .npz dir)')
-    ap.add_argument('--dataset_type', type=str, default='hf', choices=['hf', 'npz'],
-                    help='Type of dataset to load')
+class Trainer:
+    def __init__(self, args):
+        self.args = args
+        self.local_rank = 0
+        if args.ddp:
+            self.local_rank = setup_ddp()
+            args.device = f"cuda:{self.local_rank}"
+        self.main_process = is_main_process(args)
+
+        seed_everything(args.seed)
+        os.makedirs(args.out_dir, exist_ok=True)
+
+        if args.experiment_name is None:
+            ds_short = args.data_path.replace('/', '_')
+            args.experiment_name = f"{ds_short}_{args.backbone}"
+
+        self.use_wandb = args.wandb and os.environ.get('WANDB_API_KEY') and self.main_process
+        if self.use_wandb:
+            import wandb
+            wandb.init(
+                project=os.environ.get('WANDB_PROJECT', 'world_model'),
+                name=os.environ.get('WANDB_RUN_NAME', args.experiment_name),
+                config=vars(args),
+            )
+        elif args.wandb and self.main_process:
+            print("[WARN] --wandb enabled but WANDB_API_KEY not set. Logging disabled.")
+
+        if args.dataset_type == 'hf':
+            self.ds = HFWindowDataset(args.data_path, img_size=args.img_size)
+            self.collate_fn = collate_hf
+        else:
+            self.ds = NPZEpisodeDataset(args.data_path, window=args.horizon + 1, img_size=args.img_size)
+            self.collate_fn = collate_npz
+
+        sampler = None
+        shuffle = True
+        if args.ddp:
+            sampler = DistributedSampler(self.ds, shuffle=True)
+            shuffle = False
+
+        self.dl = DataLoader(
+            self.ds, batch_size=args.batch_size, shuffle=shuffle, sampler=sampler,
+            num_workers=args.num_workers, collate_fn=self.collate_fn, drop_last=True,
+            pin_memory=True if "cuda" in str(args.device) else False,
+        )
+
+        odom_dim = self.ds.D_odom
+        imu_dim = self.ds.D_imu
+        act_dim = self.ds.D_act
+        state_dim = min(6, odom_dim)
+
+        self.model = WorldModel(
+            odom_dim=odom_dim,
+            imu_dim=imu_dim,
+            act_dim=act_dim,
+            state_dim=state_dim,
+            backbone=args.backbone,
+            backbone_kwargs={"model_name": args.backbone_name, "device": args.device},
+            freeze_backbone=args.freeze_backbone,
+            dynamics_type="mlp" if args.dynamics_type == "td-jepa" else args.dynamics_type,
+        ).to(args.device)
+
+        self.target_model = None
+        if args.dynamics_type == "td-jepa":
+            self.target_model = copy.deepcopy(self.model)
+            for p in self.target_model.parameters():
+                p.requires_grad = False
+
+        if args.ddp:
+            find_unused = args.dynamics_type == "td-jepa"
+            self.model = DDP(self.model, device_ids=[self.local_rank],
+                             find_unused_parameters=find_unused)
+
+        self.opt = torch.optim.AdamW(self.model.parameters(), lr=args.lr, weight_decay=1e-4)
+        self.cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon)
+
+        self.start_epoch = 0
+        checkpoint_path = args.resume
+        if checkpoint_path is None:
+            latest = os.path.join(args.out_dir, 'latest.pt')
+            if os.path.exists(latest):
+                checkpoint_path = latest
+                if self.main_process:
+                    print(f"[RECOVERY] Found {latest}. Resuming automatically...")
+
+        if checkpoint_path and os.path.exists(checkpoint_path):
+            if self.main_process:
+                print(f"Loading checkpoint: {checkpoint_path}")
+            ckpt = torch.load(checkpoint_path, map_location=args.device)
+            raw_model = self.model.module if isinstance(self.model, DDP) else self.model
+            raw_model.load_state_dict(ckpt['model'])
+            if 'optimizer' in ckpt:
+                self.opt.load_state_dict(ckpt['optimizer'])
+            self.start_epoch = ckpt.get('epoch', -1) + 1
+            if self.main_process:
+                print(f"Resuming from epoch {self.start_epoch}")
+
+    def run(self):
+        args = self.args
+        if self.main_process:
+            print(f"[INFO] Starting training: epochs={args.epochs}, batch_size={args.batch_size}, "
+                  f"backbone={args.backbone}, dynamics={args.dynamics_type}, ddp={args.ddp}")
+
+        t0 = time.time()
+        step = 0
+
+        for epoch in range(self.start_epoch, args.epochs):
+            if self.dl.sampler is not None and hasattr(self.dl.sampler, 'set_epoch'):
+                self.dl.sampler.set_epoch(epoch)
+
+            self.model.train()
+            epoch_loss = 0.0
+            epoch_steps = 0
+
+            for batch in self.dl:
+                loss, logs = rollout_loss(self.model, batch, self.cfg, target_model=self.target_model)
+                self.opt.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                self.opt.step()
+
+                if self.target_model is not None:
+                    with torch.no_grad():
+                        for op, tp in zip(self.model.parameters(), self.target_model.parameters()):
+                            tp.data.mul_(args.ema_tau).add_(op.data, alpha=1.0 - args.ema_tau)
+
+                epoch_loss += logs['loss']
+                epoch_steps += 1
+
+                if step % 50 == 0 and self.main_process:
+                    print(f"epoch={epoch:03d} step={step:06d} loss={logs['loss']:.4f} "
+                          f"z={logs['loss_z']:.4f} state={logs['loss_state']:.4f} "
+                          f"risk={logs['loss_risk']:.4f}")
+                    if self.use_wandb:
+                        import wandb
+                        wandb.log({
+                            "train/loss": logs['loss'],
+                            "train/loss_z": logs['loss_z'],
+                            "train/loss_state": logs['loss_state'],
+                            "train/loss_risk": logs['loss_risk'],
+                            "train/step": step,
+                            "train/epoch": epoch,
+                        }, step=step)
+                step += 1
+
+            if self.main_process:
+                avg_loss = epoch_loss / max(epoch_steps, 1)
+                print(f"[Epoch {epoch:03d}] avg_loss={avg_loss:.4f}")
+                if self.use_wandb:
+                    import wandb
+                    wandb.log({"epoch/avg_loss": avg_loss, "epoch": epoch}, step=step)
+
+                raw_model = self.model.module if isinstance(self.model, DDP) else self.model
+                ckpt = {
+                    'model': raw_model.state_dict(),
+                    'optimizer': self.opt.state_dict(),
+                    'epoch': epoch,
+                    'args': vars(args),
+                    'model_config': {
+                        'odom_dim': self.ds.D_odom,
+                        'imu_dim': self.ds.D_imu,
+                        'act_dim': self.ds.D_act,
+                        'state_dim': min(6, self.ds.D_odom),
+                    },
+                }
+                torch.save(ckpt, os.path.join(args.out_dir, f'epoch_{epoch:03d}.pt'))
+                torch.save(ckpt, os.path.join(args.out_dir, 'latest.pt'))
+
+            if args.ddp:
+                dist.barrier()
+
+        train_time = time.time() - t0
+
+        if self.main_process:
+            print(f"Training complete. Total time: {train_time:.1f}s")
+            print("\n" + "=" * 60)
+            print("[Evaluation] Computing pose MSE and accuracy ...")
+            print("=" * 60)
+
+            eval_dl = DataLoader(
+                self.ds, batch_size=args.batch_size, shuffle=False,
+                num_workers=args.num_workers, collate_fn=self.collate_fn, drop_last=False,
+                pin_memory=True if "cuda" in str(args.device) else False,
+            )
+            eval_metrics = evaluate_pose(self.model, eval_dl, self.cfg, threshold=args.pose_threshold)
+
+            print(f"  Pose MSE:      {eval_metrics['pose_mse']:.6f}")
+            print(f"  Pose Accuracy: {eval_metrics['pose_accuracy']:.4f}  "
+                  f"(threshold={args.pose_threshold})")
+
+            if self.use_wandb:
+                import wandb
+                wandb.log({
+                    "eval/pose_mse": eval_metrics['pose_mse'],
+                    "eval/pose_accuracy": eval_metrics['pose_accuracy'],
+                })
+                wandb.summary["pose_mse"] = eval_metrics["pose_mse"]
+                wandb.summary["pose_accuracy"] = eval_metrics["pose_accuracy"]
+                wandb.summary["train_time_s"] = train_time
+                wandb.finish()
+
+            metrics_path = os.path.join(args.out_dir, 'eval_metrics.json')
+            with open(metrics_path, 'w', encoding='utf-8') as f:
+                json.dump(
+                    {**eval_metrics, "train_time_s": train_time, "experiment": args.experiment_name},
+                    f, indent=2,
+                )
+            print(f"  Metrics saved to {metrics_path}")
+            print(f"\nLatest checkpoint: {os.path.join(args.out_dir, 'latest.pt')}")
+
+        if args.ddp:
+            cleanup_ddp()
+
+
+def build_parser(parents=None):
+    ap = argparse.ArgumentParser(
+        description="Train a standard WorldModel",
+        parents=parents or [],
+        add_help=parents is None,
+    )
+    ap.add_argument('--data_path', '--dataset', '--data_dir', type=str, required=True,
+                    dest='data_path', help='HuggingFace dataset ID or local path')
+    ap.add_argument('--dataset_type', type=str, default='hf', choices=['hf', 'npz'])
+    ap.add_argument('--out_dir', type=str, default='runs')
     ap.add_argument('--epochs', type=int, default=20)
     ap.add_argument('--batch_size', type=int, default=64)
     ap.add_argument('--img_size', type=int, default=224)
@@ -90,312 +301,24 @@ def main():
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
-    ap.add_argument('--out_dir', type=str, default='runs')
-    ap.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from (autodetects "latest.pt")')
-    # Backbone configs
-    ap.add_argument('--backbone', type=str, default='cnn', help='cnn, dinov2, or vjepa2')
-    ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14', help='Specific model variant for the backbone')
-    ap.add_argument('--freeze_backbone', action='store_true', help='Freeze backbone weights during training')
-    ap.add_argument('--dynamics_type', type=str, default='mlp', choices=['mlp', 'rssm', 'td-jepa'], help='Type of dynamics module')
-    ap.add_argument('--ema_tau', type=float, default=0.996, help='EMA coefficient for TD-JEPA target model')
-    # Experiment / logging
-    ap.add_argument('--experiment_name', type=str, default=None, help='WANDB run name (default: auto-generated)')
-    ap.add_argument('--wandb', action='store_true', default=True, help='Enable WANDB logging (default: on)')
-    ap.add_argument('--no_wandb', action='store_true', default=False, help='Disable WANDB logging')
-    ap.add_argument('--pose_threshold', type=float, default=0.1, help='L2 threshold for pose accuracy metric')
-    ap.add_argument('--num_workers', type=int, default=8, help='Number of dataloader workers')
-    ap.add_argument('--val_split', type=float, default=0.2, help='Fraction of episodes for validation (default: 0.2)')
-    ap.add_argument('--no_normalize', action='store_true', default=False, help='Disable data normalization')
-    ap.add_argument('--velocity_actions', action='store_true', default=False,
-                    help='Use odom velocity (6-dim) as actions instead of legacy action columns')
-    # DDP
-    ap.add_argument('--ddp', action='store_true', default=False, help='Enable DistributedDataParallel training')
-    args = ap.parse_args()
+    ap.add_argument('--resume', type=str, default=None)
+    ap.add_argument('--backbone', type=str, default='cnn')
+    ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14')
+    ap.add_argument('--freeze_backbone', action='store_true')
+    ap.add_argument('--dynamics_type', type=str, default='mlp', choices=['mlp', 'rssm', 'td-jepa'])
+    ap.add_argument('--ema_tau', type=float, default=0.996)
+    ap.add_argument('--experiment_name', type=str, default=None)
+    ap.add_argument('--wandb', action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument('--pose_threshold', type=float, default=0.1)
+    ap.add_argument('--num_workers', type=int, default=8)
+    ap.add_argument('--ddp', action='store_true', default=False)
+    return ap
 
-    local_rank = 0
-    if args.ddp:
-        local_rank = setup_ddp()
-        args.device = f"cuda:{local_rank}"
 
-    main_process = is_main_process(args)
+def main():
+    args = build_parser().parse_args()
+    Trainer(args).run()
 
-    seed_everything(args.seed)
-    os.makedirs(args.out_dir, exist_ok=True)
-
-    if args.experiment_name is None:
-        ds_short = args.dataset.replace('/', '_')
-        args.experiment_name = f"{ds_short}_{args.backbone}"
-
-    # WANDB init (rank 0 only)
-    if args.no_wandb:
-        args.wandb = False
-    use_wandb = args.wandb and os.environ.get('WANDB_API_KEY') and main_process
-    if use_wandb:
-        import wandb
-        wandb.init(
-            project=os.environ.get('WANDB_PROJECT', 'world_model'),
-            name=os.environ.get('WANDB_RUN_NAME', args.experiment_name),
-            config=vars(args),
-        )
-    elif args.wandb and main_process:
-        print("[WARN] --wandb enabled but WANDB_API_KEY not set. Logging disabled.")
-        use_wandb = False
-
-    # Dataset
-    norm_stats = None
-    ds_val = None
-    if args.dataset_type == 'hf':
-        # Step 1: create initial dataset (no normalization) to discover episodes
-        ds_init = HFWindowDataset(args.dataset, img_size=args.img_size)
-        if args.velocity_actions:
-            ds_init.force_velocity_actions()
-        collate_fn = collate_hf
-
-        # Step 2: split episodes — val = episode_id % 5 == 0
-        all_ids = ds_init._window_ids
-        val_ids = set(eid for eid in all_ids if eid % 5 == 0)
-        train_ids = set(eid for eid in all_ids if eid % 5 != 0)
-
-        if main_process:
-            print(f"[INFO] Episode split: {len(train_ids)} train, {len(val_ids)} val "
-                  f"(val_split by eid%%5==0)")
-
-        # Step 3: compute normalization stats from TRAINING episodes only
-        if not args.no_normalize:
-            norm_stats = ds_init.compute_norm_stats(episode_ids=list(train_ids))
-            norm_stats_path = os.path.join(args.out_dir, 'norm_stats.pt')
-            norm_stats.save(norm_stats_path)
-            if main_process:
-                print(f"[INFO] Norm stats saved to {norm_stats_path}")
-
-        # Step 4: rebuild train and val datasets WITH norm_stats
-        ds = HFWindowDataset(args.dataset, img_size=args.img_size, norm_stats=norm_stats)
-        if args.velocity_actions:
-            ds.force_velocity_actions()
-        # Filter to train episodes
-        ds._window_ids = [eid for eid in ds._window_ids if eid in train_ids]
-        ds._window_rows = {eid: ds._window_rows[eid] for eid in ds._window_ids}
-
-        ds_val = HFWindowDataset(args.dataset, img_size=args.img_size, norm_stats=norm_stats)
-        if args.velocity_actions:
-            ds_val.force_velocity_actions()
-        # Filter to val episodes
-        ds_val._window_ids = [eid for eid in ds_val._window_ids if eid in val_ids]
-        ds_val._window_rows = {eid: ds_val._window_rows[eid] for eid in ds_val._window_ids}
-
-        if main_process:
-            print(f"[INFO] Train windows: {len(ds)}, Val windows: {len(ds_val)}")
-    else:
-        ds = NPZEpisodeDataset(args.dataset, window=args.horizon + 1, img_size=args.img_size)
-        collate_fn = collate_npz
-
-    sampler = None
-    shuffle = True
-    if args.ddp:
-        sampler = DistributedSampler(ds, shuffle=True)
-        shuffle = False
-
-    dl = DataLoader(ds, batch_size=args.batch_size, shuffle=shuffle, sampler=sampler,
-                    num_workers=args.num_workers, collate_fn=collate_fn, drop_last=True,
-                    pin_memory=True if "cuda" in str(args.device) else False)
-
-    odom_dim = ds.D_odom
-    imu_dim = ds.D_imu
-    act_dim = ds.D_act
-    state_dim = min(6, odom_dim)
-
-    # Model
-    model = WorldModel(
-        odom_dim=odom_dim,
-        imu_dim=imu_dim,
-        act_dim=act_dim,
-        state_dim=state_dim,
-        backbone=args.backbone,
-        backbone_kwargs={"model_name": args.backbone_name, "device": args.device},
-        freeze_backbone=args.freeze_backbone,
-        dynamics_type="mlp" if args.dynamics_type == "td-jepa" else args.dynamics_type,
-    ).to(args.device)
-
-    target_model = None
-    if args.dynamics_type == "td-jepa":
-        import copy
-        target_model = copy.deepcopy(model)
-        for p in target_model.parameters():
-            p.requires_grad = False
-
-    if args.ddp:
-        # rollout_loss calls model(...) (i.e. DDP.forward()) so DDP hooks fire
-        # correctly. For td-jepa the online backbone is unused (targets come
-        # from the frozen EMA model), so we need find_unused_parameters=True.
-        if args.dynamics_type == "td-jepa":
-            model = DDP(model, device_ids=[local_rank],
-                        find_unused_parameters=True)
-        else:
-            model = DDP(model, device_ids=[local_rank])
-
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
-
-    cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon, num_hist=args.num_hist)
-    
-    # Auto-resume logic
-    start_epoch = 0
-    checkpoint_path = args.resume
-    if checkpoint_path is None:
-        # Check if latest.pt exists in out_dir
-        latest = os.path.join(args.out_dir, 'latest.pt')
-        if os.path.exists(latest):
-            checkpoint_path = latest
-            if main_process:
-                print(f"[RECOVERY] Found {latest}. Resuming automatically...")
-
-    if checkpoint_path and os.path.exists(checkpoint_path):
-        if main_process:
-            print(f"Loading checkpoint: {checkpoint_path}")
-        ckpt = torch.load(checkpoint_path, map_location=args.device)
-        
-        # Load weights into the raw model
-        raw_model = model.module if isinstance(model, DDP) else model
-        raw_model.load_state_dict(ckpt['model'])
-        
-        if 'optimizer' in ckpt:
-            opt.load_state_dict(ckpt['optimizer'])
-        
-        start_epoch = ckpt.get('epoch', -1) + 1
-        if main_process:
-            print(f"Resuming from epoch {start_epoch}")
-    
-    # Training loop
-    if main_process:
-        print(f"[INFO] Starting training: epochs={args.epochs}, batch_size={args.batch_size}, "
-              f"backbone={args.backbone}, dynamics={args.dynamics_type}, ddp={args.ddp}")
-    t0 = time.time()
-    step = 0
-    for epoch in range(start_epoch, args.epochs):
-        if sampler is not None:
-            sampler.set_epoch(epoch)  # Ensure proper shuffling each epoch
-
-        model.train()
-        epoch_loss = 0.0
-        epoch_steps = 0
-
-        for batch in dl:
-            loss, logs = rollout_loss(model, batch, cfg, target_model=target_model)
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step()
-
-            if target_model is not None:
-                with torch.no_grad():
-                    for online_p, target_p in zip(model.parameters(), target_model.parameters()):
-                        target_p.data.mul_(args.ema_tau).add_(online_p.data, alpha=1.0 - args.ema_tau)
-
-            epoch_loss += logs['loss']
-            epoch_steps += 1
-
-            if step % 50 == 0 and main_process:
-                print(f"epoch={epoch:03d} step={step:06d} loss={logs['loss']:.4f} z={logs['loss_z']:.4f} state={logs['loss_state']:.4f} risk={logs['loss_risk']:.4f}")
-                if use_wandb:
-                    wandb.log({
-                        "train/loss": logs['loss'],
-                        "train/loss_z": logs['loss_z'],
-                        "train/loss_state": logs['loss_state'],
-                        "train/loss_risk": logs['loss_risk'],
-                        "train/step": step,
-                        "train/epoch": epoch,
-                    }, step=step)
-            step += 1
-
-        # Epoch summary (rank 0 only)
-        if main_process:
-            avg_loss = epoch_loss / max(epoch_steps, 1)
-            print(f"[Epoch {epoch:03d}] avg_loss={avg_loss:.4f}")
-            if use_wandb:
-                wandb.log({"epoch/avg_loss": avg_loss, "epoch": epoch}, step=step)
-
-            # Save checkpoint each epoch (rank 0 only)
-            raw_model = model.module if isinstance(model, DDP) else model
-            ckpt = {
-                'model': raw_model.state_dict(),
-                'optimizer': opt.state_dict(),
-                'epoch': epoch,
-                'args': vars(args),
-                'has_norm_stats': norm_stats is not None,
-                'model_config': {
-                    'odom_dim': odom_dim,
-                    'imu_dim': imu_dim,
-                    'act_dim': act_dim,
-                    'state_dim': state_dim,
-                },
-            }
-            path = os.path.join(args.out_dir, f'epoch_{epoch:03d}.pt')
-            torch.save(ckpt, path)
-            torch.save(ckpt, os.path.join(args.out_dir, 'latest.pt'))
-
-        # Validation loss (rank 0 only)
-        if main_process and ds_val is not None and len(ds_val) > 0:
-            val_dl = DataLoader(ds_val, batch_size=args.batch_size, shuffle=False,
-                                num_workers=args.num_workers, collate_fn=collate_fn,
-                                drop_last=False,
-                                pin_memory=True if "cuda" in str(args.device) else False)
-            model.eval()
-            val_loss_sum = 0.0
-            val_steps = 0
-            with torch.no_grad():
-                for val_batch in val_dl:
-                    v_loss, v_logs = rollout_loss(model, val_batch, cfg, target_model=target_model)
-                    val_loss_sum += v_logs['loss']
-                    val_steps += 1
-            avg_val_loss = val_loss_sum / max(val_steps, 1)
-            print(f"[Epoch {epoch:03d}] val_loss={avg_val_loss:.4f}")
-            if use_wandb:
-                wandb.log({"epoch/val_loss": avg_val_loss, "epoch": epoch}, step=step)
-            model.train()
-
-        # Sync all ranks before next epoch
-        if args.ddp:
-            dist.barrier()
-
-    train_time = time.time() - t0
-
-    # Post-training evaluation (rank 0 only)
-    if main_process:
-        print(f"Training complete. Total time: {train_time:.1f}s")
-
-        print("\n" + "=" * 60)
-        print("[Evaluation] Computing pose MSE and accuracy ...")
-        print("=" * 60)
-
-        eval_ds = ds_val if ds_val is not None and len(ds_val) > 0 else ds
-        eval_dl = DataLoader(eval_ds, batch_size=args.batch_size, shuffle=False,
-                             num_workers=args.num_workers, collate_fn=collate_fn, drop_last=False,
-                             pin_memory=True if "cuda" in str(args.device) else False)
-        eval_metrics = evaluate_pose(model, eval_dl, cfg, threshold=args.pose_threshold)
-
-        print(f"  Pose MSE:      {eval_metrics['pose_mse']:.6f}")
-        print(f"  Pose Accuracy: {eval_metrics['pose_accuracy']:.4f}  (threshold={args.pose_threshold})")
-
-        if use_wandb:
-            wandb.log({
-                "eval/pose_mse": eval_metrics['pose_mse'],
-                "eval/pose_accuracy": eval_metrics['pose_accuracy'],
-            })
-            wandb.summary["pose_mse"] = eval_metrics["pose_mse"]
-            wandb.summary["pose_accuracy"] = eval_metrics["pose_accuracy"]
-            wandb.summary["train_time_s"] = train_time
-            wandb.finish()
-
-        # Save final metrics to disk alongside checkpoint
-        import json
-        metrics_path = os.path.join(args.out_dir, 'eval_metrics.json')
-        with open(metrics_path, 'w', encoding='utf-8') as f:
-            json.dump({**eval_metrics, "train_time_s": train_time, "experiment": args.experiment_name}, f, indent=2)
-        print(f"  Metrics saved to {metrics_path}")
-
-        print(f"\nLatest checkpoint: {os.path.join(args.out_dir, 'latest.pt')}")
-
-    if args.ddp:
-        cleanup_ddp()
 
 if __name__ == '__main__':
     main()
