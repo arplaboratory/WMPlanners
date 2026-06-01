@@ -172,27 +172,6 @@ class HFWindowDataset(Dataset):
         batch_data = self._ds[row_indices]
         n_frames = len(row_indices)
 
-        # Debug: print window id, row indices, and batch_data keys
-        print(f"[HFWindowDataset] __getitem__ idx={idx} wid={wid} n_frames={n_frames}")
-        print(f"  row_indices: {row_indices[:10]}{'...' if len(row_indices) > 10 else ''}")
-        if isinstance(batch_data, dict):
-            print(f"  batch_data keys: {list(batch_data.keys())}")
-            for k in batch_data:
-                if isinstance(batch_data[k], list):
-                    print(f"    {k}: list of len {len(batch_data[k])}")
-                elif hasattr(batch_data[k], 'shape'):
-                    print(f"    {k}: shape {batch_data[k].shape}")
-                else:
-                    print(f"    {k}: type {type(batch_data[k])}")
-            # Print type and info for first 5 images
-            images = batch_data.get("image", [])
-            for i, img in enumerate(images[:5]):
-                print(f"    image[{i}]: type={type(img)}, is None={img is None}")
-                if hasattr(img, 'size'):
-                    print(f"      image[{i}] size: {img.size}")
-        else:
-            print(f"  batch_data type: {type(batch_data)}")
-
         try:
             if self.sample_mode and self.sample_k is not None and n_frames > 0:
                 k = self.sample_k
@@ -283,7 +262,6 @@ class HFWindowDataset(Dataset):
                     "collision": collisions, # (k, 1)
                     "state": torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)),  # (k, D_odom+D_imu+1)
                 }
-                print(f"[HFWindowDataset] Returning output keys: {list(output.keys())}")
                 return output
             # Default: return all frames in the window (non-sample_mode)
             images = batch_data["image"]
@@ -324,11 +302,9 @@ class HFWindowDataset(Dataset):
                 "collision": collisions,
                 "state": torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)),
             }
-            print(f"[HFWindowDataset] Returning output keys: {list(output.keys())}")
             return output
         except Exception as e:
-            print(f"[HFWindowDataset] Exception in __getitem__: {e}")
-            raise
+            raise RuntimeError(f"HFWindowDataset.__getitem__({idx}): {e}") from e
 
 def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
     """Collate a list of window dicts into a :class:`SampleBatch`."""
