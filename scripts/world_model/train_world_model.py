@@ -11,6 +11,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from world_model.data import HFWindowDataset, NPZEpisodeDataset, collate_hf, collate_npz
+from world_model.data.normalization import NormStats
 from world_model.architecture import WorldModel
 from world_model.engine.trainer import TrainConfig, rollout_loss
 from world_model.utils import seed_everything
@@ -295,7 +296,8 @@ def build_parser(parents=None):
     ap.add_argument('--epochs', type=int, default=20)
     ap.add_argument('--batch_size', type=int, default=64)
     ap.add_argument('--img_size', type=int, default=224)
-    ap.add_argument('--horizon', type=int, default=8)
+    ap.add_argument('--horizon', type=int, default=16)
+    ap.add_argument('--num_hist', type=int, default=1, help='Number of history frames (1=original, 3=multi-frame context)')
     ap.add_argument('--lr', type=float, default=3e-4)
     ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)

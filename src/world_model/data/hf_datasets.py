@@ -1,6 +1,7 @@
 """HuggingFace dataset loader for world-model training."""
 
 from __future__ import annotations
+from typing import List
 import numpy as np
 import os
 import torch
@@ -8,6 +9,7 @@ import torchvision.transforms as T
 import random
 
 from torch.utils.data import Dataset
+from .normalization import NormStats
 from .types import SampleBatch
 from typing import List
 from datasets import load_from_disk, load_dataset, get_dataset_split_names
@@ -15,19 +17,18 @@ from datasets import Dataset as HFDataset
 class HFWindowDataset(Dataset):
     """Load trajectory windows from a HuggingFace dataset.
 
-    The HF dataset is expected to have the schema produced by the data
-    curation pipeline (``scripts/world_model/data_pipeline/hf_upload.py``):
+    The HF dataset stores **absolute** sensor readings per frame:
 
-    - ``window_id`` (int64)
-    - ``frame_idx_in_window`` (int64)
+    - ``episode_id`` / ``window_id`` (int64)
+    - ``frame_idx`` / ``frame_idx_in_window`` (int64)
     - ``image`` (PIL Image, RGB)
-    - ``odom_dx, odom_dy, odom_dz`` (float64) — body-frame position deltas
-    - ``odom_ax, odom_ay, odom_az`` (float64) — body-frame rotation deltas
+    - ``odom_0..12`` — absolute odom: pos(3) + orient(4) + vel(3) + ang_vel(3)
+    - ``imu_0..9`` — IMU readings
+    - ``action_0..13`` — commanded actions
 
-    Each row is one frame; rows with the same ``window_id`` form a window.
-    The 6-DOF odom deltas are used as both the proprioceptive state and the
-    action signal.  Fields not present in the HF dataset (depth, IMU,
-    collision) are filled with zeros.
+    **Position deltas**: The first 3 odom dims (pos_x/y/z) are converted to
+    per-episode deltas relative to frame 0 at load time. This keeps values
+    small and meaningful for dynamics prediction and MPC planning.
 
     Parameters
     ----------
@@ -50,6 +51,10 @@ class HFWindowDataset(Dataset):
         self.sample_k = sample_k
         self.sample_mode = sample_mode
         self.frameskip = frameskip if frameskip is not None else 1
+    def __init__(self, dataset, img_size: int = 224, norm_stats: NormStats | None = None):
+        """Load a trajectory-window dataset from a local HF directory or Hub ID."""
+        from datasets import load_from_disk, load_dataset, get_dataset_split_names
+        from datasets import Dataset as HFDataset
 
         if isinstance(dataset, str):
             dataset = dataset.strip("'\"")
@@ -57,7 +62,7 @@ class HFWindowDataset(Dataset):
                 print(f"[HFWindowDataset] Found local directory: {dataset}. Loading...")
                 try:
                     self._ds = load_from_disk(dataset)
-                except EnvironmentError as e:
+                except Exception as e:
                     print(f"[HFWindowDataset] Local load failed: {e}. Falling back to Hub...")
                     print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
                     try:
@@ -65,9 +70,7 @@ class HFWindowDataset(Dataset):
                         split = "train" if "train" in splits else splits[0]
                         self._ds = load_dataset(dataset, split=split)
                     except Exception as hf_e:
-                        msg = f"Failed to load dataset '{dataset}' \
-                            from both local disk and Hub.\nLocal error: {e} \
-                            \nHub error: {hf_e}"
+                        msg = f"Failed to load dataset '{dataset}' from both local disk and Hub.\nLocal error: {e}\nHub error: {hf_e}"
                         raise RuntimeError(msg) from hf_e
             else:
                 print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
@@ -91,16 +94,7 @@ class HFWindowDataset(Dataset):
             T.Resize((img_size, img_size)),
             T.ToTensor(),
         ])
-        # Store normalization/scaling stats; convert OmegaConf ListConfig to numpy
-        def _to_numpy_stats(stats):
-            if stats is None:
-                return None
-            return {k: np.array(v, dtype=np.float32) for k, v in stats.items()}
-
-        self.odom_stats = _to_numpy_stats(odom_stats)
-        self.imu_stats = _to_numpy_stats(imu_stats)
-        self.collision_stats = _to_numpy_stats(collision_stats)
-        self.action_stats = _to_numpy_stats(action_stats)
+        self._norm_stats = norm_stats
 
         # Detect Odom, IMU, and Action column names and dimensions
         self.odom_cols = [c for c in self._ds.column_names if c.startswith("odom_")]
@@ -116,8 +110,7 @@ class HFWindowDataset(Dataset):
 
         # Ensure we sort indexed columns numerically (odom_1, odom_2, odom_10)
         def sort_indexed(cols):
-            return sorted(cols,
-                          key=lambda x: int(x.split("_")[-1]) if "_" in x and x.split("_")[-1].isdigit() else 0)
+            return sorted(cols, key=lambda x: int(x.split("_")[-1]) if "_" in x and x.split("_")[-1].isdigit() else 0)
 
         if any("_" in c and c.split("_")[-1].isdigit() for c in self.odom_cols):
             self.odom_cols = sort_indexed(self.odom_cols)
@@ -136,13 +129,17 @@ class HFWindowDataset(Dataset):
         # Dimensions exposed for model construction
         self.D_odom = len(self.odom_cols)
         self.D_imu = len(self.imu_cols) or 6 # Default 6 if no IMU
-        self.D_act = len(self.act_cols) or self.D_odom
-        # Derived dims used by the trainer
+        self.D_act = len(self.act_cols) or 6  # lin_vel(3) + ang_vel(3)
         self.proprio_dim = self.D_imu  # IMU only (6-dim)
         self.action_dim = self.D_act
+    def force_velocity_actions(self):
+        """Override action columns to use odom velocity (odom[:, 7:13]) instead."""
+        self.act_cols = []
+        self.D_act = 6
 
     def _build_index(self) -> None:
         """Group row indices into trajectories (windows/episodes)."""
+        # Support both 'window_id' and 'episode_id' for backward compatibility
         if "window_id" in self._ds.column_names:
             win_col = self._ds["window_id"]
             frame_col = self._ds["frame_idx_in_window"]
@@ -169,6 +166,8 @@ class HFWindowDataset(Dataset):
     def __getitem__(self, idx: int) -> dict[str, np.ndarray]:
         wid = self._window_ids[idx]
         row_indices = self._window_rows[wid]
+        
+        # Use simple indexing instead of .select() for speed
         batch_data = self._ds[row_indices]
         n_frames = len(row_indices)
 
@@ -268,7 +267,17 @@ class HFWindowDataset(Dataset):
             rgbs = np.stack([self._transform(img).numpy() if img is not None else np.zeros((3, self.img_size, self.img_size), dtype=np.float32) for img in images])
             odoms = np.stack([[batch_data[col][i] for col in self.odom_cols] for i in range(n_frames)]).astype(np.float32)
             if self.act_cols:
-                actions = np.stack([[batch_data[col][i] for col in self.act_cols] for i in range(n_frames)]).astype(np.float32)
+                act = np.zeros((n, self.D_act), dtype=np.float32)
+                for i, col in enumerate(self.act_cols):
+                    act[:, i] = batch_data[col]
+            else:
+                act = odom[:, 7:13].copy()  # lin_vel(3) + ang_vel(3)
+            all_act.append(act)
+
+            if self.imu_cols:
+                imu = np.zeros((n, self.D_imu), dtype=np.float32)
+                for i, col in enumerate(self.imu_cols):
+                    imu[:, i] = batch_data[col]
             else:
                 # Derive action as delta to goal: action[t] = odom[-1] - odom[t]
                 actions = odoms[-1:] - odoms  # broadcast subtract last frame

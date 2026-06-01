@@ -31,7 +31,7 @@ jobs:
           PYTHONPATH: .:${{ github.workspace }}/external/vjepa2:${{ github.workspace }}/external/dino
         run: |
           mkdir -p reports
-          source .venv/bin/activate
+          source .venvs/wm/bin/activate
           pytest --junitxml=reports/pytest-junit.xml
       - name: Upload test report artifact
         uses: actions/upload-artifact@v4
