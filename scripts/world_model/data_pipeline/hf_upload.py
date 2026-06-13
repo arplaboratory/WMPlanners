@@ -13,9 +13,6 @@ from PIL import Image as PILImage
 
 def _iter_episode_frames(
     episodes_dir: str,
-    odom_dim: int | None = None,
-    action_dim: int | None = None,
-    imu_dim: int | None = None,
 ) -> Generator[dict, None, None]:
     """Yield one dict per frame across all selected episodes.
 
@@ -43,14 +40,13 @@ def _iter_episode_frames(
                 "image": image,
             }
 
-            # Flatten odom, action, imu into named columns.  Pad shorter legacy
-            # episodes so one HF schema can cover the whole selected set.
-            for j in range(odom_dim or odom.shape[1]):
-                row[f"odom_{j}"] = float(odom[t, j]) if j < odom.shape[1] else 0.0
-            for j in range(action_dim or action.shape[1]):
-                row[f"action_{j}"] = float(action[t, j]) if j < action.shape[1] else 0.0
-            for j in range(imu_dim or imu.shape[1]):
-                row[f"imu_{j}"] = float(imu[t, j]) if j < imu.shape[1] else 0.0
+            # Flatten odom, action, imu into named columns
+            for j, val in enumerate(odom[t]):
+                row[f"odom_{j}"] = float(val)
+            for j, val in enumerate(action[t]):
+                row[f"action_{j}"] = float(val)
+            for j, val in enumerate(imu[t]):
+                row[f"imu_{j}"] = float(val)
 
             if depth is not None:
                 row["depth_mean"] = float(depth[t].mean())
@@ -89,17 +85,12 @@ def run_hf_upload(
         os.makedirs(save_dir, exist_ok=True)
         return save_dir
 
-    # Determine a single schema that can cover all selected episodes.
-    odom_dim = 0
-    action_dim = 0
-    imu_dim = 0
-    has_depth = False
-    for ep_file in ep_files:
-        probe = np.load(ep_file)
-        odom_dim = max(odom_dim, probe["odom"].shape[1])
-        action_dim = max(action_dim, probe["action"].shape[1])
-        imu_dim = max(imu_dim, probe["imu"].shape[1])
-        has_depth = has_depth or "depth" in probe
+    # Probe first episode to determine sensor dims
+    probe = np.load(ep_files[0])
+    odom_dim = probe["odom"].shape[1]
+    action_dim = probe["action"].shape[1]
+    imu_dim = probe["imu"].shape[1]
+    has_depth = "depth" in probe
 
     # Build features schema
     feature_dict = {
@@ -120,12 +111,7 @@ def run_hf_upload(
 
     ds = Dataset.from_generator(
         _iter_episode_frames,
-        gen_kwargs={
-            "episodes_dir": episodes_dir,
-            "odom_dim": odom_dim,
-            "action_dim": action_dim,
-            "imu_dim": imu_dim,
-        },
+        gen_kwargs={"episodes_dir": episodes_dir},
         features=features,
         cache_dir=os.path.join(save_dir, ".cache"),
     )

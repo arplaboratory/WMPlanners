@@ -59,26 +59,6 @@ def _safe_scale(block: np.ndarray) -> np.ndarray:
     return scaler.fit_transform(block)
 
 
-def _stack_vectors(vectors: list[np.ndarray], name: str) -> np.ndarray:
-    """Stack 1-D vectors, zero-padding shorter vectors for legacy mixed dims."""
-    if not vectors:
-        return np.empty((0, 0), dtype=np.float32)
-    widths = [int(np.asarray(v).shape[0]) for v in vectors]
-    max_width = max(widths)
-    min_width = min(widths)
-    if min_width != max_width:
-        print(
-            f"Warning: {name} descriptor widths vary from {min_width} to "
-            f"{max_width}; zero-padding shorter vectors."
-        )
-    out = np.zeros((len(vectors), max_width), dtype=np.float32)
-    for i, vec in enumerate(vectors):
-        arr = np.asarray(vec, dtype=np.float32).reshape(-1)
-        keep = min(len(arr), max_width)
-        out[i, :keep] = arr[:keep]
-    return out
-
-
 def _action_smoothness(action: np.ndarray) -> np.ndarray:
     if len(action) < 2:
         return np.zeros(2, dtype=np.float32)
@@ -211,15 +191,10 @@ def compute_spot_descriptors(data_dir: str) -> Tuple[np.ndarray, List[str]]:
     if not filenames:
         raise ValueError(f"No valid episodes found in {data_dir!r} (all skipped).")
 
-    blocks = [
-        _stack_vectors(action_blocks, "action"),
-        np.stack(odom_blocks),
-        np.stack(motion_blocks),
-        np.stack(smooth_blocks),
-    ]
+    blocks = [np.stack(action_blocks), np.stack(odom_blocks), np.stack(motion_blocks), np.stack(smooth_blocks)]
     weights = [0.22, 0.20, 0.30, 0.18]
     if imu_blocks:
-        blocks.append(_stack_vectors(imu_blocks, "imu"))
+        blocks.append(np.stack(imu_blocks))
         weights.append(0.10)
     return _weighted_concat(blocks, weights), filenames
 
@@ -265,7 +240,7 @@ def compute_rover_descriptors(data_dir: str) -> Tuple[np.ndarray, List[str]]:
         raise ValueError(f"No valid episodes found in {data_dir!r} (all skipped).")
 
     blocks = [
-        _stack_vectors(action_blocks, "action"),
+        np.stack(action_blocks),
         np.stack(planar_delta_blocks),
         np.stack(motion_blocks),
         np.stack(smooth_blocks),
@@ -330,7 +305,7 @@ def compute_descriptors(
     if not descriptors:
         raise ValueError(f"No valid episodes found in {data_dir!r} (all skipped).")
 
-    return _stack_vectors(descriptors, "generic"), filenames
+    return np.stack(descriptors, axis=0), filenames
 
 
 # ---------------------------------------------------------------------------
