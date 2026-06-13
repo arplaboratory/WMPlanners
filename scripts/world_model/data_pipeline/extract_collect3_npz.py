@@ -82,9 +82,27 @@ def main() -> None:
     parser.add_argument("--min-speed", type=float, default=0.1)
     parser.add_argument("--max-sync-gap-ms", type=float, default=100.0)
     parser.add_argument("--idle-persistence", type=int, default=10)
+    parser.add_argument(
+        "--image-gap-factor",
+        type=float,
+        default=2.0,
+        help="Image stream gap threshold as a multiple of median image dt (default: 2.0)",
+    )
+    parser.add_argument(
+        "--action-mode",
+        default="auto",
+        choices=["auto", "config", "odom_velocity"],
+        help="Action source policy for episode building (default: auto)",
+    )
     parser.add_argument("--shard-size", type=int, default=500)
     parser.add_argument("--target-count", type=int, default=5000)
     parser.add_argument("--encoder", default="none")
+    parser.add_argument(
+        "--profile",
+        default="generic",
+        choices=["generic", "spot", "rover"],
+        help="Episode selection profile (default: generic)",
+    )
     parser.add_argument("--push-to-hub", default=None)
     parser.add_argument("--hf-private", action="store_true", default=False)
     parser.add_argument(
@@ -167,6 +185,8 @@ def main() -> None:
             max_sync_gap_ms=args.max_sync_gap_ms,
             idle_persistence=args.idle_persistence,
             frame_skip=args.frame_skip,
+            action_mode=args.action_mode,
+            image_gap_factor=args.image_gap_factor,
         )
     else:
         print(f"[collect3] Skipping Stage 1; using {episodes_dir}")
@@ -178,6 +198,7 @@ def main() -> None:
             out_dir=str(selected_dir),
             target_count=args.target_count,
             encoder=args.encoder,
+            profile=args.profile,
         )
     else:
         print(f"[collect3] Skipping Stage 2; using {selected_dir}")
