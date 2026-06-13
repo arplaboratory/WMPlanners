@@ -190,6 +190,16 @@ def _derive_rover_action_from_odom(odom_df: pd.DataFrame | None) -> pd.DataFrame
     })
 
 
+def _coerce_feature_width(arr: np.ndarray, width: int) -> np.ndarray:
+    """Pad or truncate a synced feature matrix to a stable configured width."""
+    if arr.shape[1] == width:
+        return arr.astype(np.float32, copy=False)
+    out = np.zeros((arr.shape[0], width), dtype=np.float32)
+    keep = min(arr.shape[1], width)
+    out[:, :keep] = arr[:, :keep]
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Core build function
 # ---------------------------------------------------------------------------
@@ -270,7 +280,7 @@ def build_episodes(
         odom_df = _load_csv("odom.csv")
         imu_df = _load_csv("imu.csv")
         bag_action_source = configured_action_source
-        bag_action_dim = action_dim
+        bag_action_dim = 3 if action_mode == "odom_velocity" else action_dim
         action_df = _load_csv(f"{bag_action_source}.csv")
 
         if action_mode == "odom_velocity" or (action_mode == "auto" and action_df is None):
@@ -278,7 +288,6 @@ def build_episodes(
             if rover_action_df is not None:
                 action_df = rover_action_df
                 bag_action_source = "odom_velocity"
-                bag_action_dim = 3
                 logger.info(
                     "Using odom-derived rover action for bag %s: "
                     "[forward_vel, lateral_vel, yaw_rate]",
@@ -354,6 +363,7 @@ def build_episodes(
 
         if action_df is not None:
             action_sync = nearest_merge(image_ts, action_df, max_gap_ns=max_gap_ns)
+            action_sync = _coerce_feature_width(action_sync, bag_action_dim)
             sensor_dims["action"] = action_sync.shape[1]
         else:
             action_sync = np.zeros((N, bag_action_dim), dtype=np.float32)
