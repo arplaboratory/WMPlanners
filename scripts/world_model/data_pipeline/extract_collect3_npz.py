@@ -88,12 +88,6 @@ def main() -> None:
         default=2.0,
         help="Image stream gap threshold as a multiple of median image dt (default: 2.0)",
     )
-    parser.add_argument(
-        "--action-mode",
-        default="auto",
-        choices=["auto", "config", "odom_velocity"],
-        help="Action source policy for episode building (default: auto)",
-    )
     parser.add_argument("--shard-size", type=int, default=500)
     parser.add_argument("--target-count", type=int, default=5000)
     parser.add_argument("--encoder", default="none")
@@ -185,7 +179,6 @@ def main() -> None:
             max_sync_gap_ms=args.max_sync_gap_ms,
             idle_persistence=args.idle_persistence,
             frame_skip=args.frame_skip,
-            action_mode=args.action_mode,
             image_gap_factor=args.image_gap_factor,
         )
     else:

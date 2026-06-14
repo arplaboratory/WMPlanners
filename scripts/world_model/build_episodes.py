@@ -164,32 +164,6 @@ def _nearest_gap_ns(target_ts: np.ndarray, src_df: pd.DataFrame | None) -> np.nd
     return np.minimum(left, right).astype(np.float64)
 
 
-def _derive_rover_action_from_odom(odom_df: pd.DataFrame | None) -> pd.DataFrame | None:
-    """Build planar rover actions from odometry velocities.
-
-    Collect3 Race16 rover bags have empty position_cmd/so3_cmd topics, so
-    commanded action is unavailable. The best available action proxy is the
-    realized planar base velocity: forward, lateral, and yaw-rate.
-    """
-    if odom_df is None:
-        return None
-
-    required = {"timestamp_ns", "linear_vel_x", "linear_vel_y", "angular_vel_z"}
-    if not required.issubset(odom_df.columns):
-        return None
-
-    return odom_df[[
-        "timestamp_ns",
-        "linear_vel_x",
-        "linear_vel_y",
-        "angular_vel_z",
-    ]].rename(columns={
-        "linear_vel_x": "forward_vel",
-        "linear_vel_y": "lateral_vel",
-        "angular_vel_z": "yaw_rate",
-    })
-
-
 # ---------------------------------------------------------------------------
 # Core build function
 # ---------------------------------------------------------------------------
@@ -204,7 +178,6 @@ def build_episodes(
     max_sync_gap_ms: float = 100.0,
     idle_persistence: int = 10,
     frame_skip: int = 1,
-    action_mode: str = "auto",
     image_gap_factor: float = 2.0,
 ) -> dict:
     """Build NPZ episodes from all bags in data_dir. Returns stats dict.
@@ -228,8 +201,6 @@ def build_episodes(
 
     config = manifest.get("config", {})
     bags = manifest.get("bags", [])
-    if action_mode not in {"auto", "config", "odom_velocity"}:
-        raise ValueError(f"Unknown action_mode: {action_mode!r}")
 
     configured_action_source = config.get("action", {}).get("source", "position_cmd")
     imu_dim = config.get("sensors", {}).get("imu_dim", 10)
@@ -237,7 +208,6 @@ def build_episodes(
     action_dim = config.get("action", {}).get("dim", 14)
 
     per_bag_counts: dict[str, int] = {}
-    per_bag_action_sources: dict[str, str] = {}
     total_episodes = 0
     sensor_dims: dict[str, int] = {}
     ep_count = 0
@@ -255,7 +225,7 @@ def build_episodes(
             if p.exists():
                 df = pd.read_csv(p)
                 if df.empty:
-                    logger.warning("Empty %s in bag %s — will zero-fill or fallback", name, bag_name)
+                    logger.warning("Empty %s in bag %s — will zero-fill", name, bag_name)
                     return None
                 return df
             logger.warning("Missing %s in bag %s — will zero-fill", name, bag_name)
@@ -269,21 +239,7 @@ def build_episodes(
 
         odom_df = _load_csv("odom.csv")
         imu_df = _load_csv("imu.csv")
-        bag_action_source = configured_action_source
-        bag_action_dim = action_dim
-        action_df = _load_csv(f"{bag_action_source}.csv")
-
-        if action_mode == "odom_velocity" or (action_mode == "auto" and action_df is None):
-            rover_action_df = _derive_rover_action_from_odom(odom_df)
-            if rover_action_df is not None:
-                action_df = rover_action_df
-                bag_action_source = "odom_velocity"
-                bag_action_dim = 3
-                logger.info(
-                    "Using odom-derived rover action for bag %s: "
-                    "[forward_vel, lateral_vel, yaw_rate]",
-                    bag_name,
-                )
+        action_df = _load_csv(f"{configured_action_source}.csv")
 
         # ── 3. Sort by timestamp ──────────────────────────────────────────
         img_index = img_index.sort_values("timestamp_ns").reset_index(drop=True)
@@ -356,8 +312,8 @@ def build_episodes(
             action_sync = nearest_merge(image_ts, action_df, max_gap_ns=max_gap_ns)
             sensor_dims["action"] = action_sync.shape[1]
         else:
-            action_sync = np.zeros((N, bag_action_dim), dtype=np.float32)
-            sensor_dims["action"] = bag_action_dim
+            action_sync = np.zeros((N, action_dim), dtype=np.float32)
+            sensor_dims["action"] = action_dim
 
         color_paths = img_index["color_path"].values
         depth_paths = img_index["depth_path"].fillna("").values
@@ -415,7 +371,6 @@ def build_episodes(
                 bag_ep_count += 1
 
         per_bag_counts[bag_name] = bag_ep_count
-        per_bag_action_sources[bag_name] = bag_action_source
         total_episodes += bag_ep_count
         logger.info("  Bag %s: wrote %d episodes", bag_name, bag_ep_count)
 
@@ -423,14 +378,12 @@ def build_episodes(
     metadata = {
         "total_episodes": total_episodes,
         "per_bag_counts": per_bag_counts,
-        "per_bag_action_sources": per_bag_action_sources,
         "sensor_dims": sensor_dims,
         "config": config,
         "quality_params": {
             "min_speed": min_speed,
             "max_sync_gap_ms": max_sync_gap_ms,
             "idle_persistence": idle_persistence,
-            "action_mode": action_mode,
             "configured_action_source": configured_action_source,
             "image_gap_factor": image_gap_factor,
         },
@@ -476,13 +429,6 @@ def main() -> None:
                     help="Min consecutive slow frames to mark as idle (default: 10)")
     ap.add_argument("--frame_skip", type=int, default=1,
                     help="Take every Nth frame, reducing FPS (default: 1 = no skip)")
-    ap.add_argument("--action_mode", default="auto",
-                    choices=["auto", "config", "odom_velocity"],
-                    help=(
-                        "Action source policy. 'auto' uses the configured action CSV "
-                        "and falls back to odom-derived rover velocity actions if it is "
-                        "missing or empty."
-                    ))
     ap.add_argument("--image_gap_factor", type=float, default=2.0,
                     help=(
                         "Image stream gap threshold as a multiple of median image dt "
@@ -502,7 +448,6 @@ def main() -> None:
         max_sync_gap_ms=args.max_sync_gap_ms,
         idle_persistence=args.idle_persistence,
         frame_skip=args.frame_skip,
-        action_mode=args.action_mode,
         image_gap_factor=args.image_gap_factor,
     )
     print(f"Wrote {stats['total_episodes']} episodes")

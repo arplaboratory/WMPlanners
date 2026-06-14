@@ -182,7 +182,7 @@ class TestBuildEpisodes:
         # IMU should be zeros
         assert np.all(ep["imu"] == 0.0)
 
-    def test_missing_action_uses_rover_odom_velocity_fallback(self, tmp_path):
+    def test_missing_action_zero_filled(self, tmp_path):
         from scripts.world_model.build_episodes import build_episodes
 
         bag_dir = str(tmp_path / "dataset" / "bag1")
@@ -197,10 +197,8 @@ class TestBuildEpisodes:
         assert stats["total_episodes"] > 0
 
         ep = np.load(os.path.join(out_dir, "ep_00000.npz"))
-        assert ep["action"].shape == (16, 3)
-        assert np.allclose(ep["action"][:, 0], 1.0)
-        assert np.allclose(ep["action"][:, 1], 0.0)
-        assert np.allclose(ep["action"][:, 2], 0.0)
+        assert ep["action"].shape == (16, 14)
+        assert np.all(ep["action"] == 0.0)
 
     def test_metadata_written(self, tmp_path):
         from scripts.world_model.build_episodes import build_episodes
