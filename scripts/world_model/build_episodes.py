@@ -110,18 +110,21 @@ def _mark_idle(speed: np.ndarray, min_speed: float, idle_persistence: int) -> np
     return idle
 
 
-def _mark_gaps(timestamps: np.ndarray) -> np.ndarray:
+def _mark_gaps(timestamps: np.ndarray, gap_factor: float = 2.0) -> np.ndarray:
     """Return boolean array of length N: True at index i means a gap BEFORE frame i.
 
-    A gap is defined as dt > 2 × median(dt). Index 0 is never marked.
+    A gap is defined as dt > gap_factor * median(dt). Index 0 is never marked.
     """
+    if gap_factor <= 0:
+        raise ValueError("gap_factor must be positive")
+
     n = len(timestamps)
     gap_before = np.zeros(n, dtype=bool)
     if n < 2:
         return gap_before
     dt = np.diff(timestamps.astype(np.float64))
     median_dt = np.median(dt)
-    threshold = 2.0 * median_dt
+    threshold = gap_factor * median_dt
     gap_before[1:] = dt > threshold
     return gap_before
 
@@ -143,6 +146,24 @@ def _find_valid_runs(valid: np.ndarray) -> list[tuple[int, int]]:
     return runs
 
 
+def _nearest_gap_ns(target_ts: np.ndarray, src_df: pd.DataFrame | None) -> np.ndarray:
+    """Distance from each target timestamp to the nearest source timestamp."""
+    if src_df is None or src_df.empty:
+        return np.full(len(target_ts), np.inf, dtype=np.float64)
+
+    src_ts = src_df["timestamp_ns"].values
+    if len(src_ts) == 0:
+        return np.full(len(target_ts), np.inf, dtype=np.float64)
+    if len(src_ts) == 1:
+        return np.abs(target_ts.astype(np.float64) - float(src_ts[0]))
+
+    idx = np.searchsorted(src_ts, target_ts, side="left")
+    idx = np.clip(idx, 1, len(src_ts) - 1)
+    left = np.abs(src_ts[idx - 1] - target_ts)
+    right = np.abs(src_ts[idx] - target_ts)
+    return np.minimum(left, right).astype(np.float64)
+
+
 # ---------------------------------------------------------------------------
 # Core build function
 # ---------------------------------------------------------------------------
@@ -157,6 +178,7 @@ def build_episodes(
     max_sync_gap_ms: float = 100.0,
     idle_persistence: int = 10,
     frame_skip: int = 1,
+    image_gap_factor: float = 2.0,
 ) -> dict:
     """Build NPZ episodes from all bags in data_dir. Returns stats dict.
 
@@ -179,7 +201,8 @@ def build_episodes(
 
     config = manifest.get("config", {})
     bags = manifest.get("bags", [])
-    action_source = config.get("action", {}).get("source", "position_cmd")
+
+    configured_action_source = config.get("action", {}).get("source", "position_cmd")
     imu_dim = config.get("sensors", {}).get("imu_dim", 10)
     odom_dim = config.get("sensors", {}).get("odom_dim", 13)
     action_dim = config.get("action", {}).get("dim", 14)
@@ -200,7 +223,11 @@ def build_episodes(
         def _load_csv(name: str) -> pd.DataFrame | None:
             p = bag_dir / name
             if p.exists():
-                return pd.read_csv(p)
+                df = pd.read_csv(p)
+                if df.empty:
+                    logger.warning("Empty %s in bag %s — will zero-fill", name, bag_name)
+                    return None
+                return df
             logger.warning("Missing %s in bag %s — will zero-fill", name, bag_name)
             return None
 
@@ -212,7 +239,7 @@ def build_episodes(
 
         odom_df = _load_csv("odom.csv")
         imu_df = _load_csv("imu.csv")
-        action_df = _load_csv(f"{action_source}.csv")
+        action_df = _load_csv(f"{configured_action_source}.csv")
 
         # ── 3. Sort by timestamp ──────────────────────────────────────────
         img_index = img_index.sort_values("timestamp_ns").reset_index(drop=True)
@@ -251,11 +278,19 @@ def build_episodes(
         idle = _mark_idle(speed, min_speed, idle_persistence)
 
         # ── 5. Gap detection ──────────────────────────────────────────────
-        gap_before = _mark_gaps(image_ts)
+        gap_before = _mark_gaps(image_ts, gap_factor=image_gap_factor)
 
         # ── 6. Valid mask + contiguous runs ───────────────────────────────
         # A frame is invalid if it's idle OR if there's a gap right before it
-        valid = ~idle & ~gap_before
+        odom_synced = np.ones(N, dtype=bool)
+        if odom_df is not None:
+            odom_synced = _nearest_gap_ns(image_ts, odom_df) <= max_gap_ns
+
+        action_synced = np.ones(N, dtype=bool)
+        if action_df is not None:
+            action_synced = _nearest_gap_ns(image_ts, action_df) <= max_gap_ns
+
+        valid = ~idle & ~gap_before & odom_synced & action_synced
         runs = _find_valid_runs(valid)
 
         # ── 7. Sync all sensors to image timestamps (once for the bag) ────
@@ -349,6 +384,8 @@ def build_episodes(
             "min_speed": min_speed,
             "max_sync_gap_ms": max_sync_gap_ms,
             "idle_persistence": idle_persistence,
+            "configured_action_source": configured_action_source,
+            "image_gap_factor": image_gap_factor,
         },
         "episode_params": {
             "episode_len": episode_len,
@@ -392,6 +429,11 @@ def main() -> None:
                     help="Min consecutive slow frames to mark as idle (default: 10)")
     ap.add_argument("--frame_skip", type=int, default=1,
                     help="Take every Nth frame, reducing FPS (default: 1 = no skip)")
+    ap.add_argument("--image_gap_factor", type=float, default=2.0,
+                    help=(
+                        "Image stream gap threshold as a multiple of median image dt "
+                        "(default: 2.0). Use larger values for jittery rover cameras."
+                    ))
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -406,6 +448,7 @@ def main() -> None:
         max_sync_gap_ms=args.max_sync_gap_ms,
         idle_persistence=args.idle_persistence,
         frame_skip=args.frame_skip,
+        image_gap_factor=args.image_gap_factor,
     )
     print(f"Wrote {stats['total_episodes']} episodes")
 

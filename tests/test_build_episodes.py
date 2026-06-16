@@ -87,6 +87,13 @@ def _make_manifest(data_dir, bag_names, config=None):
 
 
 class TestBuildEpisodes:
+    def test_image_gap_factor_controls_gap_detection(self):
+        from scripts.world_model.build_episodes import _mark_gaps
+
+        ts = np.array([0, 100, 200, 300, 700], dtype=np.int64)
+        assert _mark_gaps(ts, gap_factor=2.0).tolist() == [False, False, False, False, True]
+        assert _mark_gaps(ts, gap_factor=5.0).tolist() == [False, False, False, False, False]
+
     def test_single_bag_produces_episodes(self, tmp_path):
         from scripts.world_model.build_episodes import build_episodes
 
@@ -174,6 +181,24 @@ class TestBuildEpisodes:
         ep = np.load(os.path.join(out_dir, "ep_00000.npz"))
         # IMU should be zeros
         assert np.all(ep["imu"] == 0.0)
+
+    def test_missing_action_zero_filled(self, tmp_path):
+        from scripts.world_model.build_episodes import build_episodes
+
+        bag_dir = str(tmp_path / "dataset" / "bag1")
+        data_dir = str(tmp_path / "dataset")
+        out_dir = str(tmp_path / "episodes")
+
+        _make_extracted_bag(bag_dir, n_frames=100, img_size=16)
+        os.remove(os.path.join(bag_dir, "position_cmd.csv"))
+
+        _make_manifest(data_dir, ["bag1"])
+        stats = build_episodes(data_dir, out_dir, episode_len=16, stride=16, img_size=16)
+        assert stats["total_episodes"] > 0
+
+        ep = np.load(os.path.join(out_dir, "ep_00000.npz"))
+        assert ep["action"].shape == (16, 14)
+        assert np.all(ep["action"] == 0.0)
 
     def test_metadata_written(self, tmp_path):
         from scripts.world_model.build_episodes import build_episodes

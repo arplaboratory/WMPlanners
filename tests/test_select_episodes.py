@@ -47,6 +47,20 @@ class TestDescriptorConstruction:
         descs, _ = compute_descriptors(str(tmp_path), encoder="none")
         assert not np.allclose(descs[0], descs[-1])
 
+    def test_spot_profile_shape(self, tmp_path):
+        from scripts.world_model.select_episodes import compute_descriptors
+        _make_episodes(str(tmp_path), n_episodes=10)
+        descs, _ = compute_descriptors(str(tmp_path), encoder="none", profile="spot")
+        assert descs.shape[0] == 10
+        assert descs.shape[1] >= 10
+
+    def test_rover_profile_shape(self, tmp_path):
+        from scripts.world_model.select_episodes import compute_descriptors
+        _make_episodes(str(tmp_path), n_episodes=10, act_dim=3)
+        descs, _ = compute_descriptors(str(tmp_path), encoder="none", profile="rover")
+        assert descs.shape[0] == 10
+        assert descs.shape[1] >= 10
+
 
 class TestFPSSelection:
     def test_selects_target_count(self, tmp_path):
@@ -72,3 +86,35 @@ class TestFPSSelection:
         select_episodes(str(tmp_path), out, target_count=5, encoder="none", dynamics_weight=0.6)
         assert os.path.exists(os.path.join(out, "selection_stats.json"))
         assert os.path.exists(os.path.join(out, "metadata.json"))
+
+    def test_spot_profile_selects_target_count(self, tmp_path):
+        from scripts.world_model.select_episodes import select_episodes
+        _make_episodes(str(tmp_path), n_episodes=12)
+        out = str(tmp_path / "selected_spot")
+        stats = select_episodes(
+            str(tmp_path),
+            out,
+            target_count=6,
+            encoder="none",
+            dynamics_weight=0.6,
+            profile="spot",
+        )
+        assert stats["selected"] == 6
+        eps = [f for f in os.listdir(out) if f.endswith(".npz")]
+        assert len(eps) == 6
+
+    def test_rover_profile_selects_target_count(self, tmp_path):
+        from scripts.world_model.select_episodes import select_episodes
+        _make_episodes(str(tmp_path), n_episodes=12, act_dim=3)
+        out = str(tmp_path / "selected_rover")
+        stats = select_episodes(
+            str(tmp_path),
+            out,
+            target_count=6,
+            encoder="none",
+            dynamics_weight=0.6,
+            profile="rover",
+        )
+        assert stats["selected"] == 6
+        eps = [f for f in os.listdir(out) if f.endswith(".npz")]
+        assert len(eps) == 6

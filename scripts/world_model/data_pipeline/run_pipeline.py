@@ -54,10 +54,21 @@ def main() -> None:
     parser.add_argument("--min-speed", type=float, default=0.1, help="Idle speed threshold m/s (default: 0.1)")
     parser.add_argument("--max-sync-gap-ms", type=float, default=100.0, help="Max sensor sync gap in ms (default: 100)")
     parser.add_argument("--idle-persistence", type=int, default=10, help="Consecutive idle frames to mark (default: 10)")
-
+    parser.add_argument(
+        "--image-gap-factor",
+        type=float,
+        default=2.0,
+        help="Image stream gap threshold as a multiple of median image dt (default: 2.0)",
+    )
     # --- Stage 2: Select episodes options ---
     parser.add_argument("--target-count", type=int, default=5000, help="Target number of episodes to select (default: 5000)")
     parser.add_argument("--encoder", default="none", help="Visual encoder for selection descriptors (default: none)")
+    parser.add_argument(
+        "--selection-profile",
+        default="generic",
+        choices=["generic", "spot", "rover"],
+        help="Episode selection profile (default: generic)",
+    )
 
     # --- Stage 3: HF upload options ---
     parser.add_argument("--push-to-hub", default=None, help="HF Hub repo ID (e.g. dmody1/wm-data)")
@@ -110,6 +121,7 @@ def main() -> None:
             max_sync_gap_ms=args.max_sync_gap_ms,
             idle_persistence=args.idle_persistence,
             frame_skip=args.frame_skip,
+            image_gap_factor=args.image_gap_factor,
         )
         print(f"[Stage 1] Built {stats.get('total_episodes', '?')} episodes")
 
@@ -123,6 +135,7 @@ def main() -> None:
             out_dir=selected_dir,
             target_count=args.target_count,
             encoder=args.encoder,
+            profile=args.selection_profile,
         )
         print(f"[Stage 2] Selected {sel_stats.get('selected', '?')} episodes")
 
