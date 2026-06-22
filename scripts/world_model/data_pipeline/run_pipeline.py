@@ -23,12 +23,42 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 
 from scripts.world_model.build_episodes import build_episodes
 from scripts.world_model.select_episodes import select_episodes
 
 from .hf_upload import run_hf_upload
+
+
+def expand_mcap_paths(patterns: list[str]) -> list[str]:
+    """Expand shell-style MCAP patterns and fail early on missing inputs."""
+    paths: list[str] = []
+    missing: list[str] = []
+
+    for pattern in patterns:
+        if glob.has_magic(pattern):
+            matches = sorted(glob.glob(pattern, recursive=True))
+            if matches:
+                paths.extend(matches)
+            else:
+                missing.append(pattern)
+        elif os.path.exists(pattern):
+            paths.append(pattern)
+        else:
+            missing.append(pattern)
+
+    if missing:
+        missing_list = "\n".join(f"  - {item}" for item in missing)
+        raise FileNotFoundError(
+            "No MCAP/ROS bag files matched the following --mcap input(s):\n"
+            f"{missing_list}\n"
+            "Check the path depth or quote recursive patterns such as "
+            "'/path/to/**/*.mcap'."
+        )
+
+    return paths
 
 
 def main() -> None:
@@ -95,8 +125,11 @@ def main() -> None:
         from scripts.world_model.robot_config import parse_overrides
 
         overrides = parse_overrides(args.override)
+        mcap_paths = expand_mcap_paths(args.mcap)
+        print(f"[Stage 0] Found {len(mcap_paths)} bag file(s)")
+
         run_stage0(
-            mcap_paths=args.mcap,
+            mcap_paths=mcap_paths,
             robot=args.robot,
             output_dir=extracted_dir,
             shard_size=args.shard_size,

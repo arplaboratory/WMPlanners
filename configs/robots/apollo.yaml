@@ -1,0 +1,19 @@
+version: 1
+name: apollo
+
+topics:
+  color: /apollo/sensors/zed/rgb/color/rect/image/compressed
+  depth: /apollo/sensors/zed/depth/depth_registered
+  imu: /apollo/sensors/ouster/imu
+  odom: /apollo/platform/odom
+  cmd_vel: /apollo/cmd_vel
+
+sensors:
+  color_encoding: compressed
+  depth_encoding: 32FC1
+  imu_dim: 10
+  odom_dim: 13
+
+action:
+  source: cmd_vel
+  dim: 6
