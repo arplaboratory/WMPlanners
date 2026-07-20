@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ./scripts/install_externals.sh
-# Installs external dependencies in editable mode using uv or pip.
+# Installs external dependencies using uv or pip. Host development defaults to
+# editable installs; source-free containers set WM_CONTAINER_RUNTIME=1.
 
 set -euo pipefail
 
@@ -20,6 +21,13 @@ else
     exit 1
 fi
 echo "Using Python: $PYTHON_CMD"
+
+INSTALL_MODE=(-e)
+INSTALL_DESCRIPTION="editable"
+if [ "${WM_CONTAINER_RUNTIME:-0}" = "1" ]; then
+    INSTALL_MODE=()
+    INSTALL_DESCRIPTION="non-editable"
+fi
 
 # Locate uv: prefer PATH (venv/bin/uv), then python -m uv
 if command -v uv >/dev/null 2>&1; then
@@ -59,7 +67,7 @@ for pkg in "${EXTERNALS[@]}"; do
         continue
     fi
 
-    echo "Installing $pkg in editable mode..."
+    echo "Installing $pkg in $INSTALL_DESCRIPTION mode..."
     cd "$pkg_dir" || exit 1
 
     # Create COLCON_IGNORE to avoid ROS2 colcon scanning if applicable
@@ -70,25 +78,25 @@ for pkg in "${EXTERNALS[@]}"; do
     if [ -n "$UV_CMD" ]; then
         if [ "$IS_VENV" -eq 1 ]; then
             echo "Target python is a venv — using uv to install into that venv"
-            $UV_CMD pip install --python "$PYTHON_CMD" -e . --no-build-isolation && INSTALL_OK=1 || true
+            $UV_CMD pip install --python "$PYTHON_CMD" "${INSTALL_MODE[@]}" . --no-build-isolation && INSTALL_OK=1 || true
             if [ "$INSTALL_OK" -eq 0 ]; then
                 echo "Warning: uv venv install failed for $pkg, retrying without --no-build-isolation..."
-                $UV_CMD pip install --python "$PYTHON_CMD" -e . && INSTALL_OK=1 || true
+                $UV_CMD pip install --python "$PYTHON_CMD" "${INSTALL_MODE[@]}" . && INSTALL_OK=1 || true
             fi
         else
             echo "Target python is NOT a venv — using uv --system to install into ambient Python"
-            $UV_CMD pip install --system --python "$PYTHON_CMD" -e . --no-build-isolation && INSTALL_OK=1 || true
+            $UV_CMD pip install --system --python "$PYTHON_CMD" "${INSTALL_MODE[@]}" . --no-build-isolation && INSTALL_OK=1 || true
             if [ "$INSTALL_OK" -eq 0 ]; then
                 echo "Warning: uv system install failed for $pkg, retrying without --no-build-isolation..."
-                $UV_CMD pip install --system --python "$PYTHON_CMD" -e . && INSTALL_OK=1 || true
+                $UV_CMD pip install --system --python "$PYTHON_CMD" "${INSTALL_MODE[@]}" . && INSTALL_OK=1 || true
             fi
         fi
     fi
 
     if [ "$INSTALL_OK" -eq 0 ]; then
         echo "Falling back to pip for $pkg..."
-        "$PYTHON_CMD" -m pip install -e . --no-build-isolation || \
-            "$PYTHON_CMD" -m pip install -e .
+        "$PYTHON_CMD" -m pip install "${INSTALL_MODE[@]}" . --no-build-isolation || \
+            "$PYTHON_CMD" -m pip install "${INSTALL_MODE[@]}" .
     fi
 done
 
