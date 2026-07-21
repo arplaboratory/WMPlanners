@@ -48,7 +48,10 @@ dependencies = [
   "rich>=13.0",
   "submitit>=1.5",
   "tensorboardx>=2.6",
-  "psutil>=5.9"
+  "psutil>=5.9",
+  "rosbags",
+  "mcap-ros2-support",
+  "mcap",
 ]
 
 [project.optional-dependencies]
