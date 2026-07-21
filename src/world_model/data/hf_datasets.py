@@ -171,89 +171,101 @@ class HFWindowDataset(Dataset):
         batch_data = self._ds[row_indices]
         n_frames = len(row_indices)
 
-        # rgb
-        rgb_list = []
-        for img in batch_data["image"]:
-            if img is not None:
-                rgb_list.append(self._transform(img).numpy())
-            else:
-                rgb_list.append(np.zeros((3, self.img_size, self.img_size), dtype=np.float32))
-        rgb = np.stack(rgb_list)  # (T, 3, H, W)
+        try:
+            if self.sample_mode and self.sample_k is not None and n_frames > 0:
+                k = self.sample_k
+                fs = self.frameskip
+                span = (k - 1) * fs + 1  # raw frames needed to cover k steps at stride fs
+                if n_frames >= span:
+                    start = np.random.randint(0, n_frames - span + 1)
+                    indices = np.arange(start, start + span, fs)
+                else:
+                    # Not enough frames for full stride; take what's available then pad
+                    avail = np.arange(0, n_frames, fs)
+                    if len(avail) >= k:
+                        indices = avail[:k]
+                    else:
+                        indices = np.concatenate([avail, np.full(k - len(avail), n_frames - 1)])
 
-        # Odom: load raw values, then convert positions to per-episode deltas
-        odom = np.zeros((n_frames, self.D_odom), dtype=np.float32)
-        for i, col in enumerate(self.odom_cols):
-            odom[:, i] = batch_data[col]
+                def get_frame(i):
+                    img = batch_data["image"][i]
+                    if img is not None:
+                        rgb = self._transform(img).numpy()
+                    else:
+                        rgb = np.zeros((3, self.img_size, self.img_size), dtype=np.float32)
+                    odom = np.array([batch_data[col][i] for col in self.odom_cols], dtype=np.float32)
+                    if self.act_cols:
+                        action = np.array([batch_data[col][i] for col in self.act_cols], dtype=np.float32)
+                    else:
+                        action = odom.copy()
+                    if self.imu_cols:
+                        imu = np.array([batch_data[col][i] for col in self.imu_cols], dtype=np.float32)
+                    else:
+                        imu = np.zeros((self.D_imu,), dtype=np.float32)
+                    collision = np.zeros((1,), dtype=np.float32)
+                    depth = np.zeros((1, self.img_size, self.img_size), dtype=np.float32)
+                    return rgb, odom, imu, action, collision, depth
 
-        # Convert absolute position (dims 0:3) to deltas relative to frame 0.
-        # This keeps position values small (meters of displacement within episode)
-        # instead of large absolute world coordinates.
-        # Orientation (3:7), velocity (7:10), angular velocity (10:13) stay as-is.
-        if self.D_odom >= 3:
-            odom[:, 0:3] = odom[:, 0:3] - odom[0, 0:3]
+                rgbs, odoms, imus, actions, collisions, depths = [], [], [], [], [], []
+                for i in indices:
+                    rgb, odom, imu, action, collision, depth = get_frame(i)
+                    rgbs.append(rgb)
+                    odoms.append(odom)
+                    imus.append(imu)
+                    actions.append(action)
+                    collisions.append(collision)
+                    depths.append(depth)
 
-        # actions
-        if self.act_cols:
-            action = np.zeros((n_frames, self.D_act), dtype=np.float32)
-            for i, col in enumerate(self.act_cols):
-                action[:, i] = batch_data[col]
-        else:
-            action = odom[:, 7:13].copy()  # lin_vel(3) + ang_vel(3)
+                rgbs = np.stack(rgbs)
+                odoms = np.stack(odoms)
+                imus = np.stack(imus)
+                actions = np.stack(actions)
+                collisions = np.stack(collisions)
+                depths = np.stack(depths)
 
-        # imu    
-        if self.imu_cols:
-            imu = np.zeros((n_frames, self.D_imu), dtype=np.float32)
-            for i, col in enumerate(self.imu_cols):
-                imu[:, i] = batch_data[col]
-        else:
-            imu = np.zeros((n_frames, self.D_imu), dtype=np.float32)
+                # Derive action as delta to goal: action[t] = odom[-1] - odom[t]
+                if not self.act_cols:
+                    actions = odoms[-1:] - odoms  # broadcast subtract last frame
 
-        # Apply normalization if stats provided
-        if self._norm_stats is not None:
-            odom = self._norm_stats.normalize_odom(torch.from_numpy(odom)).numpy()
-            if self.imu_cols:
-                imu = self._norm_stats.normalize_imu(torch.from_numpy(imu)).numpy()
-            action = self._norm_stats.normalize_action(torch.from_numpy(action)).numpy()
+                # Normalize/scale; always keep raw copies for the state vector
+                state_odom = odoms.copy()
+                state_imu = imus.copy()
+                state_collision = collisions.copy()
+                if self.odom_stats is not None:
+                    if "mean" in self.odom_stats and "std" in self.odom_stats:
+                        odoms = (odoms - self.odom_stats["mean"]) / (self.odom_stats["std"] + 1e-8)
+                    elif "min" in self.odom_stats and "max" in self.odom_stats:
+                        odoms = (odoms - self.odom_stats["min"]) / (self.odom_stats["max"] - self.odom_stats["min"] + 1e-8)
+                if self.imu_stats is not None:
+                    if "mean" in self.imu_stats and "std" in self.imu_stats:
+                        imus = (imus - self.imu_stats["mean"]) / (self.imu_stats["std"] + 1e-8)
+                    elif "min" in self.imu_stats and "max" in self.imu_stats:
+                        imus = (imus - self.imu_stats["min"]) / (self.imu_stats["max"] - self.imu_stats["min"] + 1e-8)
+                if self.collision_stats is not None:
+                    if "mean" in self.collision_stats and "std" in self.collision_stats:
+                        collisions = (collisions - self.collision_stats["mean"]) / (self.collision_stats["std"] + 1e-8)
+                    elif "min" in self.collision_stats and "max" in self.collision_stats:
+                        collisions = (collisions - self.collision_stats["min"]) / (self.collision_stats["max"] - self.collision_stats["min"] + 1e-8)
+                if self.action_stats is not None:
+                    if "mean" in self.action_stats and "std" in self.action_stats:
+                        actions = (actions - self.action_stats["mean"]) / (self.action_stats["std"] + 1e-8)
+                    elif "min" in self.action_stats and "max" in self.action_stats:
+                        actions = (actions - self.action_stats["min"]) / (self.action_stats["max"] - self.action_stats["min"] + 1e-8)
 
-        # zeros
-        depth = np.zeros((n_frames, 1, self.img_size, self.img_size), dtype=np.float32)
-        collision = np.zeros((n_frames, 1), dtype=np.float32)
-
-        return {
-            "rgb": rgb,            # (T, 3, H, W)
-            "depth": depth,        # (T, 1, H, W)
-            "imu": imu,            # (T, D_imu)
-            "odom": odom,          # (T, D_odom)
-            "action": action,      # (T, D_act)
-            "collision": collision, # (T, 1)
-        }
-
-    def compute_norm_stats(self, episode_ids: list[int] | None = None) -> NormStats:
-        """Compute normalization stats over specified episodes (or all).
-
-        Args:
-            episode_ids: If provided, only compute stats from these episode IDs.
-                Use this to compute stats from training split only.
-        """
-        if episode_ids is not None:
-            wids = [w for w in self._window_ids if w in set(episode_ids)]
-        else:
-            wids = self._window_ids
-
-        all_odom, all_imu, all_act = [], [], []
-        for wid in wids:
-            row_indices = self._window_rows[wid]
-            batch_data = self._ds[row_indices]
-            n = len(row_indices)
-
-            odom = np.zeros((n, self.D_odom), dtype=np.float32)
-            for i, col in enumerate(self.odom_cols):
-                odom[:, i] = batch_data[col]
-            # Apply same position delta conversion as __getitem__
-            if self.D_odom >= 3:
-                odom[:, 0:3] = odom[:, 0:3] - odom[0, 0:3]
-            all_odom.append(odom)
-
+                output = {
+                    "rgb": rgbs,            # (k, 3, H, W)
+                    "depth": depths,        # (k, 1, H, W)
+                    "imu": imus,            # (k, D_imu)
+                    "odom": odoms,          # (k, D_odom)
+                    "action": actions,      # (k, D_act)
+                    "collision": collisions, # (k, 1)
+                    "state": torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)),  # (k, D_odom+D_imu+1)
+                }
+                return output
+            # Default: return all frames in the window (non-sample_mode)
+            images = batch_data["image"]
+            rgbs = np.stack([self._transform(img).numpy() if img is not None else np.zeros((3, self.img_size, self.img_size), dtype=np.float32) for img in images])
+            odoms = np.stack([[batch_data[col][i] for col in self.odom_cols] for i in range(n_frames)]).astype(np.float32)
             if self.act_cols:
                 act = np.zeros((n, self.D_act), dtype=np.float32)
                 for i, col in enumerate(self.act_cols):
@@ -267,14 +279,41 @@ class HFWindowDataset(Dataset):
                 for i, col in enumerate(self.imu_cols):
                     imu[:, i] = batch_data[col]
             else:
-                imu = np.zeros((n, self.D_imu), dtype=np.float32)
-            all_imu.append(imu)
-
-        return NormStats.from_arrays(
-            np.concatenate(all_odom),
-            np.concatenate(all_imu),
-            np.concatenate(all_act),
-        )
+                # Derive action as delta to goal: action[t] = odom[-1] - odom[t]
+                actions = odoms[-1:] - odoms  # broadcast subtract last frame
+            imus = np.stack([[batch_data[col][i] for col in self.imu_cols] for i in range(n_frames)]).astype(np.float32) if self.imu_cols else np.zeros((n_frames, self.D_imu), dtype=np.float32)
+            collisions = np.zeros((n_frames, 1), dtype=np.float32)
+            depths = np.zeros((n_frames, 1, self.img_size, self.img_size), dtype=np.float32)
+            state_odom = odoms.copy()
+            state_imu = imus.copy()
+            state_collision = collisions.copy()
+            if self.odom_stats is not None:
+                if "mean" in self.odom_stats and "std" in self.odom_stats:
+                    odoms = (odoms - self.odom_stats["mean"]) / (self.odom_stats["std"] + 1e-8)
+                elif "min" in self.odom_stats and "max" in self.odom_stats:
+                    odoms = (odoms - self.odom_stats["min"]) / (self.odom_stats["max"] - self.odom_stats["min"] + 1e-8)
+            if self.imu_stats is not None:
+                if "mean" in self.imu_stats and "std" in self.imu_stats:
+                    imus = (imus - self.imu_stats["mean"]) / (self.imu_stats["std"] + 1e-8)
+                elif "min" in self.imu_stats and "max" in self.imu_stats:
+                    imus = (imus - self.imu_stats["min"]) / (self.imu_stats["max"] - self.imu_stats["min"] + 1e-8)
+            if self.action_stats is not None:
+                if "mean" in self.action_stats and "std" in self.action_stats:
+                    actions = (actions - self.action_stats["mean"]) / (self.action_stats["std"] + 1e-8)
+                elif "min" in self.action_stats and "max" in self.action_stats:
+                    actions = (actions - self.action_stats["min"]) / (self.action_stats["max"] - self.action_stats["min"] + 1e-8)
+            output = {
+                "rgb": rgbs,
+                "depth": depths,
+                "imu": imus,
+                "odom": odoms,
+                "action": actions,
+                "collision": collisions,
+                "state": torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)),
+            }
+            return output
+        except Exception as e:
+            raise RuntimeError(f"HFWindowDataset.__getitem__({idx}): {e}") from e
 
 def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
     """Collate a list of window dicts into a :class:`SampleBatch`."""
