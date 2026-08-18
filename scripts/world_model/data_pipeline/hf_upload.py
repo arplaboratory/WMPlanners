@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from typing import Generator
@@ -49,7 +48,8 @@ def _iter_episode_frames(
                 row[f"imu_{j}"] = float(val)
 
             if depth is not None:
-                row["depth_mean"] = float(depth[t].mean())
+                row["depth"] = depth[t].astype(np.float32)
+                row["depth_valid"] = True
 
             yield row
 
@@ -75,7 +75,7 @@ def run_hf_upload(
     str
         Path to the saved dataset directory.
     """
-    from datasets import Dataset, Features, Image, Value
+    from datasets import Array2D, Dataset, Features, Image, Value
 
     save_dir = os.path.join(episodes_dir, "hf_dataset")
 
@@ -105,7 +105,8 @@ def run_hf_upload(
     for j in range(imu_dim):
         feature_dict[f"imu_{j}"] = Value("float32")
     if has_depth:
-        feature_dict["depth_mean"] = Value("float32")
+        feature_dict["depth"] = Array2D(shape=probe["depth"].shape[1:], dtype="float32")
+        feature_dict["depth_valid"] = Value("bool")
 
     features = Features(feature_dict)
 

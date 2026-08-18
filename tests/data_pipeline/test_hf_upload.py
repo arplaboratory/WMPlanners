@@ -7,7 +7,6 @@ import tempfile
 from unittest.mock import patch
 
 import numpy as np
-import pytest
 
 
 def _make_episode(out_dir: str, ep_id: int, n_frames: int = 4, img_size: int = 4) -> str:
@@ -67,7 +66,9 @@ class TestDatasetColumns:
             assert "imu_0" in ds.column_names
             assert "imu_9" in ds.column_names
             # depth
-            assert "depth_mean" in ds.column_names
+            assert "depth" in ds.column_names
+            assert "depth_valid" in ds.column_names
+            assert np.asarray(ds[0]["depth"]).shape == (4, 4)
 
 
 class TestEmptyDirectory:

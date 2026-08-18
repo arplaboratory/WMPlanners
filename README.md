@@ -366,7 +366,7 @@ Selected episodes are copied to the output directory with sequential naming (`ep
 Creates a Hugging Face `Dataset` from the selected NPZ episodes and optionally pushes to the Hub.
 
 1. Scans all `ep_*.npz` files in the selected-episodes directory.
-2. Explodes each episode into per-frame rows with columns: `episode_id`, `frame_idx`, `image` (PIL), plus numbered columns for each sensor dimension (`odom_0`..`odom_12`, `action_0`..`action_13`, `imu_0`..`imu_9`, `depth_mean`).
+2. Explodes each episode into per-frame rows with columns: `episode_id`, `frame_idx`, `image` (PIL), full dense `depth`, and numbered columns for each sensor dimension (`odom_0`..`odom_12`, `action_0`..`action_13`, `imu_0`..`imu_9`).
 3. Saves locally to `hf_dataset/` and, if `--push-to-hub` is set, pushes to the Hub.
 
 Standalone usage (if stages 0-2 are already done):
@@ -375,6 +375,22 @@ python -m scripts.world_model.data_pipeline.hf_upload \
     --episodes-dir pipeline_out/selected \
     --push-to-hub dmody1/wm-data
 ```
+
+#### Manifest-first Gold datasets
+
+`wm-dataset` is the consumer-side executable used by `rerun_curation gold
+build`. Its canonical product stores each synchronized RGB/depth frame once,
+with typed Zstd `frames.parquet` and `windows.parquet` indexes. Train directly
+without creating overlapping NPZ episode copies:
+
+```bash
+python scripts/world_model/train_world_model.py \
+  --dataset_type gold --data_path data/gold/wm-v1/dataset_manifest.json \
+  --split train
+```
+
+NPZ and Hugging Face views remain available through `rerun_curation gold
+export`; both preserve full dense depth and the release split assignments.
 
 ### CLI Reference
 

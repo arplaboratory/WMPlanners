@@ -10,8 +10,14 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from world_model.data import HFWindowDataset, NPZEpisodeDataset, collate_hf, collate_npz
-from world_model.data.normalization import NormStats
+from world_model.data import (
+    GoldWindowDataset,
+    HFWindowDataset,
+    NPZEpisodeDataset,
+    collate_gold,
+    collate_hf,
+    collate_npz,
+)
 from world_model.architecture import WorldModel
 from world_model.engine.trainer import TrainConfig, rollout_loss
 from world_model.utils import seed_everything
@@ -97,11 +103,16 @@ class Trainer:
             print("[WARN] --wandb enabled but WANDB_API_KEY not set. Logging disabled.")
 
         if args.dataset_type == 'hf':
-            self.ds = HFWindowDataset(args.data_path, img_size=args.img_size)
+            self.ds = HFWindowDataset(args.data_path, img_size=args.img_size, split=args.split)
             self.collate_fn = collate_hf
-        else:
+        elif args.dataset_type == 'npz':
             self.ds = NPZEpisodeDataset(args.data_path, window=args.horizon + 1, img_size=args.img_size)
             self.collate_fn = collate_npz
+        else:
+            self.ds = GoldWindowDataset(
+                args.data_path, split=args.split, img_size=args.img_size
+            )
+            self.collate_fn = collate_gold
 
         sampler = None
         shuffle = True
@@ -291,7 +302,8 @@ def build_parser(parents=None):
     )
     ap.add_argument('--data_path', '--dataset', '--data_dir', type=str, required=True,
                     dest='data_path', help='HuggingFace dataset ID or local path')
-    ap.add_argument('--dataset_type', type=str, default='hf', choices=['hf', 'npz'])
+    ap.add_argument('--dataset_type', type=str, default='hf', choices=['hf', 'npz', 'gold'])
+    ap.add_argument('--split', default='train', choices=['train', 'val', 'test'])
     ap.add_argument('--out_dir', type=str, default='runs')
     ap.add_argument('--epochs', type=int, default=20)
     ap.add_argument('--batch_size', type=int, default=64)

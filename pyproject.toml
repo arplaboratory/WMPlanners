@@ -54,6 +54,9 @@ dependencies = [
   "mcap",
 ]
 
+[project.scripts]
+wm-dataset = "world_model.data.gold_cli:main"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8",

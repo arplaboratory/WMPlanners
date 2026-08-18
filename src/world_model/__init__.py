@@ -1,29 +1,31 @@
-"""World model: observation encoding, latent dynamics, and MPC planning.
+"""World-model public API with lazy imports for lightweight data tooling."""
 
-Subpackages
------------
-- :mod:`world_model.backbones` – interchangeable vision encoders
-- :mod:`world_model.components` – dynamics, fusion, and prediction heads
-- :mod:`world_model.data` – dataset loading utilities
-- :mod:`world_model.engine` – training loop and configuration
-"""
+from __future__ import annotations
 
-from world_model.architecture import WorldModel, WMOutput
-from world_model.data import HFWindowDataset, SampleBatch, collate_hf
-from world_model.engine import TrainConfig, rollout_loss
-from world_model.mpc import CEMConfig, cem_plan
-from world_model.utils import seed_everything, RunningMeanStd
+from importlib import import_module
+from typing import Any
 
-__all__ = [
-    "WorldModel",
-    "WMOutput",
-    "HFWindowDataset",
-    "SampleBatch",
-    "collate_hf",
-    "TrainConfig",
-    "rollout_loss",
-    "CEMConfig",
-    "cem_plan",
-    "seed_everything",
-    "RunningMeanStd",
-]
+_EXPORTS = {
+    "WorldModel": ("world_model.architecture", "WorldModel"),
+    "WMOutput": ("world_model.architecture", "WMOutput"),
+    "HFWindowDataset": ("world_model.data", "HFWindowDataset"),
+    "SampleBatch": ("world_model.data", "SampleBatch"),
+    "collate_hf": ("world_model.data", "collate_hf"),
+    "TrainConfig": ("world_model.engine", "TrainConfig"),
+    "rollout_loss": ("world_model.engine", "rollout_loss"),
+    "CEMConfig": ("world_model.mpc", "CEMConfig"),
+    "cem_plan": ("world_model.mpc", "cem_plan"),
+    "seed_everything": ("world_model.utils", "seed_everything"),
+    "RunningMeanStd": ("world_model.utils", "RunningMeanStd"),
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _EXPORTS:
+        raise AttributeError(name)
+    module_name, attribute = _EXPORTS[name]
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value

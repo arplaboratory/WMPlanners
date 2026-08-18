@@ -37,8 +37,12 @@ def rollout_loss(
     odom = batch.odom.to(device)
     action = batch.action.to(device)
     collision = batch.collision.to(device)  # (B,T,1)
+    collision_valid = (
+        batch.collision_valid.to(device)
+        if batch.collision_valid is not None else torch.ones_like(collision, dtype=torch.bool)
+    )
 
-    B, T = rgb.shape[0], rgb.shape[1]
+    T = rgb.shape[1]
     H = cfg.horizon
     nh = cfg.num_hist
     window = nh + H  # total frames needed: history + horizon
@@ -59,6 +63,7 @@ def rollout_loss(
     odom = odom[:, t0 : t0 + window]
     action = action[:, t0 : t0 + window]
     collision = collision[:, t0 : t0 + window]
+    collision_valid = collision_valid[:, t0 : t0 + window]
 
     # forward pass through model (now T == window, starts from 0)
     target_raw = target_model.module if target_model is not None and hasattr(target_model, "module") else target_model
@@ -77,6 +82,9 @@ def rollout_loss(
     # build gt — targets start from pred_start (last history frame)
     state_targets = torch.stack([odom[:, pred_start + k] for k in range(H + 1)], dim=1)
     risk_targets = torch.stack([collision[:, pred_start + k] for k in range(H + 1)], dim=1)
+    risk_valid = torch.stack([
+        collision_valid[:, pred_start + k] for k in range(H + 1)
+    ], dim=1)
 
     # compute losses
     z_tgt = z_targets.detach()
@@ -87,7 +95,11 @@ def rollout_loss(
     state_dim = state_pred.shape[-1]
     loss_state = F.mse_loss(state_pred, state_targets[..., :state_dim])
 
-    loss_risk = F.binary_cross_entropy(risk_pred, risk_targets)
+    risk_losses = F.binary_cross_entropy(risk_pred, risk_targets, reduction="none")
+    loss_risk = (
+        risk_losses[risk_valid].mean()
+        if risk_valid.any() else risk_losses.sum() * 0.0
+    )
 
     loss = cfg.lambda_z * loss_z + cfg.lambda_state * loss_state + cfg.lambda_risk * loss_risk
 

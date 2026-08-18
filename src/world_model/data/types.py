@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 import torch
 
@@ -16,6 +16,11 @@ class SampleBatch:
     odom: torch.Tensor       # (B, T, D_odom)
     action: torch.Tensor     # (B, T, D_act)
     collision: torch.Tensor  # (B, T, 1)
+    depth_valid: Optional[torch.Tensor] = None
+    imu_valid: Optional[torch.Tensor] = None
+    odom_valid: Optional[torch.Tensor] = None
+    action_valid: Optional[torch.Tensor] = None
+    collision_valid: Optional[torch.Tensor] = None
     # DinoWM extras (optional)
     proprio: Optional[torch.Tensor] = None  # (B, T, D_odom+D_imu+1) concatenated state
     state: Optional[torch.Tensor] = None    # (B, T, D_odom+D_imu+1) raw (pre-norm) state

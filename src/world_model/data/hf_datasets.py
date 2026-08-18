@@ -1,19 +1,19 @@
 """HuggingFace dataset loader for world-model training."""
 
 from __future__ import annotations
-from typing import List
-import numpy as np
+
 import os
+from typing import List
+
+import numpy as np
 import torch
 import torchvision.transforms as T
-import random
-
 from torch.utils.data import Dataset
+
 from .normalization import NormStats
 from .types import SampleBatch
-from typing import List
-from datasets import load_from_disk, load_dataset, get_dataset_split_names
-from datasets import Dataset as HFDataset
+
+
 class HFWindowDataset(Dataset):
     """Load trajectory windows from a HuggingFace dataset.
 
@@ -25,10 +25,6 @@ class HFWindowDataset(Dataset):
     - ``odom_0..12`` — absolute odom: pos(3) + orient(4) + vel(3) + ang_vel(3)
     - ``imu_0..9`` — IMU readings
     - ``action_0..13`` — commanded actions
-
-    **Position deltas**: The first 3 odom dims (pos_x/y/z) are converted to
-    per-episode deltas relative to frame 0 at load time. This keeps values
-    small and meaningful for dynamics prediction and MPC planning.
 
     Parameters
     ----------
@@ -42,50 +38,78 @@ class HFWindowDataset(Dataset):
     # Odom-delta column names in the HF dataset
     ODOM_COLS = ["odom_dx", "odom_dy", "odom_dz", "odom_ax", "odom_ay", "odom_az"]
 
-    def __init__(self, dataset, img_size: int = 224,
-                 action_stats=None, odom_stats=None, imu_stats=None,
-                 collision_stats=None, sample_k: int = None, sample_mode: bool = False,
-                 num_hist=None, num_pred=None, frameskip=None):
+    def __init__(
+        self,
+        dataset,
+        img_size: int = 224,
+        norm_stats: NormStats | None = None,
+        *,
+        split: str = "train",
+        action_stats=None,
+        odom_stats=None,
+        imu_stats=None,
+        collision_stats=None,
+        sample_k: int | None = None,
+        sample_mode: bool = False,
+        num_hist=None,
+        num_pred=None,
+        frameskip: int | None = None,
+    ):
+        """Load a trajectory-window dataset from a local HF directory or Hub ID."""
+        from datasets import DatasetDict, load_from_disk, load_dataset, get_dataset_split_names
+        from datasets import Dataset as HFDataset
 
-        """Initialize the dataset."""
+        selected_split = "validation" if split == "val" else split
+
+        def select_loaded(value):
+            if isinstance(value, DatasetDict):
+                if selected_split not in value:
+                    raise ValueError(f"dataset has no requested Silver split {selected_split!r}")
+                return value[selected_split]
+            if "split" in value.column_names:
+                accepted = {split, selected_split}
+                value = value.filter(lambda row: row["split"] in accepted)
+                if len(value) == 0:
+                    raise ValueError(f"dataset has no requested Silver split {selected_split!r}")
+            return value
+
         self.sample_k = sample_k
         self.sample_mode = sample_mode
         self.frameskip = frameskip if frameskip is not None else 1
-    def __init__(self, dataset, img_size: int = 224, norm_stats: NormStats | None = None):
-        """Load a trajectory-window dataset from a local HF directory or Hub ID."""
-        from datasets import load_from_disk, load_dataset, get_dataset_split_names
-        from datasets import Dataset as HFDataset
+        self.action_stats = action_stats
+        self.odom_stats = odom_stats
+        self.imu_stats = imu_stats
+        self.collision_stats = collision_stats
+        if norm_stats is not None:
+            self.odom_stats = {"mean": norm_stats.odom_mean.numpy(), "std": norm_stats.odom_std.numpy()}
+            self.imu_stats = {"mean": norm_stats.imu_mean.numpy(), "std": norm_stats.imu_std.numpy()}
+            self.action_stats = {"mean": norm_stats.act_mean.numpy(), "std": norm_stats.act_std.numpy()}
 
         if isinstance(dataset, str):
             dataset = dataset.strip("'\"")
             if os.path.isdir(dataset):
                 print(f"[HFWindowDataset] Found local directory: {dataset}. Loading...")
                 try:
-                    self._ds = load_from_disk(dataset)
+                    self._ds = select_loaded(load_from_disk(dataset))
                 except Exception as e:
-                    print(f"[HFWindowDataset] Local load failed: {e}. Falling back to Hub...")
-                    print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
-                    try:
-                        splits = get_dataset_split_names(dataset)
-                        split = "train" if "train" in splits else splits[0]
-                        self._ds = load_dataset(dataset, split=split)
-                    except Exception as hf_e:
-                        msg = f"Failed to load dataset '{dataset}' from both local disk and Hub.\nLocal error: {e}\nHub error: {hf_e}"
-                        raise RuntimeError(msg) from hf_e
+                    raise RuntimeError(f"Failed to load local HF dataset {dataset!r}: {e}") from e
             else:
                 print(f"[HFWindowDataset] Attempting to load from Hub: {dataset}")
                 try:
                     splits = get_dataset_split_names(dataset)
-                    split = "train" if "train" in splits else splits[0]
-                    self._ds = load_dataset(dataset, split=split)
+                    if selected_split not in splits:
+                        raise ValueError(f"dataset has no requested Silver split {selected_split!r}")
+                    self._ds = load_dataset(dataset, split=selected_split)
                 except Exception as e:
                     msg = (
                         f"Failed to load dataset '{dataset}' from Hugging Face Hub.\n"
                         f"Hub error: {e}\n"
                     )
                     raise RuntimeError(msg) from e
+        elif isinstance(dataset, DatasetDict):
+            self._ds = select_loaded(dataset)
         elif isinstance(dataset, HFDataset):
-            self._ds = dataset
+            self._ds = select_loaded(dataset)
         else:
             raise TypeError(f"Expected str or datasets.Dataset, got {type(dataset)}")
 
@@ -97,9 +121,15 @@ class HFWindowDataset(Dataset):
         self._norm_stats = norm_stats
 
         # Detect Odom, IMU, and Action column names and dimensions
-        self.odom_cols = [c for c in self._ds.column_names if c.startswith("odom_")]
-        self.imu_cols = [c for c in self._ds.column_names if c.startswith("imu_")]
-        self.act_cols = [c for c in self._ds.column_names if c.startswith("action_")]
+        def indexed_columns(prefix: str) -> list[str]:
+            return [
+                column for column in self._ds.column_names
+                if column.startswith(prefix) and column.removeprefix(prefix).isdigit()
+            ]
+
+        self.odom_cols = indexed_columns("odom_")
+        self.imu_cols = indexed_columns("imu_")
+        self.act_cols = indexed_columns("action_")
 
         # Handle delta-based schema (dx, dy...) vs indexed schema (odom_0, odom_1...)
         if not self.odom_cols:
@@ -163,6 +193,22 @@ class HFWindowDataset(Dataset):
     def __len__(self) -> int:
         return len(self._window_ids)
 
+    def compute_norm_stats(self, episode_ids=None) -> NormStats:
+        """Compute channel statistics over selected release windows."""
+        selected = self._window_ids if episode_ids is None else list(episode_ids)
+        row_indexes = [row for window_id in selected for row in self._window_rows[window_id]]
+        batch = self._ds[row_indexes]
+        odom = np.asarray([[batch[col][i] for col in self.odom_cols] for i in range(len(row_indexes))], dtype=np.float32)
+        imu = (
+            np.asarray([[batch[col][i] for col in self.imu_cols] for i in range(len(row_indexes))], dtype=np.float32)
+            if self.imu_cols else np.zeros((len(row_indexes), self.D_imu), dtype=np.float32)
+        )
+        action = (
+            np.asarray([[batch[col][i] for col in self.act_cols] for i in range(len(row_indexes))], dtype=np.float32)
+            if self.act_cols else odom[:, 7:13].copy()
+        )
+        return NormStats.from_arrays(odom, imu, action)
+
     def __getitem__(self, idx: int) -> dict[str, np.ndarray]:
         wid = self._window_ids[idx]
         row_indices = self._window_rows[wid]
@@ -202,8 +248,17 @@ class HFWindowDataset(Dataset):
                         imu = np.array([batch_data[col][i] for col in self.imu_cols], dtype=np.float32)
                     else:
                         imu = np.zeros((self.D_imu,), dtype=np.float32)
-                    collision = np.zeros((1,), dtype=np.float32)
-                    depth = np.zeros((1, self.img_size, self.img_size), dtype=np.float32)
+                    collision = np.array([
+                        batch_data["collision"][i] if "collision" in batch_data else 0.0
+                    ], dtype=np.float32)
+                    if "depth" in batch_data:
+                        depth_value = torch.as_tensor(batch_data["depth"][i], dtype=torch.float32)
+                        depth = torch.nn.functional.interpolate(
+                            depth_value[None, None], size=(self.img_size, self.img_size),
+                            mode="nearest",
+                        )[0].numpy()
+                    else:
+                        depth = np.zeros((1, self.img_size, self.img_size), dtype=np.float32)
                     return rgb, odom, imu, action, collision, depth
 
                 rgbs, odoms, imus, actions, collisions, depths = [], [], [], [], [], []
@@ -261,29 +316,43 @@ class HFWindowDataset(Dataset):
                     "collision": collisions, # (k, 1)
                     "state": torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)),  # (k, D_odom+D_imu+1)
                 }
+                for name in ("depth_valid", "imu_valid", "odom_valid", "action_valid", "collision_valid"):
+                    default_valid = name not in {"depth_valid", "collision_valid"}
+                    source = batch_data.get(name, [default_valid] * n_frames)
+                    output[name] = np.asarray([source[int(i)] for i in indices], dtype=bool)
+                if "timestamp_ns" in batch_data:
+                    output["timestamp_ns"] = np.asarray(
+                        [batch_data["timestamp_ns"][int(i)] for i in indices], dtype=np.int64
+                    )
+                output["window_id"] = wid
                 return output
-            # Default: return all frames in the window (non-sample_mode)
+            # Default: return all frames in the selected release window.
             images = batch_data["image"]
-            rgbs = np.stack([self._transform(img).numpy() if img is not None else np.zeros((3, self.img_size, self.img_size), dtype=np.float32) for img in images])
-            odoms = np.stack([[batch_data[col][i] for col in self.odom_cols] for i in range(n_frames)]).astype(np.float32)
-            if self.act_cols:
-                act = np.zeros((n, self.D_act), dtype=np.float32)
-                for i, col in enumerate(self.act_cols):
-                    act[:, i] = batch_data[col]
+            rgbs = np.stack([
+                self._transform(img).numpy() if img is not None
+                else np.zeros((3, self.img_size, self.img_size), dtype=np.float32)
+                for img in images
+            ])
+            odoms = np.asarray([
+                [batch_data[col][i] for col in self.odom_cols] for i in range(n_frames)
+            ], dtype=np.float32)
+            imus = (
+                np.asarray([[batch_data[col][i] for col in self.imu_cols] for i in range(n_frames)], dtype=np.float32)
+                if self.imu_cols else np.zeros((n_frames, self.D_imu), dtype=np.float32)
+            )
+            actions = (
+                np.asarray([[batch_data[col][i] for col in self.act_cols] for i in range(n_frames)], dtype=np.float32)
+                if self.act_cols else odoms[:, 7:13].copy()
+            )
+            collisions = np.asarray(batch_data.get("collision", [0.0] * n_frames), dtype=np.float32).reshape(n_frames, 1)
+            if "depth" in batch_data:
+                depth_values = np.asarray(batch_data["depth"], dtype=np.float32)
+                depths = torch.nn.functional.interpolate(
+                    torch.from_numpy(depth_values).unsqueeze(1),
+                    size=(self.img_size, self.img_size), mode="nearest",
+                ).numpy()
             else:
-                act = odom[:, 7:13].copy()  # lin_vel(3) + ang_vel(3)
-            all_act.append(act)
-
-            if self.imu_cols:
-                imu = np.zeros((n, self.D_imu), dtype=np.float32)
-                for i, col in enumerate(self.imu_cols):
-                    imu[:, i] = batch_data[col]
-            else:
-                # Derive action as delta to goal: action[t] = odom[-1] - odom[t]
-                actions = odoms[-1:] - odoms  # broadcast subtract last frame
-            imus = np.stack([[batch_data[col][i] for col in self.imu_cols] for i in range(n_frames)]).astype(np.float32) if self.imu_cols else np.zeros((n_frames, self.D_imu), dtype=np.float32)
-            collisions = np.zeros((n_frames, 1), dtype=np.float32)
-            depths = np.zeros((n_frames, 1, self.img_size, self.img_size), dtype=np.float32)
+                depths = np.zeros((n_frames, 1, self.img_size, self.img_size), dtype=np.float32)
             state_odom = odoms.copy()
             state_imu = imus.copy()
             state_collision = collisions.copy()
@@ -311,12 +380,27 @@ class HFWindowDataset(Dataset):
                 "collision": collisions,
                 "state": torch.from_numpy(np.concatenate([state_odom, state_imu, state_collision], axis=-1)),
             }
+            for name in ("depth_valid", "imu_valid", "odom_valid", "action_valid", "collision_valid"):
+                default_valid = name not in {"depth_valid", "collision_valid"}
+                output[name] = np.asarray(
+                    batch_data.get(name, [default_valid] * n_frames), dtype=bool
+                )
+            if "timestamp_ns" in batch_data:
+                output["timestamp_ns"] = np.asarray(batch_data["timestamp_ns"], dtype=np.int64)
+            output["window_id"] = wid
             return output
         except Exception as e:
             raise RuntimeError(f"HFWindowDataset.__getitem__({idx}): {e}") from e
 
 def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
     """Collate a list of window dicts into a :class:`SampleBatch`."""
+    def validity(name: str) -> torch.Tensor:
+        values = np.stack([
+            np.asarray(item.get(name, np.ones(len(item["rgb"]), dtype=bool)), dtype=bool)
+            for item in batch
+        ])
+        return torch.from_numpy(values).unsqueeze(-1)
+
     return SampleBatch(
         rgb=torch.from_numpy(np.stack([b["rgb"] for b in batch])),
         depth=torch.from_numpy(np.stack([b["depth"] for b in batch])),
@@ -324,6 +408,9 @@ def collate_hf(batch: List[dict[str, np.ndarray]]) -> SampleBatch:
         odom=torch.from_numpy(np.stack([b["odom"] for b in batch])),
         action=torch.from_numpy(np.stack([b["action"] for b in batch])),
         collision=torch.from_numpy(np.stack([b["collision"] for b in batch])),
+        depth_valid=validity("depth_valid"), imu_valid=validity("imu_valid"),
+        odom_valid=validity("odom_valid"), action_valid=validity("action_valid"),
+        collision_valid=validity("collision_valid"),
     )
 class EpisodeDataset(torch.utils.data.Dataset):
     """Wraps HFWindowDataset(sample_mode=False) to return full episodes as
@@ -337,9 +424,7 @@ class EpisodeDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         d = self._ds[idx]  # dict: "rgb", "odom", "imu", "action", "collision", "state"
-        odom = d["odom"] if isinstance(d["odom"], torch.Tensor) else torch.from_numpy(d["odom"])
         imu  = d["imu"]  if isinstance(d["imu"],  torch.Tensor) else torch.from_numpy(d["imu"])
-        coll = d["collision"] if isinstance(d["collision"], torch.Tensor) else torch.from_numpy(d["collision"])
         obs = {
             "visual": d["rgb"] if isinstance(d["rgb"], torch.Tensor) else torch.from_numpy(d["rgb"]),
             "proprio": imu,  # IMU only (6/10-dim), consistent with collate_dinowm

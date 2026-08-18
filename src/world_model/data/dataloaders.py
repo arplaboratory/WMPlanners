@@ -94,16 +94,31 @@ class NPZEpisodeDataset(Dataset):
                 out['depth'] = depth_t.squeeze(1).numpy()
             else:
                 out['depth'] = depth
+            out['depth_valid'] = np.asarray(
+                ep['depth_valid'][sl] if 'depth_valid' in ep
+                else np.ones(self.window, dtype=bool), dtype=bool,
+            )
         else:
             out['depth'] = np.zeros((self.window, self.H, self.W), dtype=np.float32)
+            out['depth_valid'] = np.zeros(self.window, dtype=bool)
 
         out['imu'] = _as_float32(ep['imu'][sl])
         out['odom'] = _as_float32(ep['odom'][sl])
         out['action'] = _as_float32(ep['action'][sl])
+        for name in ('imu', 'odom', 'action'):
+            out[f'{name}_valid'] = np.asarray(
+                ep[f'{name}_valid'][sl] if f'{name}_valid' in ep
+                else np.ones(self.window, dtype=bool), dtype=bool,
+            )
         if 'collision' in ep:
             out['collision'] = _as_float32(ep['collision'][sl])
+            out['collision_valid'] = np.asarray(
+                ep['collision_valid'][sl] if 'collision_valid' in ep
+                else np.ones(self.window, dtype=bool), dtype=bool,
+            )
         else:
             out['collision'] = np.zeros((self.window,), dtype=np.float32)
+            out['collision_valid'] = np.zeros(self.window, dtype=bool)
         return out
 
 def collate_npz(batch: List[Dict[str, np.ndarray]]) -> SampleBatch:
@@ -122,4 +137,16 @@ def collate_npz(batch: List[Dict[str, np.ndarray]]) -> SampleBatch:
     odom_t = torch.from_numpy(odom).float()
     action_t = torch.from_numpy(action).float()
     collision_t = torch.from_numpy(collision).unsqueeze(-1).float()
-    return SampleBatch(rgb=rgb_t, depth=depth_t, imu=imu_t, odom=odom_t, action=action_t, collision=collision_t)
+    def validity(name: str) -> torch.Tensor:
+        values = np.stack([
+            np.asarray(item.get(name, np.ones(item["rgb"].shape[0], dtype=bool)), dtype=bool)
+            for item in batch
+        ])
+        return torch.from_numpy(values).unsqueeze(-1)
+
+    return SampleBatch(
+        rgb=rgb_t, depth=depth_t, imu=imu_t, odom=odom_t, action=action_t,
+        collision=collision_t, depth_valid=validity("depth_valid"),
+        imu_valid=validity("imu_valid"), odom_valid=validity("odom_valid"),
+        action_valid=validity("action_valid"), collision_valid=validity("collision_valid"),
+    )
