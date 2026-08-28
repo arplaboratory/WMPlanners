@@ -45,6 +45,8 @@ def compute_episode_odom_delta(odom: np.ndarray) -> np.ndarray | None:
     try:
         r_start = Rotation.from_quat(quat_start)
         r_end = Rotation.from_quat(quat_end)
+        # Work with NumPy arrays so the position and orientation deltas can
+        # be computed directly for this episode.
         dp_world = pos_end - pos_start
         dp_body = r_start.inv().apply(dp_world)
         r_delta = r_start.inv() * r_end
@@ -261,6 +263,12 @@ def compute_descriptors(
     For encoder="none":
       descriptor = concat(mean(action), std(action), odom_delta)
       shape = (2*D_act + 6,)
+
+    The motion portion compares the robot pose at the start and end of an
+    episode, then expresses that change in the robot's starting body frame:
+    ``[dx, dy, dz, droll, dpitch, dyaw]``.  This lets diversity selection
+    distinguish trajectories by their dynamics without requiring a visual
+    encoder.
     """
     if encoder != "none":
         raise NotImplementedError(
@@ -310,6 +318,14 @@ def compute_descriptors(
 
 # ---------------------------------------------------------------------------
 # FPS core
+"""
+Farthest Point Sampling (FPS) is a way to select a small set of examples that are spread out across a dataset.
+It works like this:
+    Pick an initial example.
+    Measure every remaining example’s distance from the selected set.
+    Add the example that is farthest away.
+    Repeat until you have enough examples.
+"""
 # ---------------------------------------------------------------------------
 
 def _farthest_point_sampling(descriptors: np.ndarray, target_count: int) -> List[int]:
@@ -327,6 +343,7 @@ def _farthest_point_sampling(descriptors: np.ndarray, target_count: int) -> List
     while len(selected) < target_count:
         next_idx = int(np.argmax(min_dists))
         if min_dists[next_idx] < 0:
+            # If the samples are less than the target count, we may run out of valid points to select.
             break
         selected.append(next_idx)
         new_dists = np.linalg.norm(descriptors - descriptors[next_idx], axis=1)

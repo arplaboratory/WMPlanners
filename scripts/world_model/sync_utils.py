@@ -15,6 +15,10 @@ def nearest_merge(
     Assumes *src_df* has a ``timestamp_ns`` column. All other columns are
     treated as value columns and returned as an ``(N, D)`` float32 array.
 
+    This is useful when sensor streams arrive at different rates: it aligns
+    steering, throttle, pose, and other measurements to camera-frame
+    timestamps.
+
     Parameters
     ----------
     target_ts : (N,) int64 array of target timestamps in nanoseconds.

@@ -124,7 +124,7 @@ def _mark_gaps(timestamps: np.ndarray, gap_factor: float = 2.0) -> np.ndarray:
         return gap_before
     dt = np.diff(timestamps.astype(np.float64))
     median_dt = np.median(dt)
-    threshold = gap_factor * median_dt
+    threshold = gap_factor * median_dt # Index 0 is never marked.
     gap_before[1:] = dt > threshold
     return gap_before
 
@@ -166,6 +166,21 @@ def _nearest_gap_ns(target_ts: np.ndarray, src_df: pd.DataFrame | None) -> np.nd
 
 # ---------------------------------------------------------------------------
 # Core build function
+"""
+An episode is one fixed-length, time-ordered chunk of robot data.
+In this pipeline, build_episodes.py creates an episode by:
+Taking a continuous run of valid camera frames—no large timestamp gaps, no idle section, and synchronized sensor data.
+Selecting episode_len frames, optionally every frame_skip frames.
+Saving the aligned data for those frames into one ep_XXXXX.npz file:RGB images
+depth images
+IMU readings
+odometry / robot pose and velocity
+action / command values
+
+So with episode_len=50 and frame_skip=6, an episode contains 50 saved timesteps sampled from a 300-frame span of continuous robot operation.
+The episode is the unit later scored, selected, uploaded, and used for world-model training.
+"""
+
 # ---------------------------------------------------------------------------
 
 def build_episodes(
@@ -278,6 +293,15 @@ def build_episodes(
         idle = _mark_idle(speed, min_speed, idle_persistence)
 
         # ── 5. Gap detection ──────────────────────────────────────────────
+        # _mark_gaps finds unusually large time gaps between consecutive camera frames.
+        # It:
+        #   - Computes the time difference (dt) between each pair of timestamps.
+        #   - Finds the typical interval using median(dt).
+        #   - Marks frame i as having a gap before it when:
+        #   - dt > gap_factor * median(dt)
+        # With the default gap_factor=2.0, a frame is marked if it arrived more than twice as late as the typical frame interval.
+        # Example: if camera frames normally arrive every 33 ms, any interval above 66 ms is a gap. 
+        # The frame after that interval is marked invalid, preventing an episode from spanning missing/discontinuous data.
         gap_before = _mark_gaps(image_ts, gap_factor=image_gap_factor)
 
         # ── 6. Valid mask + contiguous runs ───────────────────────────────
@@ -294,6 +318,9 @@ def build_episodes(
         runs = _find_valid_runs(valid)
 
         # ── 7. Sync all sensors to image timestamps (once for the bag) ────
+        # Sensor streams often have different sampling rates.  Aligning them
+        # here ensures every saved image frame has its corresponding action,
+        # pose, and IMU values.
         if odom_df is not None:
             odom_sync = nearest_merge(image_ts, odom_df, max_gap_ns=max_gap_ns)
             sensor_dims["odom"] = odom_sync.shape[1]
@@ -356,7 +383,8 @@ def build_episodes(
                 if not ok:
                     continue
 
-                # Sensor arrays: pick the same subsampled indices
+                # Sensor arrays: pick the same subsampled indices so RGB,
+                # depth, action, odometry, and IMU remain frame-aligned.
                 idx_arr = np.array(frame_indices)
                 out_file = out_path / f"ep_{ep_count:05d}.npz"
                 np.savez_compressed(
