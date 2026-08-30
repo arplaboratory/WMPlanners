@@ -13,7 +13,7 @@ from datetime import datetime
 project = "ds-ga-3001"
 author = "Long Quang"
 copyright = f"{datetime.now():%Y}, {author}"
-release = "1.0.0"
+release = "1.2.0"
 
 extensions = [
     "autoapi.extension",
