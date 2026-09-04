@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -25,24 +26,28 @@ class GoldWindowDataset(Dataset):
         *,
         split: str = "train",
         img_size: Optional[int] = None,
+        recording_cache_size: int = 2,
     ) -> None:
         value = Path(dataset).expanduser()
         self.manifest_path = value if value.is_file() else value / "dataset_manifest.json"
         self.root = self.manifest_path.parent.resolve()
         self.manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
-        if self.manifest.get("schema_version") != 1:
+        if self.manifest.get("schema_version") not in {1, 2}:
             raise ValueError(f"unsupported wm_planner Gold schema: {self.manifest.get('schema_version')}")
+        if self.manifest.get("consumer_format") != "wm_planner":
+            raise ValueError("Gold manifest is not a wm_planner product")
         parquet = __import__("pyarrow.parquet", fromlist=["read_table"])
-        frames_path = self.root / self.manifest["files"]["frames"]
+        self.frames_path = self.root / self.manifest["files"]["frames"]
         windows_path = self.root / self.manifest["files"]["windows"]
-        frames = parquet.read_table(str(frames_path)).to_pylist()
         self.windows = [
-            row for row in parquet.read_table(str(windows_path)).to_pylist()
+            row for row in parquet.read_table(
+                str(windows_path), filters=[("split", "=", split)]
+            ).to_pylist()
             if row["split"] == split
         ]
-        self.frames = {
-            (str(row["recording_id"]), int(row["frame_index"])): row for row in frames
-        }
+        self._parquet = parquet
+        self._frame_cache: OrderedDict[str, dict[int, dict]] = OrderedDict()
+        self.recording_cache_size = max(1, int(recording_cache_size))
         self.img_size = img_size
         dimensions = self.manifest["sensor_dimensions"]
         self.D_imu = int(dimensions["imu"])
@@ -52,6 +57,20 @@ class GoldWindowDataset(Dataset):
         self.action_dim = self.D_act
         if not self.windows:
             raise ValueError(f"Gold dataset has no windows in split {split!r}")
+
+    def _recording_frames(self, recording_id: str) -> dict[int, dict]:
+        cached = self._frame_cache.pop(recording_id, None)
+        if cached is None:
+            rows = self._parquet.read_table(
+                str(self.frames_path), filters=[("recording_id", "=", recording_id)]
+            ).to_pylist()
+            cached = {int(row["frame_index"]): row for row in rows}
+            if len(cached) != len(rows):
+                raise ValueError(f"duplicate frame indexes in recording {recording_id!r}")
+        self._frame_cache[recording_id] = cached
+        while len(self._frame_cache) > self.recording_cache_size:
+            self._frame_cache.popitem(last=False)
+        return cached
 
     def __len__(self) -> int:
         return len(self.windows)
@@ -91,7 +110,12 @@ class GoldWindowDataset(Dataset):
         first = int(window["first_frame_index"])
         length = int(window["length"])
         step = int(window["frame_step"])
-        rows = [self.frames[(recording_id, first + offset * step)] for offset in range(length)]
+        frames = self._recording_frames(recording_id)
+        frame_indices = [first + offset * step for offset in range(length)]
+        try:
+            rows = [frames[value] for value in frame_indices]
+        except KeyError as exc:
+            raise ValueError(f"window {window['window_id']!r} references a missing frame") from exc
         rgb = np.stack([self._rgb(str(row["rgb_path"])) for row in rows])
         shape = rgb.shape[1:3]
         return {
@@ -107,6 +131,10 @@ class GoldWindowDataset(Dataset):
             "action": np.asarray([row["action"] for row in rows], dtype=np.float32),
             "collision": np.asarray([row.get("collision", 0.0) for row in rows], dtype=np.float32),
             "timestamp_ns": np.asarray([row["timestamp_ns"] for row in rows], dtype=np.int64),
+            "window_id": str(window["window_id"]),
+            "recording_id": recording_id,
+            "frame_indices": np.asarray(frame_indices, dtype=np.int64),
+            "split": str(window["split"]),
         }
 
 

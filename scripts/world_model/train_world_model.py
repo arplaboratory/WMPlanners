@@ -11,12 +11,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from world_model.data import (
-    GoldWindowDataset,
-    HFWindowDataset,
-    NPZEpisodeDataset,
-    collate_gold,
-    collate_hf,
-    collate_npz,
+    collate_for_dataset,
+    open_window_dataset,
 )
 from world_model.architecture import WorldModel
 from world_model.engine.trainer import TrainConfig, rollout_loss
@@ -102,17 +98,16 @@ class Trainer:
         elif args.wandb and self.main_process:
             print("[WARN] --wandb enabled but WANDB_API_KEY not set. Logging disabled.")
 
-        if args.dataset_type == 'hf':
-            self.ds = HFWindowDataset(args.data_path, img_size=args.img_size, split=args.split)
-            self.collate_fn = collate_hf
-        elif args.dataset_type == 'npz':
-            self.ds = NPZEpisodeDataset(args.data_path, window=args.horizon + 1, img_size=args.img_size)
-            self.collate_fn = collate_npz
-        else:
-            self.ds = GoldWindowDataset(
-                args.data_path, split=args.split, img_size=args.img_size
-            )
-            self.collate_fn = collate_gold
+        self.ds = open_window_dataset(
+            dataset_type=args.dataset_type, path=args.data_path, split=args.split,
+            image_size=args.img_size, window_size=args.num_hist + args.horizon,
+        )
+        self.collate_fn = collate_for_dataset(self.ds)
+        self.dataset_provenance = {
+            key: self.ds.manifest.get(key)
+            for key in ("dataset_id", "dataset_hash", "release_id", "release_hash", "recipe_sha256")
+            if hasattr(self.ds, "manifest") and self.ds.manifest.get(key) is not None
+        }
 
         sampler = None
         shuffle = True
@@ -154,7 +149,10 @@ class Trainer:
                              find_unused_parameters=find_unused)
 
         self.opt = torch.optim.AdamW(self.model.parameters(), lr=args.lr, weight_decay=1e-4)
-        self.cfg = TrainConfig(device=args.device, lr=args.lr, horizon=args.horizon)
+        self.cfg = TrainConfig(
+            device=args.device, lr=args.lr, horizon=args.horizon,
+            num_hist=args.num_hist,
+        )
 
         self.start_epoch = 0
         checkpoint_path = args.resume
@@ -244,6 +242,7 @@ class Trainer:
                         'act_dim': self.ds.D_act,
                         'state_dim': min(6, self.ds.D_odom),
                     },
+                    'dataset_provenance': self.dataset_provenance,
                 }
                 torch.save(ckpt, os.path.join(args.out_dir, f'epoch_{epoch:03d}.pt'))
                 torch.save(ckpt, os.path.join(args.out_dir, 'latest.pt'))

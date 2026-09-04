@@ -325,6 +325,13 @@ class HFWindowDataset(Dataset):
                         [batch_data["timestamp_ns"][int(i)] for i in indices], dtype=np.int64
                     )
                 output["window_id"] = wid
+                if "recording_id" in batch_data:
+                    output["recording_id"] = str(batch_data["recording_id"][0])
+                if "source_frame_index" in batch_data:
+                    output["frame_indices"] = np.asarray(
+                        [batch_data["source_frame_index"][int(i)] for i in indices],
+                        dtype=np.int64,
+                    )
                 return output
             # Default: return all frames in the selected release window.
             images = batch_data["image"]
@@ -388,6 +395,12 @@ class HFWindowDataset(Dataset):
             if "timestamp_ns" in batch_data:
                 output["timestamp_ns"] = np.asarray(batch_data["timestamp_ns"], dtype=np.int64)
             output["window_id"] = wid
+            if "recording_id" in batch_data:
+                output["recording_id"] = str(batch_data["recording_id"][0])
+            if "source_frame_index" in batch_data:
+                output["frame_indices"] = np.asarray(
+                    batch_data["source_frame_index"], dtype=np.int64
+                )
             return output
         except Exception as e:
             raise RuntimeError(f"HFWindowDataset.__getitem__({idx}): {e}") from e

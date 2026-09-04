@@ -380,7 +380,10 @@ python -m scripts.world_model.data_pipeline.hf_upload \
 
 `wm-dataset` is the consumer-side executable used by `rerun_curation gold
 build`. Its canonical product stores each synchronized RGB/depth frame once,
-with typed Zstd `frames.parquet` and `windows.parquet` indexes. Train directly
+with typed Zstd `recordings.parquet`, `frames.parquet`, `windows.parquet`, and
+`assets.parquet` indexes. Gold schema v2 uses portable CAS keys, embeds dataset
+identity and semantic provenance, and publishes atomically after all recordings
+verify. Train directly
 without creating overlapping NPZ episode copies:
 
 ```bash
@@ -390,7 +393,23 @@ python scripts/world_model/train_world_model.py \
 ```
 
 NPZ and Hugging Face views remain available through `rerun_curation gold
-export`; both preserve full dense depth and the release split assignments.
+export`; both preserve full dense depth and the release split assignments. New
+NPZ exports contain exactly one file per canonical Gold window; the loader does
+not subdivide those files again. Existing legacy NPZ/HF layouts remain readable.
+
+For host, Docker, and Apptainer execution through the meta workspace, the WM
+stack installs the lightweight `rerun_curation` orchestration CLI alongside
+`wm-dataset`. The dedicated GAS experiment binds Bronze read-only at
+`/data/bronze` and Gold read-write at `/data/gold`:
+
+```bash
+"$GAS" experiment wm_gold_hpc-default_params \
+  --output-dir "$PWD/outputs/gas/wm-gold-$(date +%Y%m%d-%H%M%S)" \
+  --set gold_release="$GAS_DATA_DIR/silver/releases/wm-warty-v3.json" \
+  --set gold_bronze_root="$GAS_DATA_DIR" \
+  --set gold_output="$GAS_DATA_DIR/gold/wm-warty-v3" \
+  --set gold_workers=4
+```
 
 ### CLI Reference
 

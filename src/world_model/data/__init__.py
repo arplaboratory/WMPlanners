@@ -15,6 +15,8 @@ _EXPORTS = {
     "collate_hf": ("world_model.data.hf_datasets", "collate_hf"),
     "collate_dinowm": ("world_model.data.hf_datasets", "collate_dinowm"),
     "EpisodeDataset": ("world_model.data.hf_datasets", "EpisodeDataset"),
+    "open_window_dataset": ("world_model.data.factory", "open_window_dataset"),
+    "collate_for_dataset": ("world_model.data.factory", "collate_for_dataset"),
 }
 
 __all__ = list(_EXPORTS)

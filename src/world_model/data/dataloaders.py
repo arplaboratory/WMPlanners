@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import json
 from typing import Dict, Optional, List
 import numpy as np
 import torch
@@ -23,7 +24,15 @@ class NPZEpisodeDataset(Dataset):
       action: (T,D_act) float32
       collision: (T,) float32 [optional]
     """
-    def __init__(self, data_dir: str, window: int = 16, stride: int = 1, img_size: Optional[int] = None):
+    def __init__(self, data_dir: str, window: int = 16, stride: int = 1, img_size: Optional[int] = None, split: str = "train"):
+        export_manifest = os.path.join(data_dir, "export_manifest.json")
+        self.canonical_windows = False
+        if os.path.isfile(export_manifest):
+            with open(export_manifest, encoding="utf-8") as stream:
+                export = json.load(stream)
+            if export.get("format") == "npz" and export.get("window_semantics") == "canonical":
+                data_dir = os.path.join(data_dir, split)
+                self.canonical_windows = True
         self.data_dir = data_dir
         self.window = window
         self.stride = stride
@@ -57,8 +66,11 @@ class NPZEpisodeDataset(Dataset):
         for file_idx, path in enumerate(self.files):
             ep = np.load(path, mmap_mode='r')
             T_len = ep['rgb'].shape[0]
-            for start in range(0, T_len - self.window, self.stride):
-                self._windows.append((file_idx, start))
+            if self.canonical_windows:
+                self._windows.append((file_idx, None))
+            else:
+                for start in range(0, T_len - self.window + 1, self.stride):
+                    self._windows.append((file_idx, start))
         if not self._windows:
             raise ValueError(
                 f"No valid windows found in {data_dir} with window={window}, stride={stride}. "
@@ -72,7 +84,8 @@ class NPZEpisodeDataset(Dataset):
         file_idx, start = self._windows[idx]
         ep = np.load(self.files[file_idx], mmap_mode='r')
         rgb = ep['rgb']  # (T,H,W,3) uint8
-        sl = slice(start, start + self.window)
+        sl = slice(None) if start is None else slice(start, start + self.window)
+        output_length = rgb.shape[0] if start is None else self.window
 
         out = {}
         if self._transform is not None:
@@ -96,11 +109,11 @@ class NPZEpisodeDataset(Dataset):
                 out['depth'] = depth
             out['depth_valid'] = np.asarray(
                 ep['depth_valid'][sl] if 'depth_valid' in ep
-                else np.ones(self.window, dtype=bool), dtype=bool,
+                else np.ones(output_length, dtype=bool), dtype=bool,
             )
         else:
-            out['depth'] = np.zeros((self.window, self.H, self.W), dtype=np.float32)
-            out['depth_valid'] = np.zeros(self.window, dtype=bool)
+            out['depth'] = np.zeros((output_length, self.H, self.W), dtype=np.float32)
+            out['depth_valid'] = np.zeros(output_length, dtype=bool)
 
         out['imu'] = _as_float32(ep['imu'][sl])
         out['odom'] = _as_float32(ep['odom'][sl])
@@ -108,17 +121,23 @@ class NPZEpisodeDataset(Dataset):
         for name in ('imu', 'odom', 'action'):
             out[f'{name}_valid'] = np.asarray(
                 ep[f'{name}_valid'][sl] if f'{name}_valid' in ep
-                else np.ones(self.window, dtype=bool), dtype=bool,
+                else np.ones(output_length, dtype=bool), dtype=bool,
             )
         if 'collision' in ep:
             out['collision'] = _as_float32(ep['collision'][sl])
             out['collision_valid'] = np.asarray(
                 ep['collision_valid'][sl] if 'collision_valid' in ep
-                else np.ones(self.window, dtype=bool), dtype=bool,
+                else np.ones(output_length, dtype=bool), dtype=bool,
             )
         else:
-            out['collision'] = np.zeros((self.window,), dtype=np.float32)
-            out['collision_valid'] = np.zeros(self.window, dtype=bool)
+            out['collision'] = np.zeros((output_length,), dtype=np.float32)
+            out['collision_valid'] = np.zeros(output_length, dtype=bool)
+        for name in ('timestamp_ns', 'frame_indices'):
+            if name in ep:
+                out[name] = np.asarray(ep[name][sl])
+        for name in ('window_id', 'recording_id', 'split'):
+            if name in ep:
+                out[name] = str(np.asarray(ep[name]).item())
         return out
 
 def collate_npz(batch: List[Dict[str, np.ndarray]]) -> SampleBatch:
