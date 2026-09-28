@@ -26,10 +26,10 @@ The Parquet tables may contain image paths and array-valued sensor columns.
 
 The same trainer supports CNN or DINOv2 with RSSM. Set `--backbone cnn` on that command for CNN + RSSM. The visual encoder can also be `vjepa2` in the standard architecture. `--dynamics_type mlp` selects the non-RSSM dynamics path.
 
-For a Hugging Face dataset and a frozen DINOv2 encoder:
+For a Hugging Face dataset and a frozen DINOv2 encoder, replace `<hf_repo>` with your dataset ID:
 ```bash
 python scripts/world_model/train_wm.py --method wm \
-  --data_path lquan9/collect1 --dataset_type hf \
+  --data_path '<hf_repo>' --dataset_type hf \
   --backbone dinov2 --backbone_name dinov2_vitb14 \
   --freeze_backbone --dynamics_type rssm \
   --epochs 20 --batch_size 64 --out_dir runs/dino_rssm
@@ -42,7 +42,7 @@ For the existing two-GPU DDP setup, the underlying trainer accepts `--ddp`:
 ```bash
 torchrun --standalone --nproc_per_node=2 \
   scripts/world_model/train_world_model.py --ddp \
-  --data_path lquan9/collect1 --backbone dinov2 \
+  --data_path '<hf_repo>' --backbone dinov2 \
   --backbone_name dinov2_vitb14 --freeze_backbone \
   --epochs 20 --batch_size 64 --lr 3e-4 \
   --horizon 8 --img_size 224 --wandb --out_dir runs/dinov2
@@ -56,7 +56,7 @@ JEPA-lite is the `wm` trainer with a latent matching objective inspired by joint
 
 ```bash
 python scripts/world_model/train_wm.py --method wm \
-  --wm_mode jepa-lite --data_path lquan9/collect1 \
+  --wm_mode jepa-lite --data_path '<hf_repo>' \
   --backbone cnn --dynamics_type mlp \
   --epochs 20 --batch_size 64 --lr 3e-4 \
   --horizon 8 --img_size 224 --out_dir runs/jepa_lite_c1_512
@@ -67,15 +67,15 @@ The same objective accepts the DINOv2 backbone using `--backbone dinov2 --backbo
 ```bash
 python scripts/world_model/train_state_head_decoder.py \
   --checkpoint runs/jepa_lite_c1_512/latest.pt \
-  --dataset lquan9/collect1 --epochs 5 --batch_size 16 --lr 1e-3
+  --dataset '<hf_repo>' --epochs 5 --batch_size 16 --lr 1e-3
 
 python scripts/world_model/eval_mpc_replay.py \
   --checkpoint runs/jepa_lite_c1_512/latest_with_state_head.pt \
-  --dataset lquan9/collect1_unfiltered --horizon 16 --num_episodes 50
+  --dataset '<hf_repo>' --horizon 16 --num_episodes 50
 
 python scripts/world_model/eval_mpc_recovery_replay.py \
   --checkpoint runs/jepa_lite_c1_512/latest_with_state_head.pt \
-  --dataset lquan9/collect1_unfiltered --horizon 16 --num_episodes 10
+  --dataset '<hf_repo>' --horizon 16 --num_episodes 10
 ```
 
 ---
@@ -86,7 +86,7 @@ DinoWM {cite:p}`zhou2024dinowm` uses a frozen DINOv2 encoder and a ViT latent pr
 
 ```bash
 WANDB_MODE=disabled python scripts/world_model/train_wm.py \
-  --method dinowm --data_path lquan9/collect1 \
+  --method dinowm --data_path '<hf_repo>' \
   --epochs 10 --out_dir runs/dinowm
 ```
 

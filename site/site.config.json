@@ -15,8 +15,12 @@
     "image": "",
     "twitter_card": "summary"
   },
+  "authors": [
+    {"name": "Authors removed for anonymous submission."}
+  ],
   "links": [
     {"label": "Documentation", "url": "./docs/index.html", "icon": "fas fa-book"},
+    {"label": "arXiv Paper (coming soon)", "url": "", "icon": "fas fa-file-alt"},
     {"label": "Source code", "url": "https://github.com/lquan9/wm_planner", "icon": "fab fa-github"}
   ],
   "sections": [

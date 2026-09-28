@@ -3,8 +3,8 @@
 from datetime import datetime
 
 project = "World Model Planners"
-author = "Long Quang"
-copyright = f"{datetime.now():%Y}, {author}"
+author = "Anonymous"
+copyright = f"{datetime.now():%Y}"
 release = "1.0.0"
 
 extensions = [

@@ -4,7 +4,7 @@ Run these commands from the local workspace shown below. The repository is the P
 
 ## Python workspace setup
 
-Refer to the [README Quick Start](https://github.com/lquan9/wm_planner#quick-start) for workspace setup instructions.
+For workspace setup, follow the Quick Start in the repository README, available through the Source code link on the <a href="../index.html">project homepage</a>.
 
 ## Build the ROS 2 wrapper
 

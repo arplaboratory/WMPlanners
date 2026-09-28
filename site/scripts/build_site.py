@@ -273,15 +273,21 @@ def render_links(links: list[dict[str, Any]]) -> str:
         if not link.get("enabled", True):
             continue
         url = link.get("url", "")
+        icon = f'<span class="icon"><i class="{esc(link.get("icon", "fas fa-link"))}" aria-hidden="true"></i></span>'
+        label = f'<span>{esc(link.get("label", "Link"))}</span>'
         if not url:
+            buttons.append(
+                '<span class="link-block">'
+                '<span class="button is-normal is-rounded is-dark placeholder-link" aria-disabled="true">'
+                f'{icon}{label}</span></span>'
+            )
             continue
         external = url.startswith(("http://", "https://"))
         target = ' target="_blank" rel="noopener noreferrer"' if external else ""
         buttons.append(
             '<span class="link-block">'
             f'<a href="{esc(url)}" class="external-link button is-normal is-rounded is-dark"{target}>'
-            f'<span class="icon"><i class="{esc(link.get("icon", "fas fa-link"))}" aria-hidden="true"></i></span>'
-            f'<span>{esc(link.get("label", "Link"))}</span></a></span>'
+            f'{icon}{label}</a></span>'
         )
     return "".join(buttons)
 
