@@ -109,6 +109,16 @@ echo \"Venv Python: \$(\$VENV_PY --version)\"
 
 echo \"Installing wm_planner into \$VENV...\"
 uv pip install --python \"\$VENV_PY\" --no-cache-dir setuptools wheel hatchling editables
+# On Jetson (aarch64) pre-install PyTorch from NVIDIA JetPack index before
+# resolving the rest of the deps (PyPI torch won't work on ARM)
+if [ "\$(uname -m)" = "aarch64" ]; then
+    JP_TORCH_INDEX="\${JP_TORCH_INDEX:-https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/}"
+    echo "[Jetson] Pre-installing PyTorch from \$JP_TORCH_INDEX"
+    uv pip install --python "\$VENV_PY" \
+        --index-url "\$JP_TORCH_INDEX" \
+        "torch>=2.3" "torchvision" --no-deps || \
+        echo "[WARN] Jetson torch install failed — falling back to uv"
+fi
 uv pip install --python \"\$VENV_PY\" \
     --no-cache-dir \
     --no-build-isolation \
