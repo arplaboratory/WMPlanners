@@ -4,8 +4,9 @@
 
 ## Standard WorldModel: CNN or DINOv2, MLP or RSSM
 
-A local CNN run with generated NPZ data:
+### Example data loading options:
 
+A local CNN run with generated NPZ data:
 ```bash
 python scripts/world_model/make_toy_dataset.py --out_dir data/toy --episodes 200
 python scripts/world_model/train_wm.py --method wm \
@@ -14,16 +15,18 @@ python scripts/world_model/train_wm.py --method wm \
   --epochs 20 --out_dir runs/cnn
 ```
 
+A local CNN run with generated parquet data (`frames.parquet` and `windows.parquet`):
 ```bash
 python scripts/world_model/train_wm.py --method wm \
   --data_path /path/to/parquet_dataset --dataset_type hf \
   --backbone cnn --dynamics_type rssm \
   --epochs 20 --out_dir runs/wm
 ```
+The Parquet tables may contain image paths and array-valued sensor columns.
 
-`hf` accepts a Hub ID, saved Hugging Face rows, or a local directory with `frames.parquet` and `windows.parquet`. Local tables use one `ParquetWindowDataset` reader. The Parquet tables may contain image paths and array-valued sensor columns, whereas Hub rows may embed images and numbered sensor columns.
+The same trainer supports CNN or DINOv2 with RSSM. Set `--backbone cnn` on that command for CNN + RSSM. The visual encoder can also be `vjepa2` in the standard architecture. `--dynamics_type mlp` selects the non-RSSM dynamics path.
 
-The same trainer supports CNN or DINOv2 with RSSM. For a Hugging Face dataset and a frozen DINOv2 encoder:
+For a Hugging Face dataset and a frozen DINOv2 encoder:
 ```bash
 python scripts/world_model/train_wm.py --method wm \
   --data_path lquan9/collect1 --dataset_type hf \
@@ -31,8 +34,9 @@ python scripts/world_model/train_wm.py --method wm \
   --freeze_backbone --dynamics_type rssm \
   --epochs 20 --batch_size 64 --out_dir runs/dino_rssm
 ```
+Hub rows may embed images and numbered sensor columns. `hf` accepts a Hub ID.
 
-Set `--backbone cnn` on that command for CNN + RSSM. The visual encoder can also be `vjepa2` in the standard architecture. `--dynamics_type mlp` selects the non-RSSM dynamics path.
+---
 
 For the existing two-GPU DDP setup, the underlying trainer accepts `--ddp`:
 ```bash
@@ -44,6 +48,8 @@ torchrun --standalone --nproc_per_node=2 \
   --horizon 8 --img_size 224 --wandb --out_dir runs/dinov2
 ```
 
+---
+
 ## JEPA-lite and state decoder
 
 JEPA-lite is the `wm` trainer with a latent matching objective inspired by joint-embedding predictive architectures {cite:p}`assran2023ijepa`.
@@ -53,7 +59,7 @@ python scripts/world_model/train_wm.py --method wm \
   --wm_mode jepa-lite --data_path lquan9/collect1 \
   --backbone cnn --dynamics_type mlp \
   --epochs 20 --batch_size 64 --lr 3e-4 \
-  --horizon 8 --img_size 512 --out_dir runs/jepa_lite_c1_512
+  --horizon 8 --img_size 224 --out_dir runs/jepa_lite_c1_512
 ```
 
 The same objective accepts the DINOv2 backbone using `--backbone dinov2 --backbone_name dinov2_vitb14 --freeze_backbone`. A trained JEPA-lite checkpoint can be given to the state-decoder and replay MPC scripts:
@@ -72,6 +78,8 @@ python scripts/world_model/eval_mpc_recovery_replay.py \
   --dataset lquan9/collect1_unfiltered --horizon 16 --num_episodes 10
 ```
 
+---
+
 ## DinoWM
 
 DinoWM {cite:p}`zhou2024dinowm` uses a frozen DINOv2 encoder and a ViT latent predictor. The trainer takes CLI flags, including a required data path:
@@ -84,16 +92,23 @@ WANDB_MODE=disabled python scripts/world_model/train_wm.py \
 
 For a local frames/windows Parquet dataset, use `--data_path /path/to/dataset` with the same command. A separate `val` split is used when available.
 
-Checkpoints are written in `runs/dinowm/checkpoints/` as `model_latest.pth` and numbered epoch files. The options `--frameskip`, `--num_hist`, `--num_pred`, `--encoder`, and `--encoder_name` control the sequence and visual encoder. For image reconstruction, add `--has_decoder --train_decoder` and choose `--decoder_type vqvae` or `transposed_conv`. Image metrics work with the core dependencies; install `.[decoder]` to request optional LPIPS scores from `world_model.metrics.eval_images(..., include_lpips=True)`. `configs/dino-wm/trial.yaml` records an earlier configuration, while the current trainer uses argparse flags.
+The options `--frameskip`, `--num_hist`, `--num_pred`, `--encoder`, and `--encoder_name` control DinoWM's sequence and visual encoder. For image reconstruction, add `--has_decoder --train_decoder` and choose `--decoder_type vqvae` or `transposed_conv`. Image metrics work with the core dependencies; install `.[decoder]` to request optional LPIPS scores from `world_model.metrics.eval_images(..., include_lpips=True)`. `configs/dino-wm/trial.yaml` records an earlier configuration; the current trainer uses argparse flags.
 
-## Evaluation and key options
+## Checkpoints and evaluation
 
-The standard trainer writes `latest.pt` after every epoch and `epoch_NNN.pt` every `--save_every` epochs (default 10), including the final epoch. DinoWM writes `model_latest.pth` and `model_N.pth` every `--save_every_x_epoch` epochs (default 1). With a separate validation split, both trainers compare validation loss at checkpoint epochs and keep the lowest-loss model as `best.pt` (standard) or `checkpoints/model_best.pth` (DinoWM). A train-only dataset has no `best` checkpoint because training loss is not a validation criterion. Use a distinct `--out_dir` for each run.
+Use a separate `--out_dir` for each run. Checkpoint paths below are relative to that directory:
 
-The standard trainer writes `latest.pt` under its output directory. The existing MPC evaluation entry point is:
+| Trainer | Latest checkpoint | Numbered checkpoints | Best validation checkpoint |
+|---|---|---|---|
+| Standard WorldModel (including JEPA-lite) | `latest.pt` after every epoch | `epoch_NNN.pt` every `--save_every` epochs (default 10), and at the final epoch | `best.pt` |
+| DinoWM | `checkpoints/model_latest.pth` at each save interval | `checkpoints/model_N.pth` every `--save_every_x_epoch` epochs (default 1) | `checkpoints/model_best.pth` |
+
+Both trainers select the best checkpoint by validation loss at their checkpoint intervals, when a separate validation split exists. A train-only dataset has no best validation checkpoint.
+
+To evaluate the standard WorldModel trained on the toy dataset above, run the toy-environment MPC example:
 
 ```bash
-python scripts/world_model/eval_mpc.py --ckpt runs/dino_rssm/latest.pt --episodes 20
+python scripts/world_model/eval_mpc.py --ckpt runs/cnn/latest.pt --episodes 20
 ```
 
 | Option | Meaning | Default |
@@ -113,5 +128,5 @@ python scripts/world_model/eval_mpc.py --ckpt runs/dino_rssm/latest.pt --episode
 | `--save_every` | Standard numbered checkpoint interval | `10` |
 | `--save_every_x_epoch` | DinoWM checkpoint interval | `1` |
 
-## Read next
+**Read next**
 - [ROS2](ros2.md) contains ROS2 integration details (e.g., launch arguments, checkpoint requirements, topics and node parameters).

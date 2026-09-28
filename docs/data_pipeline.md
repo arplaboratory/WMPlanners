@@ -114,7 +114,7 @@ flowchart TD
     D --> E[hf_dataset]
 ```
 
-## Read next
+**Read next**
 - [World model](world_model.md) explains the model families and planning path.
 - [Training](training.md) contains the existing training and evaluation examples.
 - [ROS2](ros2.md) contains ROS2 integration details (e.g., launch arguments, checkpoint requirements, topics and node parameters).

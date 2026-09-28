@@ -2,15 +2,14 @@
 
 The [data pipeline](data_pipeline.md) produces NPZ episodes and optional Hugging Face frame rows. This guide follows those samples through loading, prediction, and planning.
 
-## Model families
+## Model families and training objectives
 
 | Family | Visual encoder | Prediction path | Training entry point |
 |---|---|---|---|
-| Standard WorldModel | CNN, DINOv2, or V-JEPA2 | MLP or RSSM latent dynamics, state and risk heads | `scripts/world_model/train_world_model.py` |
-| JEPA-lite | CNN or DINOv2 | Latent matching with a target encoder; optional state decoder | `scripts/world_model/train_wm.py` |
-| DinoWM | Frozen DINOv2 patch encoder | Fused visual, proprioceptive, and action tokens through a ViT predictor | `scripts/world_model/train_world_model_dinowm.py` |
+| WorldModel | CNN, DINOv2, or V-JEPA2 | MLP or RSSM latent dynamics, state and risk heads; `standard` or `jepa-lite` training objective | `scripts/world_model/train_wm.py --method wm` (or `train_world_model.py` directly) |
+| DinoWM | Frozen DINOv2 patch encoder | Fused visual, proprioceptive, and action tokens through a ViT predictor | `scripts/world_model/train_wm.py --method dinowm` (or `train_world_model_dinowm.py` directly) |
 
-The standard model lives in `src/world_model/architecture.py`; DinoWM uses `src/world_model/backbones/wm.py`. Its pretrained visual encoders draw on DINOv2 {cite:p}`oquab2023dinov2` and V-JEPA 2 {cite:p}`assran2025vjepa2`. JEPA-lite is a local joint-embedding predictive objective {cite:p}`assran2023ijepa` selected by `--wm_mode jepa-lite`. CNN and DINOv2 can also be paired with RSSM latent dynamics {cite:p}`hafner2019learning` by selecting `--dynamics_type rssm`.
+WorldModel lives in `src/world_model/architecture.py`; DinoWM uses `src/world_model/backbones/wm.py`. Its pretrained visual encoders draw on DINOv2 {cite:p}`oquab2023dinov2` and V-JEPA 2 {cite:p}`assran2025vjepa2`. JEPA-lite is a WorldModel training objective {cite:p}`assran2023ijepa` selected by `--method wm --wm_mode jepa-lite`. CNN and DINOv2 can also be paired with RSSM latent dynamics {cite:p}`hafner2019learning` by selecting `--dynamics_type rssm`.
 
 ## Loading episodes
 
@@ -93,6 +92,6 @@ flowchart LR
     E --> G[Publish chosen trajectory]
 ```
 
-## Read next
+**Read next**
 - [Training](training.md) contains the existing training and evaluation examples.
 - [ROS2](ros2.md) contains ROS2 integration details (e.g., launch arguments, checkpoint requirements, topics and node parameters).
