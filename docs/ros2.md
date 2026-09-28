@@ -77,7 +77,7 @@ JEPA-lite training leaves the state and risk heads unsupervised. Use `latest_wit
 2. For configs with `sensors.color_encoding: compressed`, `image_transport republish` turns the recorded RGB stream into raw `sensor_msgs/Image` on the topic without the `/compressed` suffix. This requires the `compressed_image_transport` plugin. Raw color configs use the recorded topic directly.
 3. `ros2 bag play` after a five-second startup delay, with MCAP storage, `/clock`, the selected rate, and `--loop`. The standard adapter replays RGB, depth, odometry, and IMU; DinoWM replays RGB, odometry, IMU, `/tf`, and `/tf_static`. Looping lets the bridge receive later passes if model loading takes longer than the first pass.
 
-The launch reads `topics.color`, `topics.odom`, and `topics.imu` from the selected robot YAML file. For example, `robot:=race16` uses [race16.yaml](../configs/robots/race16.yaml).
+The launch reads `topics.color`, `topics.odom`, and `topics.imu` from the selected robot YAML file. Pass `robot:=NAME` to select `configs/robots/NAME.yaml` from the source repository, or pass an explicit YAML path.
 
 | Stream | Config key | Consumer |
 |---|---|---|

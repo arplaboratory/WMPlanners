@@ -37,7 +37,7 @@ flowchart LR
 | `action` | `(B, T, D_act)` |
 | `collision` | `(B, T, 1)` |
 
-The [trajectory notebook](notebooks/world_model_pipeline.ipynb) shows the library API for opening windows, training a standard model, checkpointing, and planning. The [video dataset notebook](notebooks/video_datasets.ipynb) covers the separate `wm_datasets` clip and frame-pair loaders.
+The library API supports opening trajectory windows, training a standard model, checkpointing, and planning. The separate `wm_datasets` package provides video clip and frame-pair loaders.
 
 ## Standard WorldModel: CNN, DINOv2, V-JEPA2, and RSSM
 

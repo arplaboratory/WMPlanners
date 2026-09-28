@@ -92,7 +92,7 @@ python -m scripts.world_model.data_pipeline.hf_upload \
 |---|---|---|
 | `--mcap PATH [...]` | Raw bag input and Stage 0 extraction | — |
 | `--bags PATH` | Already extracted bags; skip Stage 0 | — |
-| `--robot NAME` | Configuration from `configs/robots/` | `race16` |
+| `--robot NAME` | Configuration from `configs/robots/` | See `--help` |
 | `--episode-len N` | Retained frames per episode | `50` |
 | `--frame-skip N` | Source-frame spacing | `6` |
 | `--stride N` | Episode start spacing | `50` |
