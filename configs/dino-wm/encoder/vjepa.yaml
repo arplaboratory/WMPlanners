@@ -1,0 +1,2 @@
+_target_: world_model.backbones.jepa.build_vjepa2
+model_name: "vjepa2_vit_large"

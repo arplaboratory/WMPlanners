@@ -1,0 +1,142 @@
+:root {
+  --project-accent: #3273dc;
+  --project-surface: #f6f7f9;
+  --project-border: #dfe3e8;
+  --project-text-muted: #59636e;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  color: #20252b;
+  font-family: 'Noto Sans', sans-serif;
+}
+
+.publication-header .hero-body { padding-bottom: 2rem; }
+
+.publication-title,
+.publication-subtitle,
+.publication-authors,
+.publication-affiliations { font-family: 'Google Sans', sans-serif; }
+
+.publication-subtitle {
+  margin-inline: auto;
+  max-width: 58rem;
+}
+
+.publication-authors a { color: var(--project-accent); }
+.publication-authors a:hover { text-decoration: underline; }
+
+.author-block {
+  display: inline-block;
+  margin: 0 0.35rem 0.35rem;
+}
+
+.publication-venue {
+  color: var(--project-text-muted);
+  font-weight: 700;
+  margin-top: 0.75rem;
+}
+
+.publication-links {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+  margin-top: 1.4rem;
+}
+
+.teaser .hero-body {
+  padding-bottom: 3rem;
+  padding-top: 1rem;
+}
+
+.teaser img,
+.teaser video,
+.media-card img,
+.media-card video {
+  border-radius: 0.75rem;
+  display: block;
+  height: auto;
+  width: 100%;
+}
+
+.teaser .subtitle {
+  margin: 1.5rem auto 0;
+  max-width: 54rem;
+}
+
+.section .title,
+.section-intro { text-align: center; }
+
+.section-intro {
+  color: var(--project-text-muted);
+  margin: -0.75rem auto 2rem;
+  max-width: 48rem;
+}
+
+.media-grid {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+}
+
+.media-card { margin: 0; }
+
+.media-card figcaption {
+  color: var(--project-text-muted);
+  padding-top: 0.65rem;
+  text-align: center;
+}
+
+.module-placeholder {
+  align-items: center;
+  background: var(--project-surface);
+  border: 2px dashed var(--project-border);
+  border-radius: 0.75rem;
+  color: var(--project-text-muted);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 12rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.module-placeholder p {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 0.35rem;
+}
+
+.embed-frame iframe {
+  border: 1px solid var(--project-border);
+  border-radius: 0.75rem;
+  width: 100%;
+}
+
+.interactive-app {
+  background: var(--project-surface);
+  border: 1px solid var(--project-border);
+  border-radius: 0.75rem;
+  min-height: 16rem;
+  overflow: hidden;
+}
+
+.interactive-error {
+  color: #b42318;
+  padding: 1rem;
+  text-align: center;
+}
+
+pre {
+  border-radius: 0.5rem;
+  overflow-x: auto;
+}
+
+.footer { padding: 3rem 1.5rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}

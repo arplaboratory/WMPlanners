@@ -1,0 +1,50 @@
+{
+  "site": {
+    "title": "World Model Planners",
+    "subtitle": "World models for robot observation and planning",
+    "description": "Data processing, world-model training, evaluation, and planning for recorded robot observations.",
+    "keywords": ["robotics", "world models", "planning", "ROS 2"],
+    "url": "https://lquan9.github.io/wm_planner/",
+    "favicon": "./static/images/favicon.svg",
+    "language": "en"
+  },
+  "social_preview": {
+    "enabled": true,
+    "title": "World Model Planners",
+    "description": "Data processing, world-model training, evaluation, and planning for recorded robot observations.",
+    "image": "",
+    "twitter_card": "summary"
+  },
+  "links": [
+    {"label": "Documentation", "url": "./docs/index.html", "icon": "fas fa-book"},
+    {"label": "Source code", "url": "https://github.com/lquan9/wm_planner", "icon": "fab fa-github"}
+  ],
+  "sections": [
+    {
+      "type": "content",
+      "id": "overview",
+      "title": "Overview",
+      "paragraphs": [
+        "World Model Planners provides tools to prepare recorded robot observations, train world models, evaluate them, and connect a planner to ROS 2.",
+        "The repository includes CNN, DINOv2, V-JEPA2, JEPA-lite, and DinoWM model paths, plus a ROS 2 planner bridge."
+      ]
+    },
+    {
+      "type": "content",
+      "id": "workflow",
+      "title": "Project workflow",
+      "paragraphs": [
+        "Prepare episodes from recorded sensor data, select a world-model architecture, train and evaluate it, then use the ROS 2 wrapper to run the planner with a checkpoint.",
+        "The documentation covers setup, data preparation, model architecture, training, and the ROS 2 interface."
+      ]
+    }
+  ],
+  "footer": {
+    "enabled": true,
+    "text": "This website is adapted from",
+    "template_name": "Nerfies",
+    "template_url": "https://github.com/nerfies/nerfies.github.io",
+    "license_name": "CC BY-SA 4.0",
+    "license_url": "https://creativecommons.org/licenses/by-sa/4.0/"
+  }
+}

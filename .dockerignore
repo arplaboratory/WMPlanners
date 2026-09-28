@@ -1,0 +1,35 @@
+# ignore .git related folders
+.git/
+.github/
+.gitignore
+# ignore docs
+docs/
+# copy in licenses folder to the container
+!docs/licenses/
+# ignore logs
+**/logs/
+**/runs/
+**/output/*
+**/outputs/*
+**/videos/*
+*.tmp
+# ignore docker
+docker/cluster/exports/
+docker/.container.cfg
+# ignore recordings
+recordings/
+# ignore __pycache__
+**/__pycache__/
+**/*.egg-info/
+# local environments and generated artifacts
+.venv/
+.venvs/
+**/.venv/
+**/.venvs/
+docs/_build/
+pipeline_out/
+checkpoints/
+*.sif
+.wm_scratch/
+.apptainer_tmp/
+.apptainer_cache/

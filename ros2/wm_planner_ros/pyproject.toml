@@ -1,0 +1,27 @@
+[build-system]
+requires = ["scikit-build-core>=0.8", "pybind11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "wm_planner_ros"
+version = "0.1.0"
+description = "ROS 2 bridge node for world-model latent planning."
+license = { text = "MIT License" }
+authors = [
+  { name = "Long Quang", email = "longquang@nyu.edu" },
+]
+requires-python = ">=3.12"
+dependencies = [
+  "huggingface_hub",
+  "numpy",
+  "torch",
+]
+
+[project.scripts]
+wm_planner_bridge_node = "wm_planner_ros.planner_bridge_node:main"
+dino_wm_planner_bridge_node = "wm_planner_ros.dino_wm_planner_bridge_node:main"
+
+[tool.scikit-build]
+wheel.packages = ["python/wm_planner_ros"]
+cmake.build-type = "Release"
+cmake.version = ">=3.18"

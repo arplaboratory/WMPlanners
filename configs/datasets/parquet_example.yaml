@@ -1,0 +1,30 @@
+# Optional mapping for local frames/windows Parquet directories.
+# Omit --schema_config when the files already use these canonical names.
+files:
+  frames: frames.parquet
+  windows: windows.parquet
+columns:
+  frames:
+    recording_id: recording_id
+    frame_index: frame_index
+    rgb_path: rgb_path
+    depth_path: depth_path
+    imu: imu
+    odom: odom
+    action: action
+    collision: collision
+  windows:
+    window_id: window_id
+    recording_id: recording_id
+    first_frame_index: first_frame_index
+    length: length
+    frame_step: frame_step
+    split: split
+# Use these only to reproduce an older reader's sensor policy.
+sensors:
+  depth: true
+  imu: true
+  action_source: column  # or odom_delta
+# Used when windows have no train/val split (or only a train label).
+split:
+  holdout_fraction: 0.2

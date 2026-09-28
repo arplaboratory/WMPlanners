@@ -1,0 +1,109 @@
+[build-system]
+requires = ["hatchling>=1.24", "editables"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wm_planner"
+version = "1.0.0"
+description = "Learning World Models Continuously from Embodied Experience"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = {text = "MIT"}
+authors = [
+  {name = "Long Quang", email = "longpquang@gmail.com"},
+  {name = "Akash Guna", email = "ar9799@nyu.edu"},
+  {name = "Athul Radhakrishnan", email = "ar6316@nyu.edu"},
+  {name = "Deepanshu Mody", email = "dm6262@nyu.edu"},
+]
+dependencies = [
+  "numpy>=1.23",
+  "scipy>=1.10",
+  "matplotlib>=3.7",
+  "torch>=2.3.0",
+  "torchvision>=0.18.0",
+  "opencv-python>=4.5",
+  "pillow>=9.0",
+  "pyyaml>=6.0",
+  "scikit-learn",
+  "scikit-image>=0.19",
+  "pandas",
+  "tqdm",
+  "timm",
+  "transformers>=4.21",
+  "tokenizers",
+  "safetensors>=0.4",
+  "h5py",
+  "einops>=0.4",
+  "beartype",
+  "braceexpand",
+  "webdataset",
+  "ftfy",
+  "datasets",
+  "pyarrow",
+  "accelerate>=0.26.1",
+  "hydra-core>=1.2.0",
+  "hydra-submitit-launcher>=1.2.0",
+  "omegaconf>=2.3.0",
+  "wandb>=0.13.1",
+  "imageio>=2.34",
+  "imageio-ffmpeg>=0.4.9",
+  "moviepy>=1.0.3",
+  "rich>=13.0",
+  "submitit>=1.5",
+  "tensorboardx>=2.6",
+  "psutil>=5.9",
+  "rosbags",
+  "mcap-ros2-support",
+  "mcap",
+  "catkin-pkg",
+]
+
+[project.scripts]
+wm-dataset = "world_model.data.gold_cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+  "pytest-cov>=5",
+  "pylint>=3.2",
+  "ruff>=0.5",
+  "mypy>=1.8",
+  "typeguard",
+  "ipykernel>=6.29",
+  "setuptools",
+  "rosbags",
+]
+video = [
+  "decord>=0.6"
+]
+decoder = [
+  "lpips>=0.1.4"
+]
+docs = [
+  "sphinx>=7.2",
+  "myst-parser>=3",
+  "sphinxcontrib-bibtex",
+  "sphinxcontrib-mermaid",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = [
+  "src/world_model",
+  "src/wm_datasets",
+  "src/utils"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+addopts = "-ra"
+testpaths = ["tests"]
+markers = ["local_data: tests for a generated pipeline output (use --pipeline-out)"]
+
+[tool.ruff]
+select = ["E", "F", "I", "UP", "B"]
+line-length = 88
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["world_model"]

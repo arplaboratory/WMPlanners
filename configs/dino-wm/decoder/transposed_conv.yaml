@@ -1,0 +1,6 @@
+_target_: world_model.backbones.decoder.TransposedConvDecoder
+observation_shape: [3, ${img_size}, ${img_size}]
+emb_dim: 384
+depth: 64
+kernel_size: 5
+stride: 3
