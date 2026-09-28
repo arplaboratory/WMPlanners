@@ -4,7 +4,7 @@
     "subtitle": "World models for robot observation and planning",
     "description": "Data processing, world-model training, evaluation, and planning for recorded robot observations.",
     "keywords": ["robotics", "world models", "planning", "ROS 2"],
-    "url": "https://lquan9.github.io/wm_planner/",
+    "url": "https://g-sure.github.io/wm_planner/",
     "favicon": "./static/images/favicon.svg",
     "language": "en"
   },
@@ -21,7 +21,7 @@
   "links": [
     {"label": "Documentation", "url": "./docs/index.html", "icon": "fas fa-book"},
     {"label": "arXiv Paper (coming soon)", "url": "", "icon": "fas fa-file-alt"},
-    {"label": "Source code", "url": "https://github.com/lquan9/wm_planner", "icon": "fab fa-github"}
+    {"label": "Source code (coming soon)", "url": "", "icon": "fab fa-github"}
   ],
   "sections": [
     {
