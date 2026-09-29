@@ -10,6 +10,14 @@ from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 
 
+def _planner_node(pyenv, **kwargs):
+    if pyenv:
+        from ianvs.launch import CustomNode
+
+        return CustomNode(pyenv=pyenv, **kwargs)
+    return Node(**kwargs)
+
+
 def _robot_config(name_or_path):
     """Resolve a packaged robot name or an explicit YAML file."""
     candidate = Path(name_or_path).expanduser()
@@ -71,17 +79,21 @@ def _setup(context):
     if norm_stats and not Path(norm_stats).expanduser().is_file():
         raise FileNotFoundError(f"Normalization stats not found: {norm_stats}")
 
+    pyenv = LaunchConfiguration("pyenv").perform(context)
+
     if model == "dinowm":
         num_hist = int(LaunchConfiguration("num_hist").perform(context))
         if num_hist < 1:
             raise ValueError("num_hist must be at least one")
-        planner = Node(
+        planner = _planner_node(
+            pyenv,
             package="wm_planner_ros",
             executable="dino_wm_planner_bridge_node",
             name="dino_wm_planner_bridge",
             namespace=robot_name,
             output="screen",
             parameters=[{
+                "robot_name": robot_name,
                 "checkpoint_path": checkpoint,
                 "device": LaunchConfiguration("device"),
                 "dino_model_name": LaunchConfiguration("dino_model_name"),
@@ -96,13 +108,15 @@ def _setup(context):
         is_jepa = model == "jepa-lite"
         backend = "dinov2" if model == "dino" else "cnn"
         experiment = "jepa_lite" if is_jepa else f"{model}_rssm_c1"
-        planner = Node(
+        planner = _planner_node(
+            pyenv,
             package="wm_planner_ros",
             executable="wm_planner_bridge_node",
             name="wm_planner_bridge",
             namespace=robot_name,
             output="screen",
             parameters=[{
+                "robot_name": robot_name,
                 "backend": backend,
                 "dynamics_type": "mlp" if is_jepa else "rssm",
                 "wm_mode": "jepa-lite" if is_jepa else "standard",
@@ -173,5 +187,7 @@ def generate_launch_description():
                               description="DinoWM observation history length"),
         DeclareLaunchArgument("device", default_value="cpu",
                               description="PyTorch device, e.g. cpu or cuda"),
+        DeclareLaunchArgument("pyenv", default_value="",
+                              description="Optional Python virtual environment for the WM bridge; empty uses a native ROS node"),
         OpaqueFunction(function=_setup),
     ])

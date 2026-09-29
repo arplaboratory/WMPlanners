@@ -49,7 +49,6 @@ from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import Float32MultiArray
 from visualization_msgs.msg import Marker, MarkerArray
 import tf2_ros
-from tf2_ros import Buffer, TransformListener
 import torch
 import torch.nn.functional as F
 
@@ -60,6 +59,8 @@ from world_model.backbones.base import ModelBundle
 
 from wm_planner_ros.bridge_adapter import BufferedPlannerBridgeNode, Goal
 from wm_planner_ros.model_adapters import DinoWMAdapter
+from wm_planner_ros.nexus_action import PlannedTrajectory
+from wm_planner_ros.trajectory_geometry import body_to_world_rotation
 
 @dataclass
 class _NormStats:
@@ -99,9 +100,6 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
 
         self._odom_origin: tuple[float, float, float] | None = None
 
-        # DinoWM alone needs TF for the requested output frame.
-        self._tf_buffer = Buffer()
-        self._tf_listener = TransformListener(self._tf_buffer, self)
         self.configure_adapter(self._adapter, publish_markers=True)
 
         self.get_logger().info(
@@ -122,16 +120,7 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
         self.declare_parameter("rgb_topic",         "~/rgb")
         self.declare_parameter("odom_topic",        "~/odom")
         self.declare_parameter("imu_topic",         "~/imu")
-        self.declare_parameter("use_goal_topic",    True)
-        self.declare_parameter("goal_topic",        "~/goal")
-        self.declare_parameter("goal_xyz",          [0.0, 0.0, 0.0])
-        self.declare_parameter("trajectory_topic",  "~/planned_trajectory")
-        self.declare_parameter("debug_topic",       "~/debug_metrics")
         self.declare_parameter("publish_frame",     "body")
-
-        # timing / sync
-        self.declare_parameter("queue_size", 8)
-        self.declare_parameter("sync_slop",  0.05)
 
         # model dimensions
         self.declare_parameter("num_hist",   3)    # train.yaml: num_hist
@@ -203,17 +192,11 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
         self._checkpoint_path = str(self.get_parameter("checkpoint_path").value)
         self._device_str      = str(self.get_parameter("device").value)
         self._dino_model_name = str(self.get_parameter("dino_model_name").value)
-        self._publish_frame   = str(self.get_parameter("publish_frame").value).lower()
+        self._publish_frame   = str(self.get_parameter("publish_frame").value)
 
         self._rgb_topic        = str(self.get_parameter("rgb_topic").value)
         self._odom_topic       = str(self.get_parameter("odom_topic").value)
         self._imu_topic        = str(self.get_parameter("imu_topic").value)
-        self._use_goal_topic   = bool(self.get_parameter("use_goal_topic").value)
-        self._goal_topic       = str(self.get_parameter("goal_topic").value)
-        self._trajectory_topic = str(self.get_parameter("trajectory_topic").value)
-        self._debug_topic      = str(self.get_parameter("debug_topic").value)
-        self._queue_size       = int(self.get_parameter("queue_size").value)
-        self._sync_slop        = float(self.get_parameter("sync_slop").value)
 
         self._num_hist   = int(self.get_parameter("num_hist").value)
         self._action_dim = int(self.get_parameter("action_dim").value)
@@ -236,9 +219,6 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
         self._odom_ns   = _ns("odom_mean",   "odom_std")
         self._imu_ns    = _ns("imu_mean",    "imu_std")
         self._action_ns = _ns("action_mean", "action_std")
-
-        default_goal = list(self.get_parameter("goal_xyz").value)
-        self._default_goal = Goal(*[float(v) for v in default_goal])
 
         # CEM config
         self._cem_horizon    = int(self.get_parameter("plan_horizon").value)
@@ -352,8 +332,8 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
         ).to(self._device)
         return model
 
-    def _run_plan_and_publish(self, snapshot: dict) -> None:
-        """Run CEM planning on a buffered observation snapshot and publish results."""
+    def _compute_plan(self, snapshot: dict, should_cancel=None) -> PlannedTrajectory:
+        """Run CEM and return absolute positions in the observation frame."""
         odom       = snapshot["odom"]
         stamp      = snapshot["stamp"]
         goal       = snapshot["goal"]
@@ -383,15 +363,19 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
 
         self.get_logger().debug(f"cur_norm={cur_norm.cpu().numpy()}")
 
+        rotation = body_to_world_rotation(odom.pose.pose.orientation)
         with torch.no_grad():
-            best_vel_seq = self._cem_plan(obs_0, act_t, goal, odom_origin, cur_norm)
+            best_vel_seq = self._cem_plan(
+                obs_0, act_t, goal, odom_origin, cur_norm,
+                body_to_world=rotation, should_cancel=should_cancel)
             # best_vel_seq: (H, 3) normalised linear velocities
 
-        # Integrate velocities to get world-frame position trajectory.
-        # Denormalise velocities: v_phys = v_norm * vel_std + vel_mean  (m/s in odom frame)
+        # Training action twist is expressed in odometry's child/body frame.
+        # CEM holds orientation fixed, so rotate velocities by that same pose
+        # before integrating them into absolute odometry-frame positions.
         vel_phys = (best_vel_seq * vel_std + vel_mean).cpu().numpy()  # (H, 3) m/s
         dt = self._frameskip_dt
-        pos_delta = np.cumsum(vel_phys * dt, axis=0)  # (H, 3) displacement from now
+        pos_delta = np.cumsum((vel_phys @ rotation.T) * dt, axis=0)  # (H, 3) displacement from now
 
         self.get_logger().debug(
             f"vel_phys[0]={vel_phys[0]}  pos_delta[-1]={pos_delta[-1]}  "
@@ -408,13 +392,21 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
         ], dtype=np.float32)
         traj_src = pos_delta + cur_world_pos   # (H, 3) absolute in source frame
 
-        target_frame = self._publish_frame
-        traj = self._transform_traj(traj_src, source_frame, target_frame, stamp)
-        out_frame = target_frame
+        cost = float(np.linalg.norm(traj_src[-1] - [goal.x, goal.y, goal.z]))
+        return PlannedTrajectory(source_frame,
+                                 stamp,
+                                 np.vstack([cur_world_pos, traj_src]),
+                                 dt,
+                                 cost)
 
-        self._publish_path(out_frame, stamp, traj)
-        self._publish_markers(out_frame, stamp, traj)
-        self._publish_debug(goal, traj)
+    def _run_plan_and_publish(self, snapshot: dict) -> None:
+        plan = self._compute_plan(snapshot)
+        traj = self._transform_traj(
+            plan.positions, plan.frame_id, self._publish_frame, plan.stamp
+        )
+        self._publish_path(self._publish_frame, plan.stamp, traj)
+        self._publish_markers(self._publish_frame, plan.stamp, traj)
+        self._publish_debug(snapshot["goal"], plan.positions)
 
     def _cem_plan(
         self,
@@ -423,6 +415,8 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
         goal: Goal,
         odom_origin: tuple[float, float, float] | None = None,  # kept for API compat, unused
         cur_norm: torch.Tensor | None = None,
+        should_cancel=None,
+        body_to_world=None,
     ) -> torch.Tensor:
         """CEM over the WM rollout in normalized action space.
 
@@ -450,6 +444,9 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
         DA  = self._action_dim
         dev = self._device
         dt  = self._frameskip_dt
+        if body_to_world is None:
+            raise ValueError("CEM requires the observation's body-to-world rotation")
+        rotation = torch.as_tensor(body_to_world, dtype=act_hist.dtype, device=dev)
 
         # --- Normalisation stats for relevant dims ---
         pos_std  = self._action_ns.std[0:3].to(dev)   # (3,)
@@ -481,6 +478,8 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
         best_cost = None
 
         for _ in range(self._cem_iters):
+            if should_cancel is not None and should_cancel():
+                raise InterruptedError("World-model planning canceled or timed out")
             # Sample normalised velocity sequences: (N, H, 3)
             eps   = torch.randn(N, H, 3, device=dev)
             v_seq = mean.unsqueeze(0) + std.unsqueeze(0) * eps
@@ -491,7 +490,7 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
 
             # Forward-integrate positions from current absolute world position
             # pos_phys[n, t] = cur_phys_world + cumsum(v_phys * dt)  (absolute world frame)
-            pos_phys = cur_phys.unsqueeze(0).unsqueeze(0) + torch.cumsum(v_phys * dt, dim=1)  # (N, H, 3)
+            pos_phys = cur_phys.unsqueeze(0).unsqueeze(0) + torch.cumsum((v_phys @ rotation.T) * dt, dim=1)  # (N, H, 3)
 
             # Normalise integrated positions (absolute world coords) for model input
             pos_norm_seq = (pos_phys - pos_mean) / pos_std  # (N, H, 3)
@@ -541,6 +540,8 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
                 best_cost = float(min_cost)
                 best_seq  = v_seq[min_idx].detach()   # (H, 3) normalised velocities
 
+        if should_cancel is not None and should_cancel():
+            raise InterruptedError("World-model planning canceled or timed out")
         return best_seq  # (H, 3) normalised linear velocities
 
     def _image_to_numpy(self, msg: Image) -> np.ndarray:
@@ -641,8 +642,7 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
         """Transform an (H, 3) absolute-position trajectory from *source_frame*
         to *target_frame* using TF2.
 
-        If the frames are identical, or if the TF lookup fails, returns the
-        trajectory unchanged (logging a warning on failure).
+        Failed transforms raise so coordinates are never mislabeled.
         """
         if source_frame == target_frame:
             return traj_src
@@ -651,7 +651,7 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
             tf_stamped: TransformStamped = self._tf_buffer.lookup_transform(
                 target_frame,
                 source_frame,
-                rclpy.time.Time(),          # latest available transform
+                rclpy.time.Time.from_msg(stamp),
                 timeout=rclpy.duration.Duration(seconds=0.1),
             )
         except (tf2_ros.LookupException,
@@ -659,9 +659,9 @@ class DinoWMPlannerBridgeNode(BufferedPlannerBridgeNode):
                 tf2_ros.ExtrapolationException) as e:
             self.get_logger().warning(
                 f"TF2 lookup {source_frame}->{target_frame} failed: {e}. "
-                "Publishing in source frame."
+                "Skipping this publication."
             )
-            return traj_src
+            raise
 
         # Extract rotation (quaternion) and translation from the transform.
         t = tf_stamped.transform.translation
@@ -740,9 +740,12 @@ def main(args: list[str] | None = None) -> None:
     """ROS 2 node entry point."""
     rclpy.init(args=args)
     node = DinoWMPlannerBridgeNode()
+    executor = rclpy.executors.MultiThreadedExecutor(num_threads=3)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 

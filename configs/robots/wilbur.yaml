@@ -2,9 +2,9 @@ version: 1
 name: wilbur
 
 topics:
-  color: /wilbur/forward/color/image_rect_color/compressed
-  imu: /wilbur/imu/data
-  odom: /wilbur/odom
+  color: /wilbur/sensors/multisense_front/aux/image_rect_color
+  imu: /wilbur/sensors/ouster/imu
+  odom: /wilbur/odometry/local
 
 sensors:
   color_encoding: compressed

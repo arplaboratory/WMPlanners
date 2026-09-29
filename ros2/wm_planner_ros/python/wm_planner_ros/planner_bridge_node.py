@@ -5,18 +5,15 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Callable, Any
 
 import numpy as np
 import rclpy
 import rclpy.parameter
-from builtin_interfaces.msg import Duration as DurationMsg
 from huggingface_hub import hf_hub_download
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.duration import Duration as RclpyDuration
 from rclpy.time import Time
 from sensor_msgs.msg import Image, Imu
@@ -32,11 +29,8 @@ from wm_planner_ros.bridge_adapter import BufferedPlannerBridgeNode, Goal
 from wm_planner_ros.model_adapters import StandardWorldModelAdapter
 
 try:
-    from phx_nav_msgs.action import MRPPlan
-    from phx_nav_msgs.msg import PlannerState, Trajectory, TrajectoryArray
+    from phx_nav_msgs.msg import Trajectory, TrajectoryArray
 except ImportError:
-    MRPPlan = None
-    PlannerState = None
     Trajectory = None
     TrajectoryArray = None
 
@@ -60,6 +54,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
 
     def __init__(self) -> None:
         super().__init__("wm_planner_bridge")
+        self._odom_origin: tuple[float, float, float] | None = None
+        self._norm_stats: NormStats | None = None
 
         self._declare_params()
         self._load_params()
@@ -70,10 +66,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._last_plan: PlanComputation | None = None
         self._last_trajectory_array = None
         self._last_plan_lock = threading.Lock()
-        self._mrp_action_server = None
         self.configure_adapter(StandardWorldModelAdapter(self), publish_markers=True)
-        if self._enable_mrp_action:
-            self._setup_mrp_action_server()
         self._init_timer = self.create_timer(0.0, self._deferred_init)
 
         self.get_logger().info(
@@ -110,19 +103,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self.declare_parameter("depth_topic", "~/depth")
         self.declare_parameter("odom_topic", "~/odom")
         self.declare_parameter("imu_topic", "~/imu")
-        self.declare_parameter("use_goal_topic", True)
-        self.declare_parameter("goal_topic", "~/goal")
-        self.declare_parameter("goal_xyz", [0.0, 0.0, 0.0])
-        self.declare_parameter("trajectory_topic", "~/planned_trajectory")
-        self.declare_parameter("debug_topic", "~/debug_metrics")
         self.declare_parameter("publish_frame", "body")
-        self.declare_parameter("plan_on_observation", True)
-        self.declare_parameter("enable_mrp_action", False)
-        self.declare_parameter("mrp_action_name", "~/plan_mrp")
         self.declare_parameter("trajectory_dt", 0.2)
-
-        self.declare_parameter("queue_size", 8)
-        self.declare_parameter("sync_slop", 0.05)
 
         self.declare_parameter("odom_dim", 13)
         self.declare_parameter("imu_dim", 10)
@@ -179,8 +161,12 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             )
 
             self.set_parameters([
-                rclpy.parameter.Parameter("backend", rclpy.parameter.Parameter.Type.STRING, self._backend),
-                rclpy.parameter.Parameter("dynamics_type", rclpy.parameter.Parameter.Type.STRING, self._dynamics_type),
+                rclpy.parameter.Parameter("backend",
+                                          rclpy.parameter.Parameter.Type.STRING,
+                                          self._backend),
+                rclpy.parameter.Parameter("dynamics_type",
+                                          rclpy.parameter.Parameter.Type.STRING,
+                                          self._dynamics_type),
             ])
 
         if self._backend not in {"cnn", "dinov2", "vjepa2"}:
@@ -192,23 +178,9 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._depth_topic = str(self.get_parameter("depth_topic").value)
         self._odom_topic = str(self.get_parameter("odom_topic").value)
         self._imu_topic = str(self.get_parameter("imu_topic").value)
-        self._use_goal_topic = bool(self.get_parameter("use_goal_topic").value)
-        self._goal_topic = str(self.get_parameter("goal_topic").value)
-        self._trajectory_topic = str(self.get_parameter("trajectory_topic").value)
-        self._debug_topic = str(self.get_parameter("debug_topic").value)
-        self._plan_on_observation = bool(self.get_parameter("plan_on_observation").value)
-        self._enable_mrp_action = bool(self.get_parameter("enable_mrp_action").value)
-        self._mrp_action_name = str(self.get_parameter("mrp_action_name").value)
         self._trajectory_dt = float(self.get_parameter("trajectory_dt").value)
-        self._queue_size = int(self.get_parameter("queue_size").value)
-        self._sync_slop = float(self.get_parameter("sync_slop").value)
 
         self._norm_stats_path = str(self.get_parameter("norm_stats_path").value)
-
-        default_goal = self.get_parameter("goal_xyz").value
-        self._default_goal = Goal(float(default_goal[0]), float(default_goal[1]), float(default_goal[2]))
-        self._odom_origin: tuple[float, float, float] | None = None  # delta baseline
-        self._norm_stats = None  # NormStats loaded in _load_checkpoint
 
         self._odom_dim = int(self.get_parameter("odom_dim").value)
         self._imu_dim = int(self.get_parameter("imu_dim").value)
@@ -352,181 +324,16 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                 "Set the 'norm_stats_path' parameter or place norm_stats.pt beside the checkpoint."
             )
 
-    def _setup_mrp_action_server(self) -> None:
-        if MRPPlan is None:
-            self.get_logger().error(
-                "enable_mrp_action is true, but phx_nav_msgs.action.MRPPlan "
-                "could not be imported. Build/source phx_nav_msgs with MRPPlan.action."
-            )
-            return
-
-        self._mrp_action_server = ActionServer(
-            self,
-            MRPPlan,
-            self._mrp_action_name,
-            execute_callback=self._execute_mrp_plan,
-            goal_callback=self._handle_mrp_goal,
-            cancel_callback=self._handle_mrp_cancel,
-        )
-        self.get_logger().info(f"MRPPlan action server ready on {self._mrp_action_name}")
-
-    def _handle_mrp_goal(self, goal_request: Any) -> GoalResponse:
-        del goal_request
-        return GoalResponse.ACCEPT
-
-    def _handle_mrp_cancel(self, goal_handle: Any) -> CancelResponse:
-        del goal_handle
-        return CancelResponse.ACCEPT
-
-    def _execute_mrp_plan(self, goal_handle: Any) -> Any:
-        start_time = time.monotonic()
-        request = goal_handle.request
-        result = MRPPlan.Result()
-        selected_name = self._resolve_requested_planner(request)
-
-        self._publish_mrp_feedback(goal_handle, PlannerState.PLANNING, selected_name, 0.05, "Planning.")
-
-        if selected_name in {"easl", "hybrid"}:
-            message = (
-                f"Requested planner '{selected_name}' is not connected yet. "
-                "The current wm_planner_ros action path supports world_model only."
-            )
-            self._fill_mrp_failure(result, request, selected_name, message, start_time)
-            goal_handle.abort()
-            return result
-
-        if selected_name not in {"world_model", "auto"}:
-            message = f"Unsupported planner '{selected_name}'."
-            self._fill_mrp_failure(result, request, selected_name, message, start_time)
-            goal_handle.abort()
-            return result
-
-        if not self._model_ready:
-            self._fill_mrp_failure(result, request, selected_name, "World model is not ready.", start_time)
-            goal_handle.abort()
-            return result
-
-        with self._latest_observation_lock:
-            latest = self._latest_observation
-
-        if latest is None:
-            self._fill_mrp_failure(result, request, selected_name, "No synchronized RGB-D/odom/IMU observation cached.", start_time)
-            goal_handle.abort()
-            return result
-
-        if goal_handle.is_cancel_requested:
-            self._fill_mrp_failure(result, request, selected_name, "Planning request canceled.", start_time)
-            goal_handle.canceled()
-            return result
-
-        goal = self._goal_from_mrp_problem(request.problem)
-        try:
-            rgb, depth, odom, imu = latest
-            plan = self._plan_from_observation(rgb, depth, odom, imu, goal)
-            self._publish_plan(plan)
-
-            result.success = True
-            result.message = "Plan generated."
-            result.selected_planner_mode = int(request.planner_mode)
-            result.selected_planner_name = "world_model"
-            result.trajectories = self._plan_to_trajectory_array(plan)
-            result.confidence = float(plan.confidence)
-            result.selected_cost = float(plan.cost)
-            result.planning_time = self._seconds_to_duration_msg(time.monotonic() - start_time)
-            result.used_cached_result = False
-            result.candidate_planner_names = ["world_model"]
-            result.candidate_success = [True]
-            result.candidate_costs = [float(plan.cost)]
-            result.candidate_confidence = [float(plan.confidence)]
-            result.candidate_messages = ["accepted"]
-
-            self._publish_mrp_feedback(goal_handle, PlannerState.PLANNING, "world_model", 1.0, "Plan generated.")
-            goal_handle.succeed()
-            return result
-        except Exception as exc:
-            self._fill_mrp_failure(result, request, selected_name, f"World-model planning failed: {exc}", start_time)
-            goal_handle.abort()
-            return result
-
-    def _resolve_requested_planner(self, request: Any) -> str:
-        planner_name = str(request.planner_name).strip().lower()
-        allowed = {str(name).strip().lower() for name in request.allowed_planners if str(name).strip()}
-
-        if not planner_name:
-            if request.planner_mode == MRPPlan.Goal.PLANNER_EASL:
-                planner_name = "easl"
-            elif request.planner_mode == MRPPlan.Goal.PLANNER_WORLD_MODEL:
-                planner_name = "world_model"
-            elif request.planner_mode == MRPPlan.Goal.PLANNER_HYBRID:
-                planner_name = "hybrid"
-            else:
-                planner_name = "auto"
-
-        if planner_name == "auto":
-            planner_name = "world_model"
-
-        if allowed and planner_name not in allowed:
-            if "world_model" in allowed:
-                return "world_model"
-            return sorted(allowed)[0]
-
-        return planner_name
-
-    def _publish_mrp_feedback(
-            self,
-            goal_handle: Any,
-            state: int,
-            planner_name: str,
-            progress: float,
-            message: str
-        ) -> None:
-        feedback = MRPPlan.Feedback()
-        feedback.state.planner = "wm_planner_ros"
-        feedback.state.state = int(state)
-        feedback.state.verbose_state = message
-        feedback.active_planner_name = planner_name
-        feedback.progress = float(progress)
-        feedback.message = message
-        goal_handle.publish_feedback(feedback)
-
-    def _fill_mrp_failure(
-            self,
-            result: Any,
-            request: Any,
-            selected_name: str,
-            message: str,
-            start_time: float
-        ) -> None:
-        result.success = False
-        result.message = message
-        result.selected_planner_mode = int(request.planner_mode)
-        result.selected_planner_name = selected_name
-        result.trajectories = TrajectoryArray()
-        result.confidence = 0.0
-        result.selected_cost = float("inf")
-        result.planning_time = self._seconds_to_duration_msg(time.monotonic() - start_time)
-        result.used_cached_result = False
-        result.candidate_planner_names = [selected_name]
-        result.candidate_success = [False]
-        result.candidate_costs = [float("inf")]
-        result.candidate_confidence = [0.0]
-        result.candidate_messages = [message]
-
-    def _goal_from_mrp_problem(self, problem: Any) -> Goal:
-        pose = problem.goal.region_center.pose
-        return Goal(
-            x=float(pose.position.x),
-            y=float(pose.position.y),
-            z=float(pose.position.z),
-        )
-
     def _plan_from_observation(
             self,
             rgb: Image,
             depth: Image,
             odom: Odometry,
             imu: Imu,
-            goal: Goal
+            goal: Goal,
+            *,
+            output_in_odom: bool = False,
+            should_cancel: Callable[[], bool] | None = None,
         ) -> PlanComputation:
         rgb_t = self._image_to_tensor(rgb, channels=3)
         depth_t = self._image_to_tensor(depth, channels=1)
@@ -560,14 +367,17 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                 cost_fn=self._cost_fn,
                 cfg=self._cem_cfg,
                 device=self._device,
+                should_cancel=should_cancel,
             )
             z_roll = self._model.rollout(z0, best_seq.unsqueeze(0))
             state_roll = self._model.state_head(z_roll).squeeze(0).cpu().numpy()
             state_roll = state_roll - anchor_norm.numpy()[np.newaxis, :]
             risk_roll = self._model.risk_head(z_roll).squeeze(0).squeeze(-1).cpu().numpy()
 
-        in_frame = (odom.header.frame_id or "map")
-        in_frame_norm = str(in_frame).lower()
+        in_frame = odom.header.frame_id
+        if not in_frame:
+            raise ValueError("Observation odometry has no frame")
+        in_frame_norm = str(in_frame)
 
         if self._norm_stats is not None:
             ns = self._norm_stats
@@ -576,10 +386,14 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             state_roll = state_roll.copy()
             state_roll[:, :3] = state_roll[:, :3] * pos_std + pos_mean
 
+        # Training odometry is relative to the first observation. Restore the
+        # absolute sensor frame before publishing or returning a Nexus plan.
+        state_roll = state_roll.copy()
+        state_roll[:, :3] += np.asarray(self._odom_origin or (0.0, 0.0, 0.0))
         state_to_pub = state_roll.copy()
         out_frame = in_frame_norm
 
-        if self._publish_frame == "body":
+        if self._publish_frame == "body" and not output_in_odom:
             out_frame = self._publish_frame
             qx = odom.pose.pose.orientation.x
             qy = odom.pose.pose.orientation.y
@@ -588,9 +402,9 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             rotation = self._quat_to_rot(qx, qy, qz, qw)
 
             cur_pos = np.array([
-                odom.pose.pose.position.x - (self._odom_origin[0] if self._odom_origin else 0.0),
-                odom.pose.pose.position.y - (self._odom_origin[1] if self._odom_origin else 0.0),
-                odom.pose.pose.position.z - (self._odom_origin[2] if self._odom_origin else 0.0),
+                odom.pose.pose.position.x,
+                odom.pose.pose.position.y,
+                odom.pose.pose.position.z,
             ], dtype=np.float32)
             state_to_pub = state_roll.copy()
             state_to_pub[:, :3] = (rotation.T @ (state_roll[:, :3] - cur_pos[np.newaxis, :]).T).T
@@ -667,13 +481,6 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         trajectory.cost.data = float(plan.cost)
         trajectory_array.trajectories.append(trajectory)
         return trajectory_array
-
-    @staticmethod
-    def _seconds_to_duration_msg(seconds: float) -> DurationMsg:
-        seconds = max(float(seconds), 0.0)
-        sec = int(seconds)
-        nanosec = int((seconds - sec) * 1e9)
-        return DurationMsg(sec=sec, nanosec=nanosec)
 
     def _cost_fn(self,
                  state_seq: torch.Tensor,
@@ -849,9 +656,12 @@ def main(args: list[str] | None = None) -> None:
     """ROS 2 node entry point."""
     rclpy.init(args=args)
     node = PlannerBridgeNode()
+    executor = rclpy.executors.MultiThreadedExecutor(num_threads=3)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 

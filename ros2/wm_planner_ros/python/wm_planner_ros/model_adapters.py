@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image, Imu
 
 from .bridge_adapter import Goal, PlannerAdapter
+from .nexus_action import PlannedTrajectory
 
 
 class StandardWorldModelAdapter(PlannerAdapter):
@@ -40,6 +41,15 @@ class StandardWorldModelAdapter(PlannerAdapter):
     def snapshot(self, history: tuple[Any, ...], goal: Goal) -> tuple[Any, ...]:
         return (*history[-1], goal)
 
+    def observation_odom(self, history):
+        return history[-1][2]
+
+    def plan(self, snapshot, should_cancel: Callable[[], bool]):
+        plan = self.node._plan_from_observation(
+            *snapshot, output_in_odom=True, should_cancel=should_cancel)
+        return PlannedTrajectory(plan.frame_id, plan.stamp, plan.trajectory_states[:, :3],
+                                 self.node._trajectory_dt, plan.cost)
+
     def plan_and_publish(self, snapshot: tuple[Any, ...]) -> None:
         plan = self.node._plan_from_observation(*snapshot)
         self.node._publish_plan(plan)
@@ -51,6 +61,13 @@ class DinoWMAdapter(PlannerAdapter):
     @property
     def history_length(self) -> int:
         return self.node._num_hist
+
+    @property
+    def history_interval_s(self) -> float:
+        interval = self.node._frameskip_dt
+        if interval <= 0:
+            raise ValueError("frameskip_dt must be positive")
+        return interval
 
     def streams(self) -> Sequence[tuple[type, str]]:
         node = self.node
@@ -86,10 +103,16 @@ class DinoWMAdapter(PlannerAdapter):
             "act": [sample["act"] for sample in history],
             "odom": odom,
             "stamp": odom.header.stamp,
-            "frame": str(odom.header.frame_id or "map").lower(),
+            "frame": str(odom.header.frame_id),
             "odom_origin": node._odom_origin,
             "goal": goal,
         }
+
+    def observation_odom(self, history):
+        return history[-1]["odom"]
+
+    def plan(self, snapshot, should_cancel: Callable[[], bool]):
+        return self.node._compute_plan(snapshot, should_cancel=should_cancel)
 
     def plan_and_publish(self, snapshot: dict[str, Any]) -> None:
         self.node._run_plan_and_publish(snapshot)
