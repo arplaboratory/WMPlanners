@@ -96,6 +96,8 @@ class BufferedPlannerBridgeNode(Node):
         self._trajectory_topic = str(self.declare_parameter("trajectory_topic",
                                                             "~/planned_trajectory").value)
         self._debug_topic = str(self.declare_parameter("debug_topic", "~/debug_metrics").value)
+        self._debug_raw_trajectory_topic = str(self.declare_parameter(
+            "debug_raw_trajectory_topic", "~/debug/raw_trajectory").value)
         self._queue_size = int(self.declare_parameter("queue_size", 8).value)
         self._sync_slop = float(self.declare_parameter("sync_slop", 0.05).value)
         goal_xyz = self.declare_parameter("goal_xyz", [0.0, 0.0, 0.0]).value
@@ -107,6 +109,7 @@ class BufferedPlannerBridgeNode(Node):
         self._goal_sub = None
         self._path_pub = None
         self._debug_pub = None
+        self._raw_path_pub = None
         self._marker_pub = None
         self._sensor_subs = []
         self._sync = None
@@ -163,6 +166,8 @@ class BufferedPlannerBridgeNode(Node):
         )
         self._plan_thread.start()
         if self._enable_mrp_action:
+            self._raw_path_pub = self.create_publisher(
+                Path, self._debug_raw_trajectory_topic, 10)
             from .nexus_action import NexusActionServer
 
             self._nexus_action = NexusActionServer(self)

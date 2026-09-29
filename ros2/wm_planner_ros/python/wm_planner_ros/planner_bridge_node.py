@@ -57,6 +57,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._odom_origin: tuple[float, float, float] | None = None
         self._norm_stats: NormStats | None = None
         self._cnn_pool_features = False
+        self._warned_invalid_depth = False
 
         self._declare_params()
         self._load_params()
@@ -117,6 +118,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
 
         self.declare_parameter("image_height", 224)
         self.declare_parameter("image_width", 224)
+        self.declare_parameter("invalid_depth_fill", 0.0)
 
         self.declare_parameter("norm_stats_path", "")
 
@@ -193,6 +195,9 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
 
         self._img_h = int(self.get_parameter("image_height").value)
         self._img_w = int(self.get_parameter("image_width").value)
+        self._invalid_depth_fill = float(self.get_parameter("invalid_depth_fill").value)
+        if not np.isfinite(self._invalid_depth_fill):
+            raise ValueError("invalid_depth_fill must be finite")
 
         self._goal_weight = float(self.get_parameter("goal_weight").value)
         self._risk_weight = float(self.get_parameter("risk_weight").value)
@@ -350,10 +355,16 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         depth_t = self._image_to_tensor(depth, channels=1)
         odom_t = self._odom_to_tensor(odom)
         imu_t = self._imu_to_tensor(imu)
+        for name, tensor in (("RGB", rgb_t), ("depth", depth_t),
+                             ("odometry", odom_t), ("IMU", imu_t)):
+            if not torch.isfinite(tensor).all().item():
+                raise ValueError(f"Nonfinite {name} observation on the WM bridge")
 
         with torch.no_grad():
             wm_out = self._model.encode(rgb_t, depth_t, odom_t, imu_t)
             z0 = wm_out.z
+            if not torch.isfinite(z0).all().item():
+                raise ValueError("Nonfinite initial world-model latent from finite observations")
 
             cur_x = float(odom.pose.pose.position.x)
             cur_y = float(odom.pose.pose.position.y)
@@ -381,8 +392,12 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                 should_cancel=should_cancel,
             )
             z_roll = self._model.rollout(z0, best_seq.unsqueeze(0))
+            if not torch.isfinite(z_roll).all().item():
+                raise ValueError("Nonfinite world-model latent during planned rollout")
             state_roll = self._model.state_head(z_roll).squeeze(0).cpu().numpy()
             state_roll = state_roll - anchor_norm.numpy()[np.newaxis, :]
+            if not np.isfinite(state_roll).all():
+                raise ValueError("Nonfinite decoded world-model state during planned rollout")
             risk_roll = self._model.risk_head(z_roll).squeeze(0).squeeze(-1).cpu().numpy()
 
         in_frame = odom.header.frame_id
@@ -596,8 +611,19 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             arr = arr[:, :, :channels]
         if channels == 1:
             arr = arr.astype(np.float32)
-            if arr.max() > 100.0:
+            # ROS integer depth images use millimeters; 32FC1 uses meters.
+            if encoding in {"16uc1", "mono16"}:
                 arr = arr / 1000.0
+            invalid = ~np.isfinite(arr)
+            if invalid.any():
+                if not self._warned_invalid_depth:
+                    self.get_logger().warning(
+                        f"Depth image contains {int(invalid.sum())}/{arr.size} "
+                        f"({100.0 * invalid.mean():.1f}%) nonfinite pixels; "
+                        f"replacing them with invalid_depth_fill={self._invalid_depth_fill}"
+                    )
+                    self._warned_invalid_depth = True
+                arr[invalid] = self._invalid_depth_fill
         else:
             arr = arr.astype(np.float32) / 255.0
         arr = np.transpose(arr, (2, 0, 1))
@@ -619,6 +645,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         px = msg.pose.pose.position.x
         py = msg.pose.pose.position.y
         pz = msg.pose.pose.position.z
+        if not np.isfinite((px, py, pz)).all():
+            raise ValueError("Nonfinite odometry position on the WM bridge")
         if self._odom_origin is None:
             self._odom_origin = (px, py, pz)
         ox, oy, oz = self._odom_origin

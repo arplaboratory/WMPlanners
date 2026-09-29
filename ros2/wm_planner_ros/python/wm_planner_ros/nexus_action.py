@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
@@ -33,11 +33,26 @@ class PlannedTrajectory:
     def to_message(self):
         """Convert to traj"""
         positions = np.asarray(self.positions)
-        if (not self.frame_id or positions.ndim != 2 or positions.shape[1] != 3
-                or len(positions) < 2 or not np.isfinite(positions).all()
-                or not math.isfinite(self.dt) or self.dt <= 0
-                or not math.isfinite(self.cost)):
-            raise ValueError("Invalid world-model trajectory")
+        if not self.frame_id:
+            raise ValueError("Invalid world-model trajectory: empty frame_id")
+        if positions.ndim != 2 or positions.shape[1] != 3 or len(positions) < 2:
+            raise ValueError(
+                f"Invalid world-model trajectory: positions shape {positions.shape}, "
+                "expected (N, 3) with N >= 2"
+            )
+        invalid = np.argwhere(~np.isfinite(positions))
+        if invalid.size:
+            row, column = invalid[0]
+            raise ValueError(
+                f"Invalid world-model trajectory: nonfinite position at step {row}, "
+                f"coordinate {column}"
+            )
+        if not math.isfinite(self.dt) or self.dt <= 0:
+            raise ValueError(
+                f"Invalid world-model trajectory: dt={self.dt}, expected finite positive value"
+            )
+        if not math.isfinite(self.cost):
+            raise ValueError(f"Invalid world-model trajectory: nonfinite cost={self.cost}")
         result = Trajectory()
         result.cost.data = float(self.cost)
         base_time = Time.from_msg(self.stamp)
@@ -144,8 +159,23 @@ class NexusActionServer:
             if plan.stamp != odom.header.stamp or plan.first_step != 0:
                 raise ValueError("Model trajectory must start at the observation timestamp")
             trajectory = plan.to_message()
+            # The first state is at the observation timestamp. Its orientation
+            # and body-frame velocity must match the observed robot state;
+            # the first path segment describes motion after that timestamp.
+            trajectory.trajectory[0].pose.pose.orientation = odom.pose.pose.orientation
+            trajectory.trajectory[0].twist.twist = odom.twist.twist
             if should_cancel():
                 raise InterruptedError("Planning canceled or timed out")
+            # Publish the raw candidate for inspection before Nexus filters it.
+            # This topic is diagnostic only and is never used for SRP guidance.
+            debug_path = Path()
+            debug_path.header = trajectory.trajectory[0].header
+            for state in trajectory.trajectory:
+                pose = PoseStamped()
+                pose.header = state.header
+                pose.pose = state.pose.pose
+                debug_path.poses.append(pose)
+            node._raw_path_pub.publish(debug_path)
             result.trajectories.trajectories = [trajectory]
             result.success = True
             result.used_cached_result = False
