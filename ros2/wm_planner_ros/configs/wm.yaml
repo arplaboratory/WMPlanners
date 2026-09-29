@@ -1,7 +1,7 @@
+# Parameters for the Python WM bridge when using a JEPA-lite checkpoint.
 /**:
   ros__parameters:
-    planner.wm_planner_proxy.action_name: wm_planner/plan_mrp
-    planner.wm_planner_proxy.timeout: 5.0
-    planner.wm_planner_proxy.max_plan_age: 5.0
-    #planner.wm_planner_proxy.source_frame: ""  # accept the result's nonempty frame ID
-    #planner.wm_planner_proxy.target_frame: ""  # use Nexus problem.odom.header.frame_id
+    wm_mode: jepa-lite
+    backend: cnn
+    dynamics_type: mlp
+    depth_topic: sensors/multisense_front/left/depth

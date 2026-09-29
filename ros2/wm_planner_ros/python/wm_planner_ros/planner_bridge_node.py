@@ -56,6 +56,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         super().__init__("wm_planner_bridge")
         self._odom_origin: tuple[float, float, float] | None = None
         self._norm_stats: NormStats | None = None
+        self._cnn_pool_features = False
 
         self._declare_params()
         self._load_params()
@@ -216,6 +217,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             bkw["pretrained"] = False
         if self._backend == "dinov2":
             bkw["model_name"] = self._backbone_name
+        if self._backend == "cnn":
+            bkw["pool_features"] = self._cnn_pool_features
         return WorldModel(
             odom_dim=self._odom_dim,
             imu_dim=self._imu_dim,
@@ -282,6 +285,14 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             self._imu_dim = int(model_cfg["imu_dim"])
             self._act_dim = int(model_cfg["act_dim"])
             self._state_dim = int(model_cfg["state_dim"])
+            if self._backend == "cnn":
+                state = checkpoint["model"]
+                projection = state.get("vision.proj.weight")
+                last_conv = state.get("vision.net.4.weight")
+                self._cnn_pool_features = (
+                    projection is not None and last_conv is not None
+                    and projection.shape[1] == last_conv.shape[0]
+                )
             self._cem_cfg.action_dim = self._act_dim
             self.set_parameters([
                 rclpy.parameter.Parameter("backend", value=self._backend),

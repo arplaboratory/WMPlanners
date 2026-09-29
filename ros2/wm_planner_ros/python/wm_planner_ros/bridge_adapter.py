@@ -20,8 +20,6 @@ from std_msgs.msg import Float32MultiArray
 from visualization_msgs.msg import MarkerArray
 from tf2_ros import Buffer, TransformListener
 
-from .nexus_action import NexusActionServer
-
 @dataclass(frozen=True)
 class Goal:
     """Position goal"""
@@ -165,6 +163,8 @@ class BufferedPlannerBridgeNode(Node):
         )
         self._plan_thread.start()
         if self._enable_mrp_action:
+            from .nexus_action import NexusActionServer
+
             self._nexus_action = NexusActionServer(self)
 
     def _on_goal(self, msg: PoseStamped) -> None:
