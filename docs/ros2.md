@@ -41,7 +41,7 @@ For DINOv2+RSSM, use `model:=dino` and its corresponding checkpoint. For JEPA-li
 ```bash
 ros2 launch wm_planner_ros bag_in_the_loop.launch.py \
   bag:=/path/to/recording.mcap robot:=<robot> \
-  model:=jepa-lite checkpoint_path:=/path/to/latest_with_state_head.pt device:=cuda
+  model:=jepa-lite checkpoint_path:=/path/to/latest_with_rollout_heads.pt device:=cuda
 ```
 
 DinoWM uses the same bag launch with its own checkpoint format and encoder name:
@@ -69,7 +69,7 @@ Pass the MCAP path and choose its robot config with `robot:=NAME`, or use `robot
 
 The launch validates the bag and any supplied checkpoint or normalization file paths. The three standard-WorldModel choices read `args` and `model_config` from training checkpoints to construct the trained backbone, dynamics, image size, and sensor/action dimensions before loading the saved `model` weights. For `cnn` and `dino`, the checkpoint architecture must match the launch choice. The bridge still accepts older plain state dict checkpoints using its configured defaults. If a standard-model checkpoint download fails, the node continues with random weights; provide a trained checkpoint for meaningful plans. Missing normalization statistics also degrade trajectory quality.
 
-JEPA-lite training leaves the state and risk heads unsupervised. Use `latest_with_state_head.pt` produced by `train_state_head_decoder.py` for goal-based planning. The launch sets `risk_weight:=0.0` for JEPA-lite, so its untrained risk head does not affect CEM scoring. The default `norm_stats.pt` lookup is beside the checkpoint; supply `norm_stats_path` if it is elsewhere.
+JEPA-lite training leaves the state and risk heads unsupervised. Use a rollout-trained checkpoint such as `latest_with_rollout_heads.pt` produced by `train_state_head_decoder.py` for goal-based planning. The launch sets `risk_weight:=0.0` for JEPA-lite, so its untrained risk head does not affect CEM scoring. The default `norm_stats.pt` lookup is beside the checkpoint; supply `norm_stats_path` if it is elsewhere.
 
 ## What the launch starts
 
