@@ -140,7 +140,9 @@ class NexusActionServer:
                 )
                 goal = do_transform_pose_stamped(goal, transform)
             p = goal.pose.position
-            snapshot = node._adapter.snapshot(history, Goal(p.x, p.y, p.z))
+            q = goal.pose.orientation
+            snapshot = node._adapter.snapshot(history, Goal(
+                p.x, p.y, p.z, (q.x, q.y, q.z, q.w)))
             with node._inference_lock:
                 if handle.is_cancel_requested:
                     handle.canceled()

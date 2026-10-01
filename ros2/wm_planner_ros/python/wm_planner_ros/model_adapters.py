@@ -20,12 +20,11 @@ class StandardWorldModelAdapter(PlannerAdapter):
 
     def streams(self) -> Sequence[tuple[type, str]]:
         node = self.node
-        return (
-            (Image, node._rgb_topic),
-            (Image, node._depth_topic),
-            (Odometry, node._odom_topic),
-            (Imu, node._imu_topic),
-        )
+        streams = [(Image, node._rgb_topic)]
+        if node._depth_mode == "sensor":
+            streams.append((Image, node._depth_topic))
+        streams.extend(((Odometry, node._odom_topic), (Imu, node._imu_topic)))
+        return tuple(streams)
 
     def load_model(self) -> None:
         self.node._load_checkpoint()
@@ -33,12 +32,19 @@ class StandardWorldModelAdapter(PlannerAdapter):
         self.node._model_ready = True
 
     def ready(self) -> bool:
-        return self.node._model_ready
+        node = self.node
+        return node._model_ready and (node._planner_mode != "latent" or
+                                      node._goal_obs is not None)
 
     def prepare(self, *messages: Any) -> tuple[Any, ...]:
-        return messages
+        if self.node._depth_mode == "sensor":
+            return messages
+        rgb, odom, imu = messages
+        return rgb, None, odom, imu
 
     def snapshot(self, history: tuple[Any, ...], goal: Goal) -> tuple[Any, ...]:
+        if self.node._planner_mode == "latent" and self.node._goal is None:
+            goal = None  # Use the captured goal observation's position.
         return (*history[-1], goal)
 
     def observation_odom(self, history):

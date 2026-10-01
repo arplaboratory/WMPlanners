@@ -26,6 +26,7 @@ class Goal:
     x: float
     y: float
     z: float
+    orientation: tuple[float, float, float, float] | None = None
 
 
 class PlannerAdapter(ABC):
@@ -177,6 +178,8 @@ class BufferedPlannerBridgeNode(Node):
             float(msg.pose.position.x),
             float(msg.pose.position.y),
             float(msg.pose.position.z),
+            (float(msg.pose.orientation.x), float(msg.pose.orientation.y),
+             float(msg.pose.orientation.z), float(msg.pose.orientation.w)),
         )
 
     def _on_observations(self, *messages: Any) -> None:

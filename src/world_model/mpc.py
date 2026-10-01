@@ -183,6 +183,8 @@ def cem_plan_latent_target(
     cfg: CEMConfig,
     device: torch.device,
     cost_cfg: LatentCEMCostConfig | None = None,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, float]:
     """CEM planner that directly optimizes latent rollouts toward a target latent.
 
@@ -219,6 +221,8 @@ def cem_plan_latent_target(
     best_cost = None
 
     for _ in range(cfg.iters):
+        if should_cancel is not None and should_cancel():
+            raise InterruptedError("World-model planning canceled or timed out")
         eps = torch.randn(cfg.population, cfg.horizon, cfg.action_dim, device=device)
         a = mean.unsqueeze(0) + std.unsqueeze(0) * eps
         a = torch.max(torch.min(a, high), low)
@@ -254,4 +258,6 @@ def cem_plan_latent_target(
             best_cost = float(min_cost.item())
             best_seq = a[min_idx].detach()
 
+    if should_cancel is not None and should_cancel():
+        raise InterruptedError("World-model planning canceled or timed out")
     return best_seq[0], best_seq, best_cost

@@ -71,6 +71,47 @@ The launch validates the bag and any supplied checkpoint or normalization file p
 
 JEPA-lite training leaves the state and risk heads unsupervised. Use a rollout-trained checkpoint such as `latest_with_rollout_heads.pt` produced by `train_state_head_decoder.py` for goal-based planning. The launch sets `risk_weight:=0.0` for JEPA-lite, so its untrained risk head does not affect CEM scoring. The default `norm_stats.pt` lookup is beside the checkpoint; supply `norm_stats_path` if it is elsewhere.
 
+
+### JEPA-lite latent planning
+
+The original `wm_planner_bridge_node` now supports `planner_mode: latent`.
+Use `ros2/wm_planner_ros/configs/jepa_latent.yaml` with a JEPA-lite training
+checkpoint. This mode compares the rollout latent with an encoded goal
+observation; it does not require a fitted state head. `trajectory_source:
+actions` converts the selected `position_cmd` position dimensions into the
+published path, beginning at the current odometry pose. The path represents
+commanded setpoints, not decoded predicted robot positions.
+
+The planner needs a goal observation before planning. Call the private
+`~/capture_goal` Trigger service while the robot is at the destination, or
+publish a `sensor_msgs/Image` on `~/goal_image` and optionally a
+`geometry_msgs/PoseStamped` on `~/goal`. The image is paired with the latest
+synchronized odometry and IMU; the pose overrides its destination position
+and orientation. `~/clear_goal` removes the stored observation. In latent
+mode, `~/planned_actions` publishes the selected action sequence as a flat
+`Float32MultiArray` and `~/debug_metrics` publishes terminal latent distance,
+mean path latent distance, current latent distance, CEM cost, goal reached
+flag, and trajectory endpoint distance, in that order.
+
+`planner_mode: auto` chooses latent mode for a JEPA-lite checkpoint without a
+fitted state head, and state mode otherwise. `trajectory_source: auto` uses a
+fitted state head when available and action position setpoints otherwise.
+State-head availability is checked from the checkpoint's `head_training`
+metadata, `latest_with_state_head.pt` filename, or a loaded
+`state_head_decoder.pt`. An explicit `planner_mode: state` requires a fitted
+head. Latent mode still requires a stored goal observation; Nexus currently
+supplies only a goal pose in its MRP request, so populate the observation
+through the goal service or image topic before requesting an MRP plan.
+Keep that image paired with the same destination as the Nexus pose; the MRP
+request replaces the stored goal position and orientation, not its image.
+
+For JEPA-lite HF-dataset runs, set `depth_mode: zeros`,
+`imu_layout: dataset`, and `norm_stats_mode: off` as in the supplied YAML.
+Set `action_bounds_path` or place `action_bounds.pt` next to the checkpoint
+for per-dimension CEM sampling; without it, the configured scalar action
+bounds are used. Set `plan_horizon: 0` to use the training horizon. State
+planning remains the default unless `planner_mode` is set explicitly.
+
 ## What the launch starts
 
 1. The selected executable in the namespace set by the robot config's `name`. `cnn`, `dino`, and `jepa-lite` start `wm_planner_bridge_node`; `dinowm` starts `dino_wm_planner_bridge_node`. Standard RSSM choices use their selected backbone, while JEPA-lite uses checkpoint metadata. Both share the buffered planner worker; the standard adapter needs one observation and DinoWM uses `num_hist` observations.
