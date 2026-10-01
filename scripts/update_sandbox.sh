@@ -79,14 +79,15 @@ if [ "$DO_SYNC" = true ]; then
         if [ ! -d "$VENV" ]; then
             echo "Venv missing at $VENV; creating..."
             if command -v uv >/dev/null 2>&1; then
-                uv venv --seed --python 3.11 "$VENV" 2>/dev/null || uv venv --seed "$VENV"
+                uv venv --seed --managed-python --python 3.12 "$VENV"
             else
-                python3 -m venv "$VENV"
+                python3.12 -m venv "$VENV"
                 "$VENV/bin/python" -m pip install --upgrade pip setuptools wheel
             fi
         fi
 
         VENV_PY="$VENV/bin/python"
+        "$VENV_PY" -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version"
 
         if command -v uv >/dev/null 2>&1; then
             uv pip install --python "$VENV_PY" --no-cache-dir setuptools wheel hatchling editables

@@ -93,18 +93,15 @@ else
     echo \"uv already installed: \$(uv --version)\"
 fi
 
-# Create venv with Python 3.11 if possible, else fall back to system default
-# --allow-existing skips recreation if the venv already exists
+# Create the Python version required by wm_planner's pyproject.toml.
 if [ -d \"\$VENV\" ]; then
     echo \"Venv already exists at \$VENV, skipping creation.\"
-elif uv venv --seed --python 3.11 \"\$VENV\" 2>/dev/null; then
-    echo \"Created venv with Python 3.11\"
 else
-    echo \"Python 3.11 not available; falling back to system Python\"
-    uv venv --seed \"\$VENV\"
+    uv venv --seed --managed-python --python 3.12 \"\$VENV\"
 fi
 
 VENV_PY=\"\$VENV/bin/python\"
+\"\$VENV_PY\" -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
 echo \"Venv Python: \$(\$VENV_PY --version)\"
 
 echo \"Installing wm_planner into \$VENV...\"
