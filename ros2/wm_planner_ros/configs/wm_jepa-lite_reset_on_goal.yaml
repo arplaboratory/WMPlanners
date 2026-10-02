@@ -1,0 +1,36 @@
+# JEPA-lite inference with map-frame waypoint goals normalized into a stable
+# planning frame. The frame is anchored at the robot body pose when each new
+# goal arrives, matching training windows that began at position/orientation 0.
+#
+# Goals published to ~/goal must be PoseStamped messages in the same global
+# frame as ~/odom (normally `map`). Transform goals to that frame upstream.
+# The bridge publishes plans in `body` by default; set publish_frame: map for
+# global-frame output.
+/**:
+  ros__parameters:
+    wm_mode: jepa-lite
+    backend: cnn
+    dynamics_type: mlp
+    depth_topic: sensors/multisense_front/left/depth
+
+    # Required: provide your checkpoint via launch/CLI if this differs.
+    checkpoint_path: /home/long/Code/Org/ARL/phoenix-r2/src/navigation/wm_planner/runs/jepa_lite_phoenix_sim_v2_gpu1_cnn_precomputed/latest_with_observed_heads.pt
+
+    # Model-facing coordinate convention.
+    # map: legacy translation-only behavior
+    # initial_body: fixed frame at robot body pose when a new goal arrives
+    # current_body: re-anchor at current body pose on every planning update
+    goal_frame_mode: initial_body
+    planning_reset_on_goal: true
+    planning_frame_id: wm_planner_local
+
+    # Use state-head waypoint planning for a checkpoint with observed heads.
+    planner_mode: state
+    trajectory_source: state_head
+
+    # Adapt these transport settings to the deployment graph.
+    publish_frame: body
+
+    plan_iters: 5
+    plan_population: 128
+    plan_elites: 16

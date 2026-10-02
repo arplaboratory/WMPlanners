@@ -22,11 +22,13 @@ from tf2_ros import Buffer, TransformListener
 
 @dataclass(frozen=True)
 class Goal:
-    """Position goal"""
+    """Position goal, optionally tagged with its ROS coordinate frame."""
     x: float
     y: float
     z: float
     orientation: tuple[float, float, float, float] | None = None
+    frame_id: str = ""
+    stamp: Any | None = None
 
 
 class PlannerAdapter(ABC):
@@ -180,6 +182,7 @@ class BufferedPlannerBridgeNode(Node):
             float(msg.pose.position.z),
             (float(msg.pose.orientation.x), float(msg.pose.orientation.y),
              float(msg.pose.orientation.z), float(msg.pose.orientation.w)),
+            str(msg.header.frame_id), msg.header.stamp,
         )
 
     def _on_observations(self, *messages: Any) -> None:

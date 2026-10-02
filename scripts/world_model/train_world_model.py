@@ -206,9 +206,20 @@ class Trainer:
                              find_unused_parameters=find_unused)
 
         self.opt = torch.optim.AdamW(self.model.parameters(), lr=args.lr, weight_decay=1e-4)
+        # JEPA-lite training intentionally optimizes only its latent objective.
+        # Although WorldModel always contains state/risk head modules, their
+        # weights are not supervised in this mode and must not be advertised as
+        # fitted decoder heads in exported checkpoints.
         lambda_state = 0.0 if args.wm_mode == "jepa-lite" else args.lambda_state
         lambda_risk = 0.0 if args.wm_mode == "jepa-lite" else args.lambda_risk
         lambda_var = args.lambda_var if args.wm_mode == "jepa-lite" else 0.0
+        self.head_training = {
+            "state_head": lambda_state > 0.0,
+            "risk_head": lambda_risk > 0.0,
+            "state_loss_weight": lambda_state,
+            "risk_loss_weight": lambda_risk,
+            "objective": args.wm_mode,
+        }
         self.cfg = TrainConfig(
             device=args.device,
             lr=args.lr,
@@ -334,6 +345,11 @@ class Trainer:
                         'state_dim': args.state_dim if args.state_dim else min(6, self.ds.D_odom),
                     },
                     'dataset_provenance': self.dataset_provenance,
+                    # Consumers must use this metadata rather than infer head
+                    # readiness from state-dict keys: the architecture always
+                    # includes these modules, including unsupervised JEPA-lite
+                    # training runs.
+                    'head_training': self.head_training,
                 }
                 torch.save(ckpt, os.path.join(args.out_dir, 'latest.pt'))
                 if args.save_every > 0 and ((epoch + 1) % args.save_every == 0 or epoch + 1 == args.epochs):
