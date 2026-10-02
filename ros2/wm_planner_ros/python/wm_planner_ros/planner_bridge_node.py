@@ -14,7 +14,7 @@ import rclpy
 import rclpy.parameter
 from builtin_interfaces.msg import Duration as DurationMsg
 from huggingface_hub import hf_hub_download
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry, Path
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.duration import Duration as RclpyDuration
@@ -29,7 +29,10 @@ from world_model.data.normalization import NormStats
 from world_model.mpc import CEMConfig, cem_plan
 
 from wm_planner_ros.bridge_adapter import BufferedPlannerBridgeNode, Goal
-from wm_planner_ros.model_adapters import StandardWorldModelAdapter
+from wm_planner_ros.model_adapters import RelativePoseAdapter, StandardWorldModelAdapter
+from wm_planner_ros.relative_pose_planner import (
+    PlannerBundle, PoseGoal, RelativePosePlanner, body_poses_to_odom_frame, goal_in_body_frame, image_msg_to_rgb,
+)
 
 try:
     from phx_nav_msgs.action import MRPPlan
@@ -71,13 +74,24 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._last_trajectory_array = None
         self._last_plan_lock = threading.Lock()
         self._mrp_action_server = None
-        self.configure_adapter(StandardWorldModelAdapter(self), publish_markers=True)
+        self._planner: RelativePosePlanner | None = None
+        if self._bundle is not None:
+            self.configure_adapter(RelativePoseAdapter(self), publish_markers=True)
+            self._cmd_vel_pub = (
+                self.create_publisher(Twist, self._cmd_vel_topic, 10) if self._publish_cmd_vel else None
+            )
+            if self._enable_mrp_action:
+                self.get_logger().warning("enable_mrp_action is not supported with a planner bundle; ignoring it")
+                self._enable_mrp_action = False
+        else:
+            self.configure_adapter(StandardWorldModelAdapter(self), publish_markers=True)
         if self._enable_mrp_action:
             self._setup_mrp_action_server()
         self._init_timer = self.create_timer(0.0, self._deferred_init)
 
         self.get_logger().info(
             f"wm_planner_bridge ready. "
+            f"mode={'relative_pose' if self._bundle is not None else 'legacy'}, "
             f"backend={self._backend}, dynamics={self._dynamics_type}, "
             f"trajectory_topic={self._trajectory_topic}, "
             f"mrp_action_enabled={self._enable_mrp_action}"
@@ -146,6 +160,16 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self.declare_parameter("action_init_std", 1.0)
         self.declare_parameter("cem_alpha", 0.3)
 
+        # Relative-pose checkpoints (trained with configs/datasets/wm_relative_5hz.yaml).
+        # The bundle is written by scripts/world_model/export_planner_bundle.py; when
+        # empty, planner_bundle.yaml beside checkpoint_path is used if it exists.
+        self.declare_parameter("planner_bundle_path", "")
+        self.declare_parameter("goal_frame", "odom")  # odom: goal_xyz/goal topic in the odometry frame; body: relative to the robot
+        self.declare_parameter("use_goal_heading", False)
+        self.declare_parameter("heading_weight", 1.0)
+        self.declare_parameter("publish_cmd_vel", True)
+        self.declare_parameter("cmd_vel_topic", "~/cmd_vel")
+
         self.declare_parameter("goal_weight", 1.0)
         self.declare_parameter("risk_weight", 0.5)
         self.declare_parameter("marker_scale", 0.08)
@@ -162,6 +186,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._checkpoint_experiment = str(self.get_parameter("checkpoint_experiment").value)
         self._checkpoint_filename = str(self.get_parameter("checkpoint_filename").value)
         self._device_str = str(self.get_parameter("device").value)
+        if self._device_str == "gpu":
+            self._device_str = "cuda" if torch.cuda.is_available() else "cpu"
         self._publish_frame = str(self.get_parameter("publish_frame").value).lower()
 
         # convention: {backbone}_{dynamics}_{run}  e.g. dino_rssm_c1, cnn_mlp_c1
@@ -220,6 +246,25 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
 
         self._img_h = int(self.get_parameter("image_height").value)
         self._img_w = int(self.get_parameter("image_width").value)
+
+        self._goal_frame = str(self.get_parameter("goal_frame").value).lower()
+        if self._goal_frame not in {"odom", "body"}:
+            raise ValueError(f"goal_frame must be odom or body; got {self._goal_frame}")
+        self._use_goal_heading = bool(self.get_parameter("use_goal_heading").value)
+        self._heading_weight = float(self.get_parameter("heading_weight").value)
+        self._publish_cmd_vel = bool(self.get_parameter("publish_cmd_vel").value)
+        self._cmd_vel_topic = str(self.get_parameter("cmd_vel_topic").value)
+        bundle_path = str(self.get_parameter("planner_bundle_path").value)
+        if not bundle_path and self._checkpoint_path:
+            beside = os.path.join(os.path.dirname(os.path.expanduser(self._checkpoint_path)), "planner_bundle.yaml")
+            bundle_path = beside if os.path.isfile(beside) else ""
+        self._bundle = PlannerBundle.load(bundle_path) if bundle_path else None
+        if self._bundle is not None:
+            if self._bundle.use_depth or self._bundle.use_imu:
+                raise ValueError("planner bundle enables depth/IMU, which the relative-pose path does not feed")
+            if self._checkpoint_path and os.path.realpath(os.path.expanduser(self._checkpoint_path)) != os.path.realpath(self._bundle.checkpoint):
+                raise ValueError(f"checkpoint_path {self._checkpoint_path} differs from the bundle's {self._bundle.checkpoint}")
+            self.get_logger().info(f"Relative-pose planner bundle: {bundle_path}")
 
         self._goal_weight = float(self.get_parameter("goal_weight").value)
         self._risk_weight = float(self.get_parameter("risk_weight").value)
@@ -752,6 +797,77 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         metrics = Float32MultiArray()
         metrics.data = [goal_distance, risk_mean, float(self._goal_weight), float(self._risk_weight)]
         self._debug_pub.publish(metrics)
+
+    # ------------------------------------------------------------------
+    # Relative-pose checkpoints
+    # ------------------------------------------------------------------
+    def _load_relative_pose_planner(self) -> None:
+        self._planner = RelativePosePlanner(
+            self._bundle, self._device_str,
+            population=self._cem_cfg.population, iters=self._cem_cfg.iters,
+            elites=self._cem_cfg.elites, alpha=self._cem_cfg.alpha,
+            heading_weight=self._heading_weight,
+        )
+        self._trajectory_dt = self._bundle.step_dt
+        self._model = self._planner.model
+        self._model_ready = True
+        self.get_logger().info(
+            f"Loaded relative-pose checkpoint {self._bundle.checkpoint} "
+            f"(decoder {self._bundle.state_decoder}, horizon={self._bundle.horizon}, "
+            f"step_dt={self._bundle.step_dt:.3f}s, device={self._device_str})"
+        )
+
+    def _plan_and_publish_relative_pose(self, rgb: Image, odom: Odometry, goal: Goal) -> None:
+        position, orientation, twist = odom.pose.pose.position, odom.pose.pose.orientation, odom.twist.twist
+        robot_xyz = (position.x, position.y, position.z)
+        robot_quat = (orientation.x, orientation.y, orientation.z, orientation.w)
+        goal_yaw = goal.yaw if self._use_goal_heading else None
+        if self._goal_frame == "body":
+            pose_goal = PoseGoal(goal.x, goal.y, goal_yaw)
+        else:
+            pose_goal = goal_in_body_frame((goal.x, goal.y, goal.z), goal_yaw, robot_xyz, robot_quat)
+
+        plan = self._planner.plan(
+            image_msg_to_rgb(rgb),
+            np.array([twist.linear.x, twist.linear.y, twist.linear.z,
+                      twist.angular.x, twist.angular.y, twist.angular.z], dtype=np.float32),
+            pose_goal,
+        )
+
+        if self._publish_frame == "body":
+            frame = odom.child_frame_id or "base_link"
+            states = np.stack([plan.poses[:, 0], plan.poses[:, 1],
+                               np.zeros(len(plan.poses)), plan.poses[:, 2]], axis=-1)
+        else:
+            frame = odom.header.frame_id or "odom"
+            states = body_poses_to_odom_frame(plan.poses, robot_xyz, robot_quat)
+        self._publish_pose_path(frame, odom.header.stamp, states)
+        self._publish_markers(frame, odom.header.stamp, states[:, :3], np.zeros(len(states), dtype=np.float32))
+
+        end_error = float(np.hypot(plan.poses[-1, 0] - pose_goal.x, plan.poses[-1, 1] - pose_goal.y))
+        metrics = Float32MultiArray()
+        # [predicted end-to-goal distance (m), plan cost, first action v_forward, v_lateral, yaw_rate]
+        metrics.data = [end_error, plan.cost, *[float(v) for v in plan.first_action]]
+        self._debug_pub.publish(metrics)
+
+        if self._cmd_vel_pub is not None:
+            cmd = Twist()
+            cmd.linear.x, cmd.linear.y, cmd.angular.z = (float(v) for v in plan.first_action)
+            self._cmd_vel_pub.publish(cmd)
+
+    def _publish_pose_path(self, frame_id: str, stamp: Any, states: np.ndarray) -> None:
+        """``states``: ``(N, 4)`` ``[x, y, z, yaw]``."""
+        msg = Path()
+        msg.header.frame_id = frame_id
+        msg.header.stamp = stamp
+        for x, y, z, yaw in states:
+            pose = PoseStamped()
+            pose.header = msg.header
+            pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = float(x), float(y), float(z)
+            pose.pose.orientation.z = float(np.sin(yaw / 2))
+            pose.pose.orientation.w = float(np.cos(yaw / 2))
+            msg.poses.append(pose)
+        self._path_pub.publish(msg)
 
     # ImageNet statistics used by pretrained ViT backbones (DINOv2, V-JEPA2).
     _IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)

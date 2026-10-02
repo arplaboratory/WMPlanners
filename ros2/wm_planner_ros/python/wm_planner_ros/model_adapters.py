@@ -45,6 +45,37 @@ class StandardWorldModelAdapter(PlannerAdapter):
         self.node._publish_plan(plan)
 
 
+class RelativePoseAdapter(PlannerAdapter):
+    """Checkpoints trained on window-relative odometry and body-velocity actions.
+
+    Needs only the camera and odometry: these models were trained with depth
+    and IMU zeroed, and plan toward goal poses through a pose decoder.
+    """
+
+    @property
+    def history_length(self) -> int:
+        return 1
+
+    def streams(self) -> Sequence[tuple[type, str]]:
+        node = self.node
+        return ((Image, node._rgb_topic), (Odometry, node._odom_topic))
+
+    def load_model(self) -> None:
+        self.node._load_relative_pose_planner()
+
+    def ready(self) -> bool:
+        return self.node._model_ready
+
+    def prepare(self, *messages: Any) -> tuple[Any, ...]:
+        return messages
+
+    def snapshot(self, history: tuple[Any, ...], goal: Goal) -> tuple[Any, ...]:
+        return (*history[-1], goal)
+
+    def plan_and_publish(self, snapshot: tuple[Any, ...]) -> None:
+        self.node._plan_and_publish_relative_pose(*snapshot)
+
+
 class DinoWMAdapter(PlannerAdapter):
     """DinoWM history preparation and its existing CEM/TF planning path."""
 

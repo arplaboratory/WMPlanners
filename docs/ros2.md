@@ -53,13 +53,41 @@ ros2 launch wm_planner_ros bag_in_the_loop.launch.py \
   dino_model_name:=dinov2_vits14 num_hist:=3 device:=cuda
 ```
 
+### Relative-pose checkpoints (`model:=relpose`)
+
+Checkpoints trained with `configs/datasets/wm_relative_5hz.yaml` (see [Phoenix sim→real runbook](sim_real_world_model.md)) take window-relative odometry and `[v_forward, v_lateral, yaw_rate]` actions, and plan toward a goal **pose** through a pose decoder. Before launching, write a planner bundle next to the checkpoint. It records the pose decoder, the dynamics step and the CEM action bounds, taken from the target robot's data:
+
+```bash
+python scripts/world_model/export_planner_bundle.py \
+  --checkpoint runs/wm_rel5hz_standard_pdrop50_varboth/best.pt \
+  --state_decoder runs/wm_rel5hz_standard_pdrop50_varboth/real_eval/real_state_decoder.pt \
+  --bounds_dataset /media/4t/datasets/wm-phoenix-real-run03_windowed
+
+ros2 launch wm_planner_ros bag_in_the_loop.launch.py \
+  bag:=/media/4t/datasets/rosbags/run_03_route-1_2026-05-12-14-14-31/run_03_route-1_2026-05-12-14-14-31_0.mcap \
+  robot:=lester model:=relpose \
+  checkpoint_path:=runs/wm_rel5hz_standard_pdrop50_varboth/best.pt device:=cuda
+```
+
+This mode subscribes only to the camera and odometry (the models were trained with depth and IMU zeroed). Grayscale cameras are replicated to three channels as in training. Each plan:
+
+1. encodes the current image with the identity pose and the odometry twist;
+2. expresses the goal in the robot's body frame;
+3. runs CEM over 16 steps of about 0.2 s within the bundle's action bounds;
+4. publishes the decoded path, plus the first action as a `geometry_msgs/Twist` on `~/cmd_vel` (`publish_cmd_vel`).
+
+`goal_frame:=body` (the launch default) treats `goal_xyz` and the goal topic as relative to the robot; the default `8.0,0.0,0.0` asks for a point 8 m ahead at every plan, which suits bag replay. Use `goal_frame:=odom` for fixed goals in the odometry frame. Set the node parameter `use_goal_heading:=true` to also plan to the goal's yaw. `~/debug_metrics` carries `[predicted end-to-goal distance (m), plan cost, v_forward, v_lateral, yaw_rate]`. The MRP action path is not available in this mode.
+
 Pass the MCAP path and choose its robot config with `robot:=NAME`, or use `robot:=/path/to/robot.yaml`. `model:=dino` selects DINOv2+RSSM in the standard adapter; `model:=dinowm` selects the separate DinoWM model adapter. The JEPA-lite checkpoint metadata chooses its CNN or DINOv2 encoder and trained dynamics. `device:=cpu` is the portable default. Stop the launch with Ctrl+C.
 
 | Launch argument | Default | Effect |
 |---|---|---|
 | `bag` | required | MCAP file to replay; relative paths resolve from the launch command's working directory. |
 | `robot` | required | Name of an installed `configs/robots/*.yaml` file, or an explicit YAML path. The config supplies the node namespace and recorded sensor topics. |
-| `model` | `cnn` | `cnn` selects CNN+RSSM; `dino` selects DINOv2+RSSM; `jepa-lite` selects JEPA-lite; `dinowm` selects DinoWM. |
+| `model` | `cnn` | `cnn` selects CNN+RSSM; `dino` selects DINOv2+RSSM; `jepa-lite` selects JEPA-lite; `dinowm` selects DinoWM; `relpose` selects relative-pose checkpoints with a planner bundle. |
+| `planner_bundle_path` | empty | `relpose` only: planner bundle YAML; defaults to `planner_bundle.yaml` beside the checkpoint. |
+| `goal_frame` | `body` | `relpose` only: `body` (goal relative to the robot) or `odom`. |
+| `goal_xyz` | `8.0,0.0,0.0` | `relpose` only: goal used until one arrives on `~/goal`. |
 | `checkpoint_path` | empty | Local `.pt` or `.pth` checkpoint. Required for JEPA-lite and DinoWM. For `cnn` or `dino`, an empty value requests `cnn_rssm_c1/latest.pt` or `dino_rssm_c1/latest.pt` from the default Hugging Face repository. |
 | `norm_stats_path` | empty | Standard-model `norm_stats.pt`; if empty, the bridge looks beside the checkpoint. DinoWM uses its own normalization parameters. |
 | `rate` | `0.1` | Positive multiplier for bag playback speed. |

@@ -1,0 +1,16 @@
+# Frame-invariant, rate-matched inputs for world-model training on wm_sim
+# Parquet exports (phoenix sim and real alike).
+#  - windows: 17 frames at ~5 Hz (one dynamics step = ~0.2 s everywhere).
+#    Build with scripts/world_model/build_resampled_windows.py --target-hz 5.
+#  - odom: pose relative to each window's first frame (body frame), so
+#    sessions with different odom origins (sim vs real, reboots) look alike.
+#  - action: [v_forward, v_lateral, yaw_rate] for the step k -> k+1, in the
+#    body frame at k; aligned with z[k+1] = f(z[k], action[k]).
+#  - depth/IMU off: sim has no usable depth, and IMU orientation is world-frame.
+files:
+  windows: windows_5hz.parquet
+sensors:
+  depth: false
+  imu: false
+  odom_frame: window
+  action_source: body_velocity

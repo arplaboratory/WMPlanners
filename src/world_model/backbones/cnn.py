@@ -27,11 +27,9 @@ class VisionEncoder(BaseBackbone):
             nn.ReLU(inplace=True),
             nn.Conv2d(64, 128, 3, stride=2, padding=1),
             nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
         )
-        with torch.no_grad(): # This is to get the dimension of the output of the network
-            probe = torch.zeros(1, in_ch, image_size, image_size) # BCHW
-            image_proj_dim = self.net(probe).flatten(1).shape[-1] # This is the dimension of the output of the network
-        self.proj = nn.Linear(image_proj_dim, z_dim)
+        self.proj = nn.Linear(128, z_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """``x``: ``(B, C, H, W)`` → ``(B, z_dim)``."""
