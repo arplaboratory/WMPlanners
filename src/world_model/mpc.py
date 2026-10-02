@@ -120,11 +120,15 @@ def cem_plan_with_cost(
     device: torch.device,
     *,
     use_risk_head: bool = True,
+    state_decoder: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, float]:
     """CEM planner with optional risk decoding and best-sequence cost.
 
     With ``use_risk_head=False``, the cost callback receives ``None`` for its
     risk argument. This supports models with an untrained risk head.
+    ``state_decoder`` replaces ``model.state_head`` for decoding rollouts, e.g.
+    a :class:`~world_model.state_decoder.PoseDecoder` fit to a model trained
+    without a state loss.
     """
     model = model.module if isinstance(model, DDP) else model
 
@@ -147,7 +151,7 @@ def cem_plan_with_cost(
 
         z0_rep = z0.repeat(cfg.population, 1)
         z_seq = model.rollout(z0_rep, a)
-        state_seq = model.state_head(z_seq)
+        state_seq = (state_decoder or model.state_head)(z_seq)
         risk_seq = model.risk_head(z_seq).squeeze(-1) if use_risk_head else None
         costs = cost_fn(state_seq, risk_seq, goal)
 

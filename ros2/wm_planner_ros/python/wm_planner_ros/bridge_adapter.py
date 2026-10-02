@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import math
 import os
 import threading
 import traceback
@@ -24,6 +25,7 @@ class Goal:
     x: float
     y: float
     z: float
+    yaw: float | None = None  # set only when the planner uses goal headings
 
 
 class PlannerAdapter(ABC):
@@ -106,10 +108,15 @@ class BufferedPlannerBridgeNode(Node):
         self._plan_thread.start()
 
     def _on_goal(self, msg: PoseStamped) -> None:
+        yaw = None
+        if getattr(self, "_use_goal_heading", False):
+            q = msg.pose.orientation
+            yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
         self._goal = Goal(
             float(msg.pose.position.x),
             float(msg.pose.position.y),
             float(msg.pose.position.z),
+            yaw,
         )
 
     def _on_observations(self, *messages: Any) -> None:

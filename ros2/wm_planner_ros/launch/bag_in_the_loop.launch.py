@@ -33,12 +33,15 @@ def _robot_config(name_or_path):
 
 def _setup(context):
     model = LaunchConfiguration("model").perform(context).lower()
-    if model not in {"cnn", "dino", "jepa-lite", "dinowm"}:
-        raise ValueError("model must be 'cnn', 'dino', 'jepa-lite', or 'dinowm'")
+    if model not in {"cnn", "dino", "jepa-lite", "dinowm", "relpose"}:
+        raise ValueError("model must be 'cnn', 'dino', 'jepa-lite', 'dinowm', or 'relpose'")
     config = _robot_config(LaunchConfiguration("robot").perform(context))
     robot_name = config["name"]
     configured_topics = config["topics"]
-    required_topics = ("color", "odom", "imu") + (("depth",) if model != "dinowm" else ())
+    if model == "relpose":
+        required_topics = ("color", "odom")  # trained with depth and IMU zeroed
+    else:
+        required_topics = ("color", "odom", "imu") + (("depth",) if model != "dinowm" else ())
     for key in required_topics:
         topic = configured_topics.get(key)
         if not isinstance(topic, str) or not topic.startswith("/") or topic == "/":
@@ -63,7 +66,7 @@ def _setup(context):
     if rate <= 0:
         raise ValueError("rate must be positive")
     checkpoint = LaunchConfiguration("checkpoint_path").perform(context)
-    if model in {"jepa-lite", "dinowm"} and not checkpoint:
+    if model in {"jepa-lite", "dinowm", "relpose"} and not checkpoint:
         raise ValueError(f"{model} requires checkpoint_path")
     if checkpoint and not Path(checkpoint).expanduser().is_file():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
@@ -71,7 +74,41 @@ def _setup(context):
     if norm_stats and not Path(norm_stats).expanduser().is_file():
         raise FileNotFoundError(f"Normalization stats not found: {norm_stats}")
 
-    if model == "dinowm":
+    if model == "relpose":
+        bundle = LaunchConfiguration("planner_bundle_path").perform(context)
+        if not bundle:
+            bundle = str(Path(checkpoint).expanduser().parent / "planner_bundle.yaml")
+        if not Path(bundle).expanduser().is_file():
+            raise FileNotFoundError(
+                f"Planner bundle not found: {bundle}. Create it with scripts/world_model/export_planner_bundle.py"
+            )
+        goal = [float(v) for v in LaunchConfiguration("goal_xyz").perform(context).split(",")]
+        if len(goal) != 3:
+            raise ValueError("goal_xyz must be three comma-separated numbers")
+        planner = Node(
+            package="wm_planner_ros",
+            executable="wm_planner_bridge_node",
+            name="wm_planner_bridge",
+            namespace=robot_name,
+            output="screen",
+            parameters=[{
+                "backend": "cnn",
+                "dynamics_type": "mlp",
+                "wm_mode": "standard",
+                "checkpoint_path": checkpoint,
+                "planner_bundle_path": bundle,
+                "goal_frame": LaunchConfiguration("goal_frame"),
+                "goal_xyz": goal,
+                "device": LaunchConfiguration("device"),
+                "rgb_topic": rgb_raw,
+                "odom_topic": configured_topics["odom"],
+                "use_sim_time": True,
+                "plan_on_observation": True,
+                "enable_mrp_action": False,
+                "sync_slop": 0.05,
+            }],
+        )
+    elif model == "dinowm":
         num_hist = int(LaunchConfiguration("num_hist").perform(context))
         if num_hist < 1:
             raise ValueError("num_hist must be at least one")
@@ -139,11 +176,14 @@ def _setup(context):
                 "use_sim_time": True,
             }],
         ))
-    topics = [color, configured_topics["odom"], configured_topics["imu"]]
-    if model == "dinowm":
-        topics += ["/tf", "/tf_static"]
+    if model == "relpose":
+        topics = [color, configured_topics["odom"]]
     else:
-        topics.append(configured_topics["depth"])
+        topics = [color, configured_topics["odom"], configured_topics["imu"]]
+        if model == "dinowm":
+            topics += ["/tf", "/tf_static"]
+        else:
+            topics.append(configured_topics["depth"])
     playback = ExecuteProcess(
         cmd=[
             "ros2", "bag", "play", str(bag), "--storage", "mcap",
@@ -160,7 +200,14 @@ def generate_launch_description():
         DeclareLaunchArgument("bag", description="Path to an MCAP file with the configured topics"),
         DeclareLaunchArgument("robot", description="Name in configs/robots or path to a robot YAML config"),
         DeclareLaunchArgument("model", default_value="cnn",
-                              description="cnn, dino, jepa-lite, or dinowm"),
+                              description="cnn, dino, jepa-lite, dinowm, or relpose "
+                                          "(checkpoints trained on configs/datasets/wm_relative_5hz.yaml)"),
+        DeclareLaunchArgument("planner_bundle_path", default_value="",
+                              description="relpose: planner_bundle.yaml; defaults beside the checkpoint"),
+        DeclareLaunchArgument("goal_frame", default_value="body",
+                              description="relpose: frame of goal_xyz and the goal topic, body or odom"),
+        DeclareLaunchArgument("goal_xyz", default_value="8.0,0.0,0.0",
+                              description="relpose: default goal until one arrives on the goal topic"),
         DeclareLaunchArgument("checkpoint_path", default_value="",
                               description="Local checkpoint; required for JEPA-lite and DinoWM"),
         DeclareLaunchArgument("norm_stats_path", default_value="",

@@ -1,0 +1,13 @@
+version: 1
+name: lester
+
+topics:
+  color: /lester/sensors/flir/image_raw
+  depth: /lester/sensors/multisense_front/left/depth
+  imu: /lester/sensors/microstrain/imu/data
+  odom: /lester/platform/odom
+
+sensors:
+  color_encoding: raw   # mono8, 640x512
+  imu_dim: 10
+  odom_dim: 13

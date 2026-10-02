@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import json
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -14,6 +14,53 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import Dataset
+
+
+def _window_relative_odom(odom: np.ndarray) -> np.ndarray:
+    """Express pose as seen from the window's first frame.
+
+    Odom is ``[x, y, z, qx, qy, qz, qw, <body-frame twist...>]`` in a world
+    frame whose origin differs per session (and between sim and real). Position
+    and orientation are re-expressed in frame 0's body frame, so every window
+    starts at the identity pose; the body-frame twist dims are left as is.
+    """
+    from scipy.spatial.transform import Rotation
+
+    out = odom.copy()
+    rot = Rotation.from_quat(odom[:, 3:7].astype(np.float64))
+    to_frame0 = rot[0].inv()
+    out[:, :3] = to_frame0.apply(odom[:, :3].astype(np.float64) - odom[0, :3])
+    out[:, 3:7] = (to_frame0 * rot).as_quat()
+    return out
+
+
+def _body_velocity_actions(odom: np.ndarray, timestamps_ns: np.ndarray) -> np.ndarray:
+    """Per-frame action ``[v_forward, v_lateral, yaw_rate]`` for the step k -> k+1.
+
+    The motion is expressed in frame k's body frame, so it does not depend on the
+    world-frame origin and reads like a velocity command. ``action[k]`` drives
+    the transition into frame ``k + 1`` (the dynamics compute
+    ``z[k+1] = f(z[k], action[k])``); the last frame has no successor and
+    repeats the previous action.
+    """
+    from scipy.spatial.transform import Rotation
+
+    T = len(odom)
+    action = np.zeros((T, 3), dtype=np.float32)
+    if T < 2:
+        return action
+    rot = Rotation.from_quat(odom[:, 3:7].astype(np.float64))
+    step = rot[:-1].inv().apply(odom[1:, :3].astype(np.float64) - odom[:-1, :3])
+    dyaw = (rot[:-1].inv() * rot[1:]).as_euler("xyz")[:, 2]
+    dt = np.diff(timestamps_ns).astype(np.float64) / 1e9
+    valid = dt > 0
+    # Missing/duplicate timestamps: fall back to the window's typical step.
+    dt = np.where(valid, dt, np.median(dt[valid]) if valid.any() else 1.0)
+    action[:-1, 0] = step[:, 0] / dt
+    action[:-1, 1] = step[:, 1] / dt
+    action[:-1, 2] = dyaw / dt
+    action[-1] = action[-2]
+    return action
 
 
 class ParquetWindowDataset(Dataset):
@@ -79,6 +126,22 @@ class ParquetWindowDataset(Dataset):
             self.windows = ordered[:boundary] if split == "train" else ordered[boundary:] if split in {"val", "test"} else []
         else:
             self.windows = [row for row in all_windows if row.get(split_column) == split]
+
+        if self.windows:
+            lengths = Counter(int(row.get("length", 0)) for row in self.windows if row.get("length") is not None)
+            if lengths:
+                canonical_length, canonical_count = max(lengths.items(), key=lambda item: (item[1], item[0]))
+                if canonical_length > 0 and canonical_count < len(self.windows):
+                    filtered = [row for row in self.windows if int(row.get("length", canonical_length)) == canonical_length]
+                    if filtered:
+                        dropped = len(self.windows) - len(filtered)
+                        if dropped:
+                            self.windows = filtered
+                    else:
+                        raise ValueError(
+                            f"No canonical windows of length {canonical_length} remain after filtering partial rows."
+                        )
+
         self._frame_cache: OrderedDict[str, dict[int, dict]] = OrderedDict()
         self.recording_cache_size = max(1, int(recording_cache_size))
         self.img_size = img_size
@@ -98,7 +161,12 @@ class ParquetWindowDataset(Dataset):
             return int(np.asarray(value).shape[-1])
         self.D_imu = dimension("imu")
         self.D_odom = dimension("odom")
-        self.D_act = dimension("action")
+        self.D_act = 3 if self.sensors.get("action_source") == "body_velocity" else dimension("action")
+        odom_frame = self.sensors.get("odom_frame", "world")
+        if odom_frame not in {"world", "window"}:
+            raise ValueError(f"sensors.odom_frame must be 'world' or 'window', got {odom_frame!r}")
+        if (odom_frame == "window" or self.sensors.get("action_source") == "body_velocity") and self.D_odom < 7:
+            raise ValueError("odom_frame=window and action_source=body_velocity need odom = [x, y, z, qx, qy, qz, qw, ...]")
         self.proprio_dim = self.D_imu
         self.action_dim = self.D_act
         if not self.windows:
@@ -152,6 +220,10 @@ class ParquetWindowDataset(Dataset):
             with Image.open(path) as image:
                 raw = np.asarray(image)
             value = raw.astype(np.float32) / 1000.0 if raw.dtype == np.uint16 else raw.astype(np.float32)
+        # Sensors write +inf for no-return pixels; a single inf turns the whole
+        # vision feature into NaN. Use 0, the same "no reading" value missing
+        # depth maps get.
+        value = np.nan_to_num(value, nan=0.0, posinf=0.0, neginf=0.0)
         if self.img_size is not None and value.shape != (self.img_size, self.img_size):
             tensor = torch.from_numpy(value).unsqueeze(0).unsqueeze(0)
             value = F.interpolate(tensor, size=(self.img_size, self.img_size), mode="nearest")[0, 0].numpy()
@@ -184,12 +256,17 @@ class ParquetWindowDataset(Dataset):
         ])
         imu = np.asarray([f(row, "imu") for row in rows], dtype=np.float32) if use_imu else np.zeros((len(rows), self.D_imu), dtype=np.float32)
         odom = np.asarray([f(row, "odom") for row in rows], dtype=np.float32)
-        if self.sensors.get("action_source", "column") == "odom_delta":
+        timestamps = np.asarray([int(f(row, "timestamp_ns", 0) or 0) for row in rows], dtype=np.int64)
+        if self.sensors.get("action_source", "column") == "body_velocity":
+            action = _body_velocity_actions(odom, timestamps)
+        elif self.sensors.get("action_source", "column") == "odom_delta":
             action = np.zeros((len(rows), self.D_act), dtype=np.float32)
             n = min(self.D_act, self.D_odom)
             action[1:, :n] = odom[1:, :n] - odom[:-1, :n]
         else:
             action = np.asarray([f(row, "action") for row in rows], dtype=np.float32)
+        if self.sensors.get("odom_frame", "world") == "window":
+            odom = _window_relative_odom(odom)
         collision_valid = np.asarray([bool(f(row, "collision_valid", False)) for row in rows])
         return {
             "rgb": rgb,
@@ -203,7 +280,7 @@ class ParquetWindowDataset(Dataset):
             "odom": odom,
             "action": action,
             "collision": np.asarray([float(f(row, "collision", 0.0) or 0.0) for row in rows], dtype=np.float32),
-            "timestamp_ns": np.asarray([int(f(row, "timestamp_ns", 0) or 0) for row in rows], dtype=np.int64),
+            "timestamp_ns": timestamps,
             "window_id": str(w("window_id", f"{recording_id}:{first:06d}")),
             "recording_id": recording_id,
             "frame_indices": np.asarray(frame_indices, dtype=np.int64),
