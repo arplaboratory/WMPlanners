@@ -197,8 +197,11 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._goal_frame_mode = str(self.get_parameter("goal_frame_mode").value).lower()
         self._planning_reset_on_goal = bool(self.get_parameter("planning_reset_on_goal").value)
         self._planning_frame_id = str(self.get_parameter("planning_frame_id").value)
-        if self._goal_frame_mode not in {"map", "initial_body", "current_body"}:
-            raise ValueError("goal_frame_mode must be map, initial_body, or current_body")
+        valid_goal_frame_modes = {"map", "current_map", "initial_body", "current_body"}
+        if self._goal_frame_mode not in valid_goal_frame_modes:
+            raise ValueError(
+                "goal_frame_mode must be map, current_map, initial_body, or current_body"
+            )
         if not self._planning_frame_id:
             raise ValueError("planning_frame_id must not be empty")
 
@@ -542,6 +545,10 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             return None
         position = np.array((odom.pose.pose.position.x, odom.pose.pose.position.y,
                              odom.pose.pose.position.z), dtype=np.float64)
+        if self._goal_frame_mode == "current_map":
+            return PlanningAnchor(
+                odom.header.frame_id, position, np.eye(3, dtype=np.float64)
+            )
         q = odom.pose.pose.orientation
         rotation = self._quat_to_rot(q.x, q.y, q.z, q.w).astype(np.float64)
         if self._goal_frame_mode == "current_body":
