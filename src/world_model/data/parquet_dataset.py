@@ -51,6 +51,8 @@ class ParquetWindowDataset(Dataset):
         self.frame_columns = config.get("columns", {}).get("frames", {})
         self.window_columns = config.get("columns", {}).get("windows", {})
         self.sensors = config.get("sensors", {})
+        action_contract = self.manifest.get("policy", {}).get("action_contract", {})
+        self.action_is_pose = action_contract.get("source") == "future_odom_pose"
         files = {**self.manifest.get("files", {}), **config.get("files", {})}
         self.frames_path = self.root / files.get("frames", "frames.parquet")
         windows_path = self.root / files.get("windows", "windows.parquet")
@@ -190,6 +192,11 @@ class ParquetWindowDataset(Dataset):
             action[1:, :n] = odom[1:, :n] - odom[:-1, :n]
         else:
             action = np.asarray([f(row, "action") for row in rows], dtype=np.float32)
+        if odom.shape[-1] >= 3:
+            origin = odom[0, :3].copy()
+            odom[:, :3] -= origin
+            if self.action_is_pose and action.shape[-1] >= 3:
+                action[:, :3] -= origin
         collision_valid = np.asarray([bool(f(row, "collision_valid", False)) for row in rows])
         return {
             "rgb": rgb,
@@ -276,11 +283,6 @@ class ParquetDinoWMDataset(Dataset):
         imu = source["imu"].astype(np.float32, copy=True)
         action = source["action"].astype(np.float32, copy=True)
         collision = source["collision"].astype(np.float32, copy=True).reshape(-1, 1)
-        if odom.shape[-1] >= 3:
-            origin = odom[0, :3].copy()
-            odom[:, :3] -= origin
-            if action.shape[-1] >= 3:
-                action[:, :3] -= origin
         state = np.concatenate([odom, imu, collision], axis=-1)
         return {
             "rgb": rgb,
@@ -290,4 +292,3 @@ class ParquetDinoWMDataset(Dataset):
             "collision": self._normalize(collision, self.stats["collision"]).astype(np.float32),
             "state": torch.from_numpy(state),
         }
-
