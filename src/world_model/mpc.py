@@ -29,6 +29,7 @@ class CEMConfig:
     action_high: torch.Tensor | None = None
     action_init_mean: torch.Tensor | None = None
     action_init_std: torch.Tensor | None = None
+    action_unit_norm_dims: tuple[int, ...] | None = None
 
 
 def resolve_action_bounds(cfg: CEMConfig, device: torch.device):
@@ -58,6 +59,17 @@ def resolve_action_bounds(cfg: CEMConfig, device: torch.device):
         else torch.full((cfg.action_dim,), cfg.init_std, device=device)
     )
     return low, high, init_mean, init_std
+
+
+def constrain_actions(actions: torch.Tensor, cfg: CEMConfig,
+                      low: torch.Tensor, high: torch.Tensor) -> torch.Tensor:
+    actions = torch.max(torch.min(actions, high), low)
+    if cfg.action_unit_norm_dims:
+        dims = list(cfg.action_unit_norm_dims)
+        values = actions[..., dims]
+        actions[..., dims] = values / torch.linalg.vector_norm(
+            values, dim=-1, keepdim=True).clamp_min(1e-6)
+    return actions
 
 
 def compute_action_bounds(dataset, device: torch.device):
@@ -148,7 +160,7 @@ def cem_plan_with_cost(
             raise InterruptedError("World-model planning canceled or timed out")
         eps = torch.randn(cfg.population, cfg.horizon, cfg.action_dim, device=device)
         a = mean.unsqueeze(0) + std.unsqueeze(0) * eps
-        a = torch.max(torch.min(a, high), low)
+        a = constrain_actions(a, cfg, low, high)
 
         z0_rep = z0.repeat(cfg.population, 1)
         z_seq = model.rollout(z0_rep, a)
@@ -225,7 +237,7 @@ def cem_plan_latent_target(
             raise InterruptedError("World-model planning canceled or timed out")
         eps = torch.randn(cfg.population, cfg.horizon, cfg.action_dim, device=device)
         a = mean.unsqueeze(0) + std.unsqueeze(0) * eps
-        a = torch.max(torch.min(a, high), low)
+        a = constrain_actions(a, cfg, low, high)
 
         z0_rep = z0.repeat(cfg.population, 1)
         z_seq = model.rollout(z0_rep, a)  # (N, H+1, z)

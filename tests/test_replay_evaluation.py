@@ -9,6 +9,7 @@ from torch import nn
 
 from scripts.world_model.eval_mpc_replay import eval_mpc_replay
 from scripts.world_model.eval_mpc_replay_no_risk import eval_mpc_replay_no_risk
+from world_model.mpc import CEMConfig, constrain_actions
 from world_model.replay import make_goal_tracking_cost, trajectory_tracking_cost
 
 
@@ -53,6 +54,16 @@ def test_short_horizon_tracking_cost_is_finite():
     goal = torch.zeros(1, 2, 3)
     assert torch.isfinite(trajectory_tracking_cost(states, goal)).all()
     assert torch.isfinite(make_goal_tracking_cost()(states, None, goal)).all()
+
+
+def test_pose_action_constraint_normalizes_quaternion():
+    config = CEMConfig(action_dim=7, action_unit_norm_dims=(3, 4, 5, 6))
+    actions = torch.tensor([[20.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0]])
+    constrained = constrain_actions(
+        actions, config, torch.full((7,), -10.0), torch.full((7,), 10.0))
+
+    assert constrained[0, 0] == 10.0
+    assert torch.linalg.vector_norm(constrained[0, 3:]).item() == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize("with_risk", [False, True])

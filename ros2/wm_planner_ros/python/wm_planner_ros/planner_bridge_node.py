@@ -396,6 +396,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                     and projection.shape[1] == last_conv.shape[0]
                 )
             self._cem_cfg.action_dim = self._act_dim
+            if self._act_dim == 7 and self._action_position_dims == (0, 1, 2):
+                self._cem_cfg.action_unit_norm_dims = (3, 4, 5, 6)
             if self._wm_mode == "jepa-lite" and self._cem_cfg.horizon == 0:
                 self._cem_cfg.horizon = int(args_dict.get("horizon", 8))
             self.set_parameters([
@@ -454,20 +456,20 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             max(self._action_position_dims) >= self._act_dim
         ):
             raise ValueError("action_position_dims are invalid for this checkpoint's action dimension")
-        if self._planner_mode == "latent":
-            bounds_path = self._action_bounds_path or os.path.join(
-                os.path.dirname(checkpoint_path), "action_bounds.pt")
-            if os.path.isfile(bounds_path):
-                bounds = torch.load(bounds_path, map_location="cpu", weights_only=False)
-                for name, key in (("action_low", "low"), ("action_high", "high"),
-                                  ("action_init_mean", "mean"), ("action_init_std", "std")):
-                    values = torch.as_tensor(bounds[key], dtype=torch.float32)
-                    if values.numel() != self._act_dim:
-                        raise ValueError(f"{bounds_path}: {key} has wrong action dimension")
-                    setattr(self._cem_cfg, name, values.clamp_min(1e-3) if key == "std" else values)
-            else:
-                self.get_logger().warning(
-                    f"No per-dimension action bounds at {bounds_path}; using scalar CEM bounds")
+        bounds_path = self._action_bounds_path or os.path.join(
+            os.path.dirname(checkpoint_path), "action_bounds.pt")
+        if os.path.isfile(bounds_path):
+            bounds = torch.load(bounds_path, map_location="cpu", weights_only=False)
+            for name, key in (("action_low", "low"), ("action_high", "high"),
+                              ("action_init_mean", "mean"), ("action_init_std", "std")):
+                values = torch.as_tensor(bounds[key], dtype=torch.float32)
+                if values.numel() != self._act_dim:
+                    raise ValueError(f"{bounds_path}: {key} has wrong action dimension")
+                setattr(self._cem_cfg, name, values.clamp_min(1e-3) if key == "std" else values)
+            self.get_logger().info(f"Loaded per-dimension action bounds from {bounds_path}")
+        else:
+            self.get_logger().warning(
+                f"No per-dimension action bounds at {bounds_path}; using scalar CEM bounds")
         self.get_logger().info(
             f"planner_mode={self._planner_mode} trajectory_source={self._trajectory_source} "
             f"state_head_trained={self._head_trained}")

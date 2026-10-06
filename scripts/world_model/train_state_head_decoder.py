@@ -333,6 +333,7 @@ def main():
             raise ValueError(f"{split} dataset dimensions {dims} differ from checkpoint {required}")
         if not len(dataset):
             raise ValueError(f"{split} dataset has no windows")
+    rebase_positions = is_parquet_dataset(cli.dataset)
     loaders = [DataLoader(
         WindowPrefix(dataset, horizon + 1, norm_stats), batch_size=cli.batch_size,
         shuffle=(index == 0), num_workers=cli.num_workers,
@@ -378,6 +379,7 @@ def main():
             result["head_training"] = {
                 "state_head": True, "risk_head": train_risk, "dataset": cli.dataset,
                 "latent_source": cli.latent_source, "horizon": horizon,
+                "position_origin": "window_start" if rebase_positions else "dataset",
                 "best_epoch": epoch + 1, "validation": val,
             }
             torch.save(result, output)
