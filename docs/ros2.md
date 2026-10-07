@@ -111,6 +111,10 @@ Set `action_bounds_path` or place `action_bounds.pt` next to the checkpoint
 for per-dimension CEM sampling; without it, the configured scalar action
 bounds are used. Set `plan_horizon: 0` to use the training horizon. State
 planning remains the default unless `planner_mode` is set explicitly.
+The bridge rejects a planning horizon longer than the dynamics or state-head
+training horizon. `allow_horizon_extrapolation: true` bypasses this check, but
+is intended only for explicit experiments. A checkpoint whose action contract
+uses window-start-relative future poses requires `goal_frame_mode: current_map`.
 
 ## What the launch starts
 
@@ -140,7 +144,7 @@ The launch does not replay a goal topic. With the launch defaults, either bridge
 | `/<robot_name>/<node_name>/planned_trajectory/markers` | `visualization_msgs/MarkerArray` | Visualization markers for the chosen trajectory. |
 | `/<robot_name>/<node_name>/debug_metrics` | `std_msgs/Float32MultiArray` | Standard model: goal distance, mean risk, goal weight, risk weight. DinoWM: goal distance and goal weight. |
 
-The launch leaves `publish_frame` at each node's default (`body`). The standard node also supports `goal_topic`, `goal_xyz`, `use_goal_topic`, `publish_frame`, `queue_size` (8), image size (224×224), model dimensions (`odom_dim`, `imu_dim`, `act_dim`, `state_dim`, `z_vis_dim`, `z_prop_dim`, `z_dim`), and CEM parameters (`plan_horizon` 15, `plan_iters` 5, `plan_population` 128, `plan_elites` 16, action bounds, `cem_alpha`, `goal_weight`, and `risk_weight`). Training checkpoint metadata supplies the checkpoint-sensitive dimensions and image size; plain state dict checkpoints use the node defaults. These are **node parameters**, not additional launch arguments; change them in the launch file or start the executable directly with a ROS parameter file.
+The launch leaves `publish_frame` at each node's default (`body`). The standard node also supports `goal_topic`, `goal_xyz`, `use_goal_topic`, `publish_frame`, `queue_size` (8), image size (224×224), model dimensions (`odom_dim`, `imu_dim`, `act_dim`, `state_dim`, `z_vis_dim`, `z_prop_dim`, `z_dim`), and CEM parameters (`plan_horizon` 15, `plan_iters` 5, `plan_population` 128, `plan_elites` 16, action bounds, `cem_alpha`, `cem_temporal_noise`, `goal_weight`, `path_weight`, `reverse_progress_weight`, `trajectory_smoothness_weight`, `action_smoothness_weight`, and `risk_weight`). The path and smoothness weights default to zero for compatibility. Pose-action smoothness uses position second differences and quaternion geodesic-rate changes rather than direct quaternion subtraction. Training checkpoint metadata supplies the checkpoint-sensitive dimensions, image size, action semantics, and maximum trained horizon; plain state dict checkpoints use the node defaults. These are **node parameters**, not additional launch arguments; change them in the launch file or start the executable directly with a ROS parameter file.
 
 The standard bridge can also expose the optional `~/plan_mrp` action via `enable_mrp_action:=true` when `phx_nav_msgs` is available. The bag launch disables that action. DinoWM loads a different `.pth` checkpoint containing separate encoder and predictor modules, uses `num_hist` frames (which must match training), and transforms its output through TF. Its normalization arrays and CEM settings are node parameters; the shared adapter leaves that model-specific math inside the DinoWM node.
 

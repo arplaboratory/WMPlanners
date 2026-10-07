@@ -315,9 +315,18 @@ def main():
         parser.error(f"normalization statistics not found: {norm_path}")
     norm_stats = NormStats.load(norm_path) if norm_path.is_file() else None
     print(f"Normalization statistics: {norm_path if norm_stats is not None else 'none'}", flush=True)
-    horizon = cli.horizon or int(checkpoint["args"].get("horizon", 8))
+    trained_horizon = int(
+        checkpoint.get("training_contract", {}).get(
+            "trained_horizon", checkpoint["args"].get("horizon", 8)
+        )
+    )
+    horizon = cli.horizon or trained_horizon
     if horizon < 1 or cli.epochs < 1 or cli.batch_size < 1:
         parser.error("horizon, epochs, and batch_size must be positive")
+    if horizon > trained_horizon:
+        parser.error(
+            f"head horizon {horizon} exceeds dynamics training horizon {trained_horizon}"
+        )
     image_size = int(checkpoint["args"].get("img_size", 224))
     train_risk = cli.heads == "both"
     if train_risk and cli.risk_weight <= 0:
@@ -326,13 +335,28 @@ def main():
         parser.error("validation_fraction must be between 0 and 1")
     datasets = open_splits(cli, image_size, horizon + 1)
     expected = checkpoint["model_config"]
-    for split, dataset in zip((cli.train_split, cli.val_split), datasets):
+    for split, dataset in zip(
+        (cli.train_split, cli.val_split), datasets, strict=True
+    ):
         dims = (dataset.D_odom, dataset.D_imu, dataset.D_act)
         required = (expected["odom_dim"], expected["imu_dim"], expected["act_dim"])
         if dims != required:
             raise ValueError(f"{split} dataset dimensions {dims} differ from checkpoint {required}")
         if not len(dataset):
             raise ValueError(f"{split} dataset has no windows")
+        expected_action = checkpoint.get("training_contract", {}).get("action", {})
+        actual_action = getattr(dataset, "manifest", {}).get(
+            "sensor_semantics", {}
+        ).get("action", {})
+        for key in ("source", "semantic", "frame", "components"):
+            if (
+                expected_action.get(key)
+                and actual_action.get(key) != expected_action[key]
+            ):
+                raise ValueError(
+                    f"{split} dataset action {key}={actual_action.get(key)!r} differs "
+                    f"from checkpoint {expected_action[key]!r}"
+                )
     rebase_positions = is_parquet_dataset(cli.dataset)
     loaders = [DataLoader(
         WindowPrefix(dataset, horizon + 1, norm_stats), batch_size=cli.batch_size,

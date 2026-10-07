@@ -32,6 +32,18 @@
     # Adapt these transport settings to the deployment graph.
     publish_frame: body
 
-    plan_iters: 5
-    plan_population: 128
-    plan_elites: 16
+    # Use the checkpoint horizon and correlated samples for the high-dimensional
+    # future-pose action sequence.
+    plan_horizon: 0
+    plan_iters: 7
+    plan_population: 256
+    plan_elites: 32
+    cem_temporal_noise: 0.8
+
+    # Balance terminal accuracy with steady progress and smooth trajectories.
+    goal_weight: 1.0
+    path_weight: 0.25
+    reverse_progress_weight: 1.0
+    trajectory_smoothness_weight: 0.1
+    action_smoothness_weight: 0.1
+    risk_weight: 0.0

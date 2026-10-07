@@ -18,6 +18,7 @@ from world_model.data import (
 )
 from world_model.architecture import WorldModel
 from world_model.engine.trainer import TrainConfig, rollout_loss
+from world_model.mpc import compute_action_bounds
 from world_model.utils import seed_everything
 
 
@@ -57,6 +58,30 @@ def is_main_process(args) -> bool:
     if not args.ddp:
         return True
     return int(os.environ.get("RANK", 0)) == 0
+
+
+def training_contract(dataset, args) -> dict:
+    """Build the data and rollout contract consumed by deployment."""
+    manifest = getattr(dataset, "manifest", {}) or {}
+    policy_action = manifest.get("policy", {}).get("action_contract", {})
+    semantic_action = manifest.get("sensor_semantics", {}).get("action", {})
+    action = {**policy_action, **semantic_action}
+    if action.get("source") == "future_odom_pose":
+        action["position_origin"] = "window_start"
+        action["axes"] = "source_frame"
+    return {
+        "trained_horizon": int(args.horizon),
+        "num_hist": int(args.num_hist),
+        "action": action,
+    }
+
+
+def restore_target_model(target_model, checkpoint: dict) -> bool:
+    """Restore an EMA target, falling back to the online model for old runs."""
+    if target_model is None:
+        return False
+    target_model.load_state_dict(checkpoint.get("target_model") or checkpoint["model"])
+    return checkpoint.get("target_model") is not None
 
 
 @torch.no_grad()
@@ -157,6 +182,15 @@ class Trainer:
             for key in ("dataset_id", "dataset_hash", "release_id", "release_hash", "recipe_sha256")
             if manifest.get(key) is not None
         }
+        self.training_contract = training_contract(self.ds, args)
+        if args.save_action_bounds and self.main_process:
+            mean, std, low, high = compute_action_bounds(self.ds, torch.device("cpu"))
+            torch.save(
+                {"mean": mean, "std": std, "low": low, "high": high},
+                os.path.join(args.out_dir, "action_bounds.pt"),
+            )
+        if args.ddp:
+            dist.barrier()
 
         sampler = None
         shuffle = True
@@ -199,6 +233,7 @@ class Trainer:
             self.target_model = copy.deepcopy(self.model)
             for p in self.target_model.parameters():
                 p.requires_grad = False
+            self.target_model.eval()
 
         if args.ddp:
             find_unused = (args.dynamics_type == "td-jepa") or (args.wm_mode == "jepa-lite")
@@ -237,7 +272,15 @@ class Trainer:
         best_path = os.path.join(args.out_dir, "best.pt")
         if self.has_validation_split and os.path.exists(best_path):
             best_ckpt = torch.load(best_path, map_location="cpu", weights_only=False)
-            self.best_validation_loss = best_ckpt.get("validation_loss", float("inf"))
+            best_horizon = int(
+                best_ckpt.get("training_contract", {}).get(
+                    "trained_horizon", best_ckpt.get("args", {}).get("horizon", 0)
+                )
+            )
+            if best_horizon == args.horizon:
+                self.best_validation_loss = best_ckpt.get(
+                    "validation_loss", float("inf")
+                )
         self.start_epoch = 0
         checkpoint_path = args.resume
         if checkpoint_path is None:
@@ -253,6 +296,20 @@ class Trainer:
             ckpt = torch.load(checkpoint_path, map_location=args.device)
             raw_model = self.model.module if isinstance(self.model, DDP) else self.model
             raw_model.load_state_dict(ckpt['model'])
+            previous_action = ckpt.get("training_contract", {}).get("action", {})
+            current_action = self.training_contract["action"]
+            for key in ("source", "semantic", "frame", "components"):
+                if (previous_action.get(key)
+                        and previous_action[key] != current_action.get(key)):
+                    raise ValueError(
+                        f"Resume checkpoint action {key}={previous_action[key]!r} "
+                        f"does not match dataset {current_action.get(key)!r}"
+                    )
+            if self.target_model is not None:
+                restored_ema = restore_target_model(self.target_model, ckpt)
+                if not restored_ema and self.main_process:
+                    print("[WARN] Resume checkpoint has no EMA target model; "
+                          "initializing it from the online model.")
             if 'optimizer' in ckpt:
                 self.opt.load_state_dict(ckpt['optimizer'])
             self.start_epoch = ckpt.get('epoch', -1) + 1
@@ -302,7 +359,14 @@ class Trainer:
 
                 if self.target_model is not None:
                     with torch.no_grad():
-                        for op, tp in zip(self.model.parameters(), self.target_model.parameters()):
+                        online_model = (self.model.module if isinstance(self.model, DDP)
+                                        else self.model)
+                        parameter_pairs = zip(
+                            online_model.parameters(),
+                            self.target_model.parameters(),
+                            strict=True,
+                        )
+                        for op, tp in parameter_pairs:
                             tp.data.mul_(args.ema_tau).add_(op.data, alpha=1.0 - args.ema_tau)
 
                 epoch_loss += logs['loss']
@@ -335,6 +399,8 @@ class Trainer:
                 raw_model = self.model.module if isinstance(self.model, DDP) else self.model
                 ckpt = {
                     'model': raw_model.state_dict(),
+                    'target_model': (self.target_model.state_dict()
+                                     if self.target_model is not None else None),
                     'optimizer': self.opt.state_dict(),
                     'epoch': epoch,
                     'args': vars(args),
@@ -345,6 +411,7 @@ class Trainer:
                         'state_dim': args.state_dim if args.state_dim else min(6, self.ds.D_odom),
                     },
                     'dataset_provenance': self.dataset_provenance,
+                    'training_contract': self.training_contract,
                     # Consumers must use this metadata rather than infer head
                     # readiness from state-dict keys: the architecture always
                     # includes these modules, including unsupervised JEPA-lite
@@ -499,6 +566,8 @@ def build_parser(parents=None):
                     help='Cache local Parquet windows in RAM before training')
     ap.add_argument('--max_windows', type=int, default=None,
                     help='Cap cached Parquet windows per split; requires --precompute_windows')
+    ap.add_argument('--save_action_bounds', action=argparse.BooleanOptionalAction, default=True,
+                    help='Save dataset-derived per-dimension CEM bounds in the run directory')
     ap.add_argument('--ddp', action='store_true', default=False)
     ap.add_argument('--run_mpc_after_train', action='store_true', default=False,
                     help='Run MPC evaluation automatically after training finishes (main process only)')
