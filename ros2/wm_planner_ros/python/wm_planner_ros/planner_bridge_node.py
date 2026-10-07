@@ -25,8 +25,9 @@ import torch
 
 from world_model.architecture import WorldModel
 from world_model.data.normalization import NormStats
-from world_model.mpc import (CEMConfig, LatentCEMCostConfig, cem_plan,
-                             cem_plan_latent_target, cem_plan_with_cost)
+from world_model.mpc import (CEMConfig, LatentCEMCostConfig, StateCEMCostConfig,
+                             cem_plan, cem_plan_latent_target, cem_plan_with_cost,
+                             state_trajectory_cost)
 
 from wm_planner_ros.bridge_adapter import BufferedPlannerBridgeNode, Goal
 from wm_planner_ros.model_adapters import StandardWorldModelAdapter
@@ -172,12 +173,18 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self.declare_parameter("plan_iters", 5)
         self.declare_parameter("plan_population", 128)
         self.declare_parameter("plan_elites", 16)
+        self.declare_parameter("allow_horizon_extrapolation", False)
         self.declare_parameter("action_min", -3.0)
         self.declare_parameter("action_max", 3.0)
         self.declare_parameter("action_init_std", 1.0)
         self.declare_parameter("cem_alpha", 0.3)
+        self.declare_parameter("cem_temporal_noise", 0.0)
 
         self.declare_parameter("goal_weight", 1.0)
+        self.declare_parameter("path_weight", 0.0)
+        self.declare_parameter("reverse_progress_weight", 0.0)
+        self.declare_parameter("trajectory_smoothness_weight", 0.0)
+        self.declare_parameter("action_smoothness_weight", 0.0)
         self.declare_parameter("risk_weight", 0.5)
         self.declare_parameter("marker_scale", 0.08)
 
@@ -288,8 +295,34 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             raise ValueError("invalid_depth_fill must be finite")
 
         self._goal_weight = float(self.get_parameter("goal_weight").value)
+        self._path_weight = float(self.get_parameter("path_weight").value)
+        self._reverse_progress_weight = float(
+            self.get_parameter("reverse_progress_weight").value)
+        self._trajectory_smoothness_weight = float(
+            self.get_parameter("trajectory_smoothness_weight").value)
+        self._action_smoothness_weight = float(
+            self.get_parameter("action_smoothness_weight").value)
         self._risk_weight = float(self.get_parameter("risk_weight").value)
         self._marker_scale = float(self.get_parameter("marker_scale").value)
+        self._allow_horizon_extrapolation = bool(
+            self.get_parameter("allow_horizon_extrapolation").value)
+        for name, value in (
+            ("goal_weight", self._goal_weight),
+            ("path_weight", self._path_weight),
+            ("reverse_progress_weight", self._reverse_progress_weight),
+            ("trajectory_smoothness_weight", self._trajectory_smoothness_weight),
+            ("action_smoothness_weight", self._action_smoothness_weight),
+            ("risk_weight", self._risk_weight),
+        ):
+            if value < 0.0:
+                raise ValueError(f"{name} must be nonnegative")
+        self._state_cost_cfg = StateCEMCostConfig(
+            terminal_weight=self._goal_weight,
+            path_weight=self._path_weight,
+            reverse_progress_weight=self._reverse_progress_weight,
+            trajectory_smoothness_weight=self._trajectory_smoothness_weight,
+            risk_weight=self._risk_weight,
+        )
 
         self._cem_cfg = CEMConfig(
             horizon=int(self.get_parameter("plan_horizon").value),
@@ -301,6 +334,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             action_max=float(self.get_parameter("action_max").value),
             init_std=float(self.get_parameter("action_init_std").value),
             alpha=float(self.get_parameter("cem_alpha").value),
+            temporal_noise=float(self.get_parameter("cem_temporal_noise").value),
+            action_smoothness_weight=self._action_smoothness_weight,
         )
 
     def _build_model(self) -> WorldModel:
@@ -397,10 +432,44 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                     and projection.shape[1] == last_conv.shape[0]
                 )
             self._cem_cfg.action_dim = self._act_dim
-            if self._act_dim == 7 and self._action_position_dims == (0, 1, 2):
+            contract = checkpoint.get("training_contract", {})
+            trained_horizon = int(contract.get("trained_horizon", args_dict.get("horizon", 0)))
+            if trained_horizon < 1:
+                raise ValueError("Training checkpoint has no valid trained horizon")
+            if self._cem_cfg.horizon == 0:
+                self._cem_cfg.horizon = trained_horizon
+            elif (self._cem_cfg.horizon > trained_horizon
+                  and not self._allow_horizon_extrapolation):
+                raise ValueError(
+                    f"plan_horizon={self._cem_cfg.horizon} exceeds checkpoint "
+                    f"trained_horizon={trained_horizon}; retrain at the requested horizon "
+                    "or set allow_horizon_extrapolation=true explicitly"
+                )
+            action_contract = contract.get("action", {})
+            components = action_contract.get("components", [])
+            if action_contract.get("source") == "future_odom_pose":
+                if (action_contract.get("position_origin") == "window_start"
+                        and self._goal_frame_mode != "current_map"):
+                    raise ValueError(
+                        "window-start-relative pose checkpoints require "
+                        "goal_frame_mode=current_map"
+                    )
+                if not components and self._act_dim == 7:
+                    components = ["x", "y", "z", "qx", "qy", "qz", "qw"]
+                required = {"x", "y", "z", "qx", "qy", "qz", "qw"}
+                if not required.issubset(components):
+                    raise ValueError(
+                        "future_odom_pose action contract must identify xyz and quaternion components"
+                    )
+                position_dims = tuple(components.index(name) for name in ("x", "y", "z"))
+                quaternion_dims = tuple(components.index(name) for name in ("qx", "qy", "qz", "qw"))
+                self._cem_cfg.action_position_dims = position_dims
+                self._cem_cfg.action_quaternion_dims = quaternion_dims
+                self._cem_cfg.action_unit_norm_dims = quaternion_dims
+            elif self._act_dim == 7 and self._action_position_dims == (0, 1, 2):
+                self._cem_cfg.action_position_dims = self._action_position_dims
+                self._cem_cfg.action_quaternion_dims = (3, 4, 5, 6)
                 self._cem_cfg.action_unit_norm_dims = (3, 4, 5, 6)
-            if self._wm_mode == "jepa-lite" and self._cem_cfg.horizon == 0:
-                self._cem_cfg.horizon = int(args_dict.get("horizon", 8))
             self.set_parameters([
                 rclpy.parameter.Parameter("backend", value=self._backend),
                 rclpy.parameter.Parameter("dynamics_type", value=self._dynamics_type),
@@ -448,6 +517,13 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                               else "state") if self._planner_mode_param == "auto" else self._planner_mode_param
         if self._planner_mode == "state" and not self._head_trained:
             raise ValueError("State planning requires a fitted state head; use planner_mode=latent")
+        head_horizon = int(head_training.get("horizon", self._cem_cfg.horizon))
+        if (self._planner_mode == "state" and self._cem_cfg.horizon > head_horizon
+                and not self._allow_horizon_extrapolation):
+            raise ValueError(
+                f"plan_horizon={self._cem_cfg.horizon} exceeds state-head training "
+                f"horizon={head_horizon}"
+            )
         self._trajectory_source = ("state_head" if self._head_trained else "actions") \
             if self._trajectory_source_param == "auto" else self._trajectory_source_param
         if self._trajectory_source == "state_head" and not self._head_trained:
@@ -949,14 +1025,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                  risk_seq: torch.Tensor,
                  goal: torch.Tensor
         ) -> torch.Tensor:
-        # delta state cost: minimize ‖(state_T - state_0)1 desired_change‖.
-        # Taking the difference cancels any constant decoder bias so CEM plans
-        # to the right relative position regardless of state_head offset.
-        # state_seq: (N, H+1, state_dim)
-        change    = state_seq[:, -1, :3] - state_seq[:, 0, :3]   # (N, 3)
-        goal_dist = torch.linalg.norm(change - goal[:, :3], dim=1)
-        risk_cost = risk_seq.mean(dim=1) if risk_seq is not None else 0.0
-        return self._goal_weight * goal_dist + self._risk_weight * risk_cost
+        return state_trajectory_cost(state_seq, risk_seq, goal, self._state_cost_cfg)
 
     def _publish_path(self, frame_id: str, stamp: Any, state_roll: np.ndarray) -> None:
         msg = Path()
