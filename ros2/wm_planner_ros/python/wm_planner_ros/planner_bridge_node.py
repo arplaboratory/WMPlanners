@@ -350,7 +350,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
 
         if os.path.isdir(checkpoint_path):
             checkpoint_path = next((os.path.join(checkpoint_path, name) for name in
-                                    ("latest_with_rollout_heads.pt", "latest_with_observed_heads.pt",
+                                    ("latest_with_rollout_heads_local.pt", "latest_with_rollout_heads.pt",
+                                     "latest_with_observed_heads.pt",
                                      "latest_with_state_head.pt", "latest_with_heads.pt", "latest.pt")
                                     if os.path.isfile(os.path.join(checkpoint_path, name))), None)
             if checkpoint_path is None:
