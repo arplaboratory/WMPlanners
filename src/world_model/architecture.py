@@ -22,6 +22,18 @@ from .components import (
 )
 
 
+_DEFAULT_BACKBONE_NAMES = {
+    "dinov2": "dinov2_vitb14",
+    "dinov3": "dinov3_vitb16",
+    "vjepa2": "vjepa2_vit_giant",
+}
+
+
+def default_backbone_name(backbone: str) -> str | None:
+    """Return the model name used when checkpoint metadata omits one."""
+    return _DEFAULT_BACKBONE_NAMES.get(backbone.lower())
+
+
 @dataclass
 class WMOutput:
     """Container for a single world-model encoding step."""
@@ -38,9 +50,10 @@ def checkpoint_backbone_kwargs(
     args = checkpoint.get("args", {})
     backbone = str(args.get("backbone", "cnn")).lower()
     if backbone != "cnn":
+        model_name = args.get("backbone_name") or default_backbone_name(backbone)
         return {
             "device": device,
-            "model_name": args.get("backbone_name", "dinov2_vitb14"),
+            "model_name": model_name,
             "pretrained": False,
         }
 
@@ -76,7 +89,7 @@ class WorldModel(nn.Module):
 
     Parameters:
         backbone: Name of a registered backbone (e.g. ``"cnn"``, ``"dinov2"``,
-            ``"vjepa2"``).  When ``None`` or ``"cnn"``, the built-in
+            ``"dinov3"``, ``"vjepa2"``). When ``None`` or ``"cnn"``, the built-in
             :class:`~world_model.backbones.cnn.VisionEncoder` is used.
         backbone_kwargs: Extra keyword arguments forwarded to the backbone
             builder (e.g. ``model_name``, ``device``).
@@ -102,7 +115,7 @@ class WorldModel(nn.Module):
         super().__init__()
 
         # vision backbone
-        bkw = backbone_kwargs or {}
+        bkw = dict(backbone_kwargs or {})
         if backbone is None or backbone == "cnn":
             in_ch = bkw.get("in_ch", 4)
             self.vision: nn.Module = VisionEncoder(
@@ -112,6 +125,7 @@ class WorldModel(nn.Module):
             self._vis_dim = z_vis_dim
             self._vis_in_ch = in_ch
         else:
+            bkw.setdefault("image_size", image_size)
             bundle: ModelBundle = create_backbone(backbone, **bkw)
             self.vision = bundle.model
             self._vis_dim = bundle.feature_dim or z_vis_dim
@@ -125,6 +139,7 @@ class WorldModel(nn.Module):
         if freeze_backbone:
             for p in self.vision.parameters():
                 p.requires_grad = False
+        self._freeze_backbone = freeze_backbone
 
         # proprioception
         self.proprio = ProprioEncoder(odom_dim=odom_dim, imu_dim=imu_dim, z_dim=z_prop_dim)
@@ -140,6 +155,13 @@ class WorldModel(nn.Module):
         # heads
         self.state_head = StateHead(z_dim=z_dim, state_dim=state_dim)
         self.risk_head = RiskHead(z_dim=z_dim)
+
+    def train(self, mode: bool = True):
+        """Keep a frozen pretrained vision encoder in evaluation mode."""
+        super().train(mode)
+        if self._freeze_backbone:
+            self.vision.eval()
+        return self
 
     def encode(
         self,

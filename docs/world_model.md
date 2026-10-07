@@ -6,10 +6,10 @@ The [data pipeline](data_pipeline.md) produces NPZ episodes and optional Hugging
 
 | Family | Visual encoder | Prediction path | Training entry point |
 |---|---|---|---|
-| WorldModel | CNN, DINOv2, or V-JEPA2 | MLP or RSSM latent dynamics, state and risk heads; `standard` or `jepa-lite` training objective | `scripts/world_model/train_wm.py --method wm` (or `train_world_model.py` directly) |
+| WorldModel | CNN, DINOv2, DINOv3, or V-JEPA2 | MLP or RSSM latent dynamics, state and risk heads; `standard` or `jepa-lite` training objective | `scripts/world_model/train_wm.py --method wm` (or `train_world_model.py` directly) |
 | DinoWM | Frozen DINOv2 patch encoder | Fused visual, proprioceptive, and action tokens through a ViT predictor | `scripts/world_model/train_wm.py --method dinowm` (or `train_world_model_dinowm.py` directly) |
 
-WorldModel lives in `src/world_model/architecture.py`; DinoWM uses `src/world_model/backbones/wm.py`. Its pretrained visual encoders draw on DINOv2 {cite:p}`oquab2023dinov2` and V-JEPA 2 {cite:p}`assran2025vjepa2`. JEPA-lite is a WorldModel training objective {cite:p}`assran2023ijepa` selected by `--method wm --wm_mode jepa-lite`. CNN and DINOv2 can also be paired with RSSM latent dynamics {cite:p}`hafner2019learning` by selecting `--dynamics_type rssm`.
+WorldModel lives in `src/world_model/architecture.py`; DinoWM uses `src/world_model/backbones/wm.py`. Its pretrained visual encoders include DINOv2 {cite:p}`oquab2023dinov2`, DINOv3, and V-JEPA 2 {cite:p}`assran2025vjepa2`. JEPA-lite is a WorldModel training objective {cite:p}`assran2023ijepa` selected by `--method wm --wm_mode jepa-lite`. CNN and DINO backbones can also be paired with RSSM latent dynamics {cite:p}`hafner2019learning` by selecting `--dynamics_type rssm`.
 
 ## Loading episodes
 
@@ -39,7 +39,7 @@ flowchart LR
 
 The [trajectory notebook](notebooks/world_model_pipeline.ipynb) shows the library API for opening windows, training a standard model, checkpointing, and planning. The [video dataset notebook](notebooks/video_datasets.ipynb) covers the separate `wm_datasets` clip and frame-pair loaders.
 
-## Standard WorldModel: CNN, DINOv2, V-JEPA2, and RSSM
+## Standard WorldModel: CNN, DINOv2, DINOv3, V-JEPA2, and RSSM
 
 The visual backbone encodes observations into a latent state. The dynamics model rolls that state forward under candidate actions. State and risk heads predict task outputs. Training compares latent, state, and collision predictions against targets; `--wm_mode jepa-lite` changes the latent objective to JEPA-style matching.
 

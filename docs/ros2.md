@@ -4,10 +4,10 @@
 
 | Executable | Model | Observations |
 |---|---|---|
-| `wm_planner_bridge_node` | Standard `WorldModel`: CNN, DINOv2, or V-JEPA2 encoder with RSSM or MLP dynamics | Raw RGB, raw depth, odometry, IMU |
+| `wm_planner_bridge_node` | Standard `WorldModel`: CNN, DINOv2, DINOv3, or V-JEPA2 encoder with RSSM or MLP dynamics | Raw RGB, raw depth, odometry, IMU |
 | `dino_wm_planner_bridge_node` | Separate DinoWM architecture with a token predictor | Raw RGB, odometry, IMU |
 
-Both executables use the same Python bridge infrastructure in `bridge_adapter.py`: ROS subscriptions, goal handling, publishers, a bounded observation history, and a latest-observation-wins planning worker. `model_adapters.py` supplies the model-specific observation and planning methods. The standard adapter covers CNN+RSSM, DINOv2+RSSM, and JEPA-lite; the DinoWM adapter uses a three-frame history by default and keeps DinoWM's own CEM and TF path. JEPA-lite uses the standard `WorldModel` with a different training objective and normally MLP dynamics. See [World model](world_model.md) for the model architectures.
+Both executables use the same Python bridge infrastructure in `bridge_adapter.py`: ROS subscriptions, goal handling, publishers, a bounded observation history, and a latest-observation-wins planning worker. `model_adapters.py` supplies the model-specific observation and planning methods. The standard adapter covers CNN+RSSM, DINOv2+RSSM, DINOv3+RSSM, and JEPA-lite; the DinoWM adapter uses a three-frame history by default and keeps DinoWM's own CEM and TF path. JEPA-lite uses the standard `WorldModel` with a different training objective and normally MLP dynamics. See [World model](world_model.md) for the model architectures.
 
 ## Setup and launch
 
@@ -36,7 +36,7 @@ ros2 launch wm_planner_ros bag_in_the_loop.launch.py \
   model:=cnn checkpoint_path:=/path/to/cnn_rssm/latest.pt device:=cuda
 ```
 
-For DINOv2+RSSM, use `model:=dino` and its corresponding checkpoint. For JEPA-lite, first train the state decoder as shown in [Training](training.md), then launch with its updated checkpoint:
+For DINOv2+RSSM or DINOv3+RSSM, use `model:=dinov2` or `model:=dinov3` and the corresponding checkpoint. For JEPA-lite, first train the state decoder as shown in [Training](training.md), then launch with its updated checkpoint:
 
 ```bash
 ros2 launch wm_planner_ros bag_in_the_loop.launch.py \
@@ -53,21 +53,21 @@ ros2 launch wm_planner_ros bag_in_the_loop.launch.py \
   dino_model_name:=dinov2_vits14 num_hist:=3 device:=cuda
 ```
 
-Pass the MCAP path and choose its robot config with `robot:=NAME`, or use `robot:=/path/to/robot.yaml`. `model:=dino` selects DINOv2+RSSM in the standard adapter; `model:=dinowm` selects the separate DinoWM model adapter. The JEPA-lite checkpoint metadata chooses its CNN or DINOv2 encoder and trained dynamics. `device:=cpu` is the portable default. Stop the launch with Ctrl+C.
+Pass the MCAP path and choose its robot config with `robot:=NAME`, or use `robot:=/path/to/robot.yaml`. `model:=dinov2` or `model:=dinov3` selects that backbone in the standard adapter; `model:=dinowm` selects the separate DinoWM model adapter. JEPA-lite checkpoint metadata chooses its CNN or pretrained encoder and trained dynamics. `device:=cpu` is the portable default. Stop the launch with Ctrl+C.
 
 | Launch argument | Default | Effect |
 |---|---|---|
 | `bag` | required | MCAP file to replay; relative paths resolve from the launch command's working directory. |
 | `robot` | required | Name of an installed `configs/robots/*.yaml` file, or an explicit YAML path. The config supplies the node namespace and recorded sensor topics. |
-| `model` | `cnn` | `cnn` selects CNN+RSSM; `dino` selects DINOv2+RSSM; `jepa-lite` selects JEPA-lite; `dinowm` selects DinoWM. |
-| `checkpoint_path` | empty | Local `.pt` or `.pth` checkpoint. Required for JEPA-lite and DinoWM. For `cnn` or `dino`, an empty value requests `cnn_rssm_c1/latest.pt` or `dino_rssm_c1/latest.pt` from the default Hugging Face repository. |
+| `model` | `cnn` | `cnn` selects CNN+RSSM; `dinov2` and `dinov3` select the corresponding DINO+RSSM model; `jepa-lite` selects JEPA-lite; `dinowm` selects DinoWM. `dino` remains a DINOv2 alias. |
+| `checkpoint_path` | empty | Local `.pt` or `.pth` checkpoint. Required for DINOv3, JEPA-lite, and DinoWM. A DINOv3 deployment checkpoint contains its trained backbone weights and does not need the original Meta weights file. |
 | `norm_stats_path` | empty | Standard-model `norm_stats.pt`; if empty, the bridge looks beside the checkpoint. DinoWM uses its own normalization parameters. |
 | `rate` | `0.1` | Positive multiplier for bag playback speed. |
 | `dino_model_name` | `dinov2_vits14` | DinoWM encoder name; ignored by the standard adapter. |
 | `num_hist` | `3` | DinoWM observation history length; ignored by the standard adapter. |
 | `device` | `cpu` | PyTorch device, such as `cpu` or `cuda`. |
 
-The launch validates the bag and any supplied checkpoint or normalization file paths. The three standard-WorldModel choices read `args` and `model_config` from training checkpoints to construct the trained backbone, dynamics, image size, and sensor/action dimensions before loading the saved `model` weights. For `cnn` and `dino`, the checkpoint architecture must match the launch choice. The bridge still accepts older plain state dict checkpoints using its configured defaults. If a standard-model checkpoint download fails, the node continues with random weights; provide a trained checkpoint for meaningful plans. Missing normalization statistics also degrade trajectory quality.
+The launch validates the bag and any supplied checkpoint or normalization file paths. Standard WorldModel choices read `args` and `model_config` from training checkpoints to construct the trained backbone, dynamics, image size, and sensor/action dimensions before loading the saved `model` weights. For CNN and DINO choices, the checkpoint architecture must match the launch choice. The bridge still accepts older plain state dict checkpoints using its configured defaults. If a standard-model checkpoint download fails, the node continues with random weights; provide a trained checkpoint for meaningful plans. Missing normalization statistics also degrade trajectory quality.
 
 JEPA-lite training leaves the state and risk heads unsupervised. Use a rollout-trained checkpoint such as `latest_with_rollout_heads.pt` produced by `train_state_head_decoder.py` for goal-based planning. The launch sets `risk_weight:=0.0` for JEPA-lite, so its untrained risk head does not affect CEM scoring. The default `norm_stats.pt` lookup is beside the checkpoint; supply `norm_stats_path` if it is elsewhere.
 
@@ -118,7 +118,7 @@ uses window-start-relative future poses requires `goal_frame_mode: current_map`.
 
 ## What the launch starts
 
-1. The selected executable in the namespace set by the robot config's `name`. `cnn`, `dino`, and `jepa-lite` start `wm_planner_bridge_node`; `dinowm` starts `dino_wm_planner_bridge_node`. Standard RSSM choices use their selected backbone, while JEPA-lite uses checkpoint metadata. Both share the buffered planner worker; the standard adapter needs one observation and DinoWM uses `num_hist` observations.
+1. The selected executable in the namespace set by the robot config's `name`. `cnn`, `dinov2`, `dinov3`, and `jepa-lite` start `wm_planner_bridge_node`; `dinowm` starts `dino_wm_planner_bridge_node`. Standard RSSM choices use their selected backbone, while JEPA-lite uses checkpoint metadata. Both share the buffered planner worker; the standard adapter needs one observation and DinoWM uses `num_hist` observations.
 2. For configs with `sensors.color_encoding: compressed`, `image_transport republish` turns the recorded RGB stream into raw `sensor_msgs/Image` on the topic without the `/compressed` suffix. This requires the `compressed_image_transport` plugin. Raw color configs use the recorded topic directly.
 3. `ros2 bag play` after a five-second startup delay, with MCAP storage, `/clock`, the selected rate, and `--loop`. The standard adapter replays RGB, depth, odometry, and IMU; DinoWM replays RGB, odometry, IMU, `/tf`, and `/tf_static`. Looping lets the bridge receive later passes if model loading takes longer than the first pass.
 

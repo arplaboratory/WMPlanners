@@ -63,12 +63,14 @@ cd "$PROJECT_ROOT" || exit 1
 uv pip install -e ".[dev]" || exit 1
 uv pip install --upgrade pyarrow datasets
 
-# 3. Install external packages (DINOv2, V-JEPA2)
+# 3. Install external packages (DINOv2, DINOv3, V-JEPA2)
 if [ "$INSTALL_EXTERNALS" = true ]; then
     # Upstream pins target older PyTorch/Python releases. Install their sources
     # and the ROS bridge runtime dependencies separately.
-    uv pip install --no-deps -e "$PROJECT_ROOT/external/dino" -e "$PROJECT_ROOT/external/vjepa2" || exit 1
-    uv pip install fvcore iopath torchmetrics peft fire python-box || exit 1
+    uv pip install --no-deps -e "$PROJECT_ROOT/external/dino" \
+        -e "$PROJECT_ROOT/external/dinov3" \
+        -e "$PROJECT_ROOT/external/vjepa2" || exit 1
+    uv pip install fvcore iopath torchmetrics peft fire python-box termcolor || exit 1
 fi
 
 # 4. Initialize .env file

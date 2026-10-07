@@ -23,7 +23,11 @@ from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 import torch
 
-from world_model.architecture import WorldModel, checkpoint_backbone_kwargs
+from world_model.architecture import (
+    WorldModel,
+    checkpoint_backbone_kwargs,
+    default_backbone_name,
+)
 from world_model.data.normalization import NormStats
 from world_model.mpc import (CEMConfig, LatentCEMCostConfig, StateCEMCostConfig,
                              cem_plan, cem_plan_latent_target, cem_plan_with_cost,
@@ -192,10 +196,12 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
     def _load_params(self) -> None:
         self._backend = str(self.get_parameter("backend").value).lower()
         self._dynamics_type = str(self.get_parameter("dynamics_type").value).lower()
+        self._backend_was_auto = self._backend == "auto"
+        self._dynamics_was_auto = self._dynamics_type == "auto"
         self._wm_mode = str(self.get_parameter("wm_mode").value).lower()
         if self._wm_mode not in {"standard", "jepa-lite"}:
             raise ValueError(f"wm_mode must be standard or jepa-lite; got {self._wm_mode}")
-        self._backbone_name = "dinov2_vitb14"
+        self._backbone_name = None
         self._checkpoint_path = str(self.get_parameter("checkpoint_path").value)
         self._checkpoint_repo_id = str(self.get_parameter("checkpoint_repo_id").value)
         self._checkpoint_experiment = str(self.get_parameter("checkpoint_experiment").value)
@@ -216,7 +222,12 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         # convention: {backbone}_{dynamics}_{run}  e.g. dino_rssm_c1, cnn_mlp_c1
         if self._backend == "auto" or self._dynamics_type == "auto":
             exp = self._checkpoint_experiment.lower()
-            detected_backend = "dinov2" if exp.startswith("dino") else "cnn"
+            if exp.startswith("dinov3"):
+                detected_backend = "dinov3"
+            elif exp.startswith("dino"):
+                detected_backend = "dinov2"
+            else:
+                detected_backend = "cnn"
             detected_dynamics = "rssm" if "rssm" in exp else "mlp"
             if self._backend == "auto":
                 self._backend = detected_backend
@@ -236,8 +247,12 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                                           self._dynamics_type),
             ])
 
-        if self._backend not in {"cnn", "dinov2", "vjepa2"}:
-            raise ValueError(f"backend must be one of ['cnn','dinov2','vjepa2']; got {self._backend}")
+        if self._backend not in {"cnn", "dinov2", "dinov3", "vjepa2"}:
+            raise ValueError(
+                "backend must be one of ['cnn','dinov2','dinov3','vjepa2']; "
+                f"got {self._backend}"
+            )
+        self._backbone_name = default_backbone_name(self._backend)
         if self._dynamics_type not in {"rssm", "mlp"}:
             raise ValueError(f"dynamics_type must be one of ['rssm','mlp']; got {self._dynamics_type}")
 
@@ -341,10 +356,10 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
 
     def _build_model(self) -> WorldModel:
         bkw: dict = {"device": str(self._device)}
-        if self._backend in {"dinov2", "vjepa2"}:
+        if self._backend in {"dinov2", "dinov3", "vjepa2"}:
             # Weights are loaded from the checkpoint; skip the pretrained internet download.
             bkw["pretrained"] = False
-        if self._backend == "dinov2":
+        if self._backend in {"dinov2", "dinov3"}:
             bkw["model_name"] = self._backbone_name
         if self._backend == "cnn":
             bkw["pool_features"] = self._cnn_pool_features
@@ -410,8 +425,15 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             trained_dynamics = args_dict.get("dynamics_type", "mlp").lower()
             if trained_dynamics == "td-jepa":
                 trained_dynamics = "mlp"
+            backend_mismatch = (
+                not self._backend_was_auto and trained_backend != self._backend
+            )
+            dynamics_mismatch = (
+                not self._dynamics_was_auto
+                and trained_dynamics != self._dynamics_type
+            )
             if self._wm_mode == "standard" and (
-                trained_backend != self._backend or trained_dynamics != self._dynamics_type
+                backend_mismatch or dynamics_mismatch
             ):
                 raise ValueError(
                     f"Checkpoint uses {trained_backend}+{trained_dynamics}, but launch selected "
@@ -419,7 +441,10 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                 )
             self._backend = trained_backend
             self._dynamics_type = trained_dynamics
-            self._backbone_name = args_dict.get("backbone_name", "dinov2_vitb14")
+            self._backbone_name = (
+                args_dict.get("backbone_name")
+                or default_backbone_name(self._backend)
+            )
             self._img_h = self._img_w = int(args_dict.get("img_size", 224))
             self._odom_dim = int(model_cfg["odom_dim"])
             self._imu_dim = int(model_cfg["imu_dim"])
@@ -1092,7 +1117,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         metrics.data = [goal_distance, risk_mean, float(self._goal_weight), float(self._risk_weight)]
         self._debug_pub.publish(metrics)
 
-    # ImageNet statistics used by pretrained ViT backbones (DINOv2, V-JEPA2).
+    # ImageNet statistics used by pretrained ViT backbones.
     _IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
     _IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
@@ -1144,7 +1169,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             mode="bilinear" if channels == 3 else "nearest",
             **resize_kwargs,
         ).to(self._device)
-        # DINOv2 normalizes inside its backbone; V-JEPA2 still expects it here.
+        # DINOv2 and DINOv3 normalize internally; V-JEPA2 expects it here.
         if channels == 3 and self._backend == "vjepa2":
             mean = self._IMAGENET_MEAN.to(self._device)
             std  = self._IMAGENET_STD.to(self._device)

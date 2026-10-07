@@ -50,7 +50,7 @@ if "$PYTHON_CMD" -c 'import sys; print(1 if getattr(sys, "base_prefix", sys.pref
 fi
 
 # Externals to install
-EXTERNALS=("dino" "vjepa2")
+EXTERNALS=("dino" "dinov3" "vjepa2")
 
 for pkg in "${EXTERNALS[@]}"; do
     pkg_dir="$PROJECT_ROOT/external/$pkg"

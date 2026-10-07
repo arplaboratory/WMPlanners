@@ -26,6 +26,7 @@ jobs:
         run: |
           git submodule update --init --recursive external/vjepa2
           git submodule update --init --recursive external/dino
+          git submodule update --init --recursive external/dinov3
       - name: Setup environment using script
         env:
           WM_PYTHON: python3.12
@@ -33,7 +34,7 @@ jobs:
           bash scripts/python_setup.sh
       - name: Run pytest
         env:
-          PYTHONPATH: .:${{ github.workspace }}/external/vjepa2:${{ github.workspace }}/external/dino
+          PYTHONPATH: .:${{ github.workspace }}/external/vjepa2:${{ github.workspace }}/external/dino:${{ github.workspace }}/external/dinov3
         run: |
           mkdir -p reports
           source .venvs/wm/bin/activate

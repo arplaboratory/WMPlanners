@@ -31,6 +31,7 @@ class TestBackboneRegistry:
     def test_expected_backends_registered(self):
         assert "cnn" in _BUILDERS
         assert "dinov2" in _BUILDERS
+        assert "dinov3" in _BUILDERS
         assert "vjepa2" in _BUILDERS
 
     def test_create_unknown_raises(self):
@@ -79,6 +80,13 @@ class TestWorldModelInstantiation:
         trainable = sum(p.numel() for p in m.vision.parameters() if p.requires_grad)
         assert trainable > 0
 
+    def test_frozen_backbone_stays_in_eval_mode(self):
+        m = WorldModel(
+            odom_dim=6, imu_dim=6, act_dim=6, freeze_backbone=True
+        )
+        m.train()
+        assert not m.vision.training
+
     def test_rgb_only_cnn_ignores_depth(self):
         model = WorldModel(
             odom_dim=6,
@@ -105,6 +113,28 @@ class TestWorldModelInstantiation:
         }
         kwargs = checkpoint_backbone_kwargs(checkpoint, "cpu")
         assert kwargs["in_ch"] == channels
+
+    def test_checkpoint_uses_dinov3_default_model_name(self):
+        kwargs = checkpoint_backbone_kwargs(
+            {"args": {"backbone": "dinov3"}}, "cpu"
+        )
+        assert kwargs == {
+            "device": "cpu",
+            "model_name": "dinov3_vitb16",
+            "pretrained": False,
+        }
+
+    def test_checkpoint_preserves_dinov3_model_name(self):
+        kwargs = checkpoint_backbone_kwargs(
+            {
+                "args": {
+                    "backbone": "dinov3",
+                    "backbone_name": "dinov3_vits16",
+                }
+            },
+            "cuda:0",
+        )
+        assert kwargs["model_name"] == "dinov3_vits16"
 
 
 # ---------------------------------------------------------------------------

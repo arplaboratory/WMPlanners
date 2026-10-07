@@ -490,7 +490,9 @@ def main():
     parser.add_argument("--out_dir", required=True)
     parser.add_argument("--target-count", type=int, required=True)
     parser.add_argument(
-        "--encoder", default="none", choices=["none", "cnn", "dinov2", "vjepa2"]
+        "--encoder",
+        default="none",
+        choices=["none", "cnn", "dinov2", "dinov3", "vjepa2"],
     )
     parser.add_argument(
         "--profile",

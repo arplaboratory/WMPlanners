@@ -2,7 +2,7 @@
 
 `scripts/world_model/train_wm.py` dispatches to the standard WorldModel or DinoWM trainer.
 
-## Standard WorldModel: CNN or DINOv2, MLP or RSSM
+## Standard WorldModel: CNN or pretrained vision backbone, MLP or RSSM
 
 ### Example data loading options:
 
@@ -24,7 +24,7 @@ python scripts/world_model/train_wm.py --method wm \
 ```
 The Parquet tables may contain image paths and array-valued sensor columns.
 
-The same trainer supports CNN or DINOv2 with RSSM. Set `--backbone cnn` on that command for CNN + RSSM. The visual encoder can also be `vjepa2` in the standard architecture. `--dynamics_type mlp` selects the non-RSSM dynamics path.
+The same trainer supports CNN, DINOv2, DINOv3, or V-JEPA2 with RSSM. Set `--backbone cnn` on that command for CNN + RSSM. `--dynamics_type mlp` selects the non-RSSM dynamics path.
 
 For a Hugging Face dataset and a frozen DINOv2 encoder:
 ```bash
@@ -35,6 +35,20 @@ python scripts/world_model/train_wm.py --method wm \
   --epochs 20 --batch_size 64 --out_dir runs/dino_rssm
 ```
 Hub rows may embed images and numbered sensor columns. `hf` accepts a Hub ID.
+
+For DINOv3, obtain an official checkpoint from Meta and pass its local path or
+URL. DINOv3 currently supports the ViT variants because the standard world
+model consumes patch tokens:
+
+```bash
+torchrun --standalone --nproc_per_node=4 \
+  scripts/world_model/train_world_model.py --ddp \
+  --data_path /path/to/parquet_dataset --dataset_type hf \
+  --backbone dinov3 --backbone_name dinov3_vitb16 \
+  --backbone_weights /path/to/dinov3_vitb16_pretrain_lvd1689m.pth \
+  --freeze_backbone --wm_mode jepa-lite --dynamics_type mlp \
+  --horizon 36 --img_size 224 --out_dir runs/dinov3_jepa_lite_h36
+```
 
 ---
 
@@ -62,7 +76,7 @@ python scripts/world_model/train_wm.py --method wm \
   --horizon 8 --img_size 224 --out_dir runs/jepa_lite_c1_512
 ```
 
-The same objective accepts the DINOv2 backbone using `--backbone dinov2 --backbone_name dinov2_vitb14 --freeze_backbone`. DINOv2 applies ImageNet RGB normalization inside the backbone so training, evaluation, and runtime preprocessing remain identical. The state-head trainer supports `--latent_source observed` (decode encoded sensor frames) and `--latent_source rollout` (decode predicted states used by MPC). A two-stage run initializes from observed frames, then fine-tunes on predicted rollouts:
+The same objective accepts DINOv2 or DINOv3 with a frozen backbone. Both apply ImageNet RGB normalization inside the backbone so training, evaluation, and runtime preprocessing remain identical. A frozen backbone is shared with the EMA target model to avoid a duplicate foundation encoder on each GPU. The state-head trainer supports `--latent_source observed` (decode encoded sensor frames) and `--latent_source rollout` (decode predicted states used by MPC). A two-stage run initializes from observed frames, then fine-tunes on predicted rollouts:
 
 For a CNN trained without depth, pass `--rgb_only`. The resulting checkpoint
 records a three-channel vision input and all checkpoint loaders ignore depth.
@@ -137,7 +151,9 @@ python scripts/world_model/eval_mpc.py --ckpt runs/cnn/latest.pt --episodes 20
 | `--schema_config` | Optional YAML mapping for local Parquet table paths, columns, sensor policy, and split fallback. | canonical names |
 | `--precompute_windows` | Cache local Parquet windows in RAM before standard training. | off |
 | `--max_windows` | Limit cached Parquet windows per split; requires `--precompute_windows`. | unlimited |
-| `--backbone` | Standard visual encoder: `cnn`, `dinov2`, or `vjepa2` | `cnn` |
+| `--backbone` | Standard visual encoder: `cnn`, `dinov2`, `dinov3`, or `vjepa2` | `cnn` |
+| `--backbone_name` | Model variant; defaults per backend | backend-specific |
+| `--backbone_weights` | Official DINOv3 checkpoint path or URL | unset |
 | `--dynamics_type` | Standard dynamics: `mlp`, `rssm`, or `td-jepa` | `mlp` |
 | `--wm_mode` | `standard` or `jepa-lite` objective | `standard` |
 | `--freeze_backbone` | Keep pretrained visual weights fixed | off |

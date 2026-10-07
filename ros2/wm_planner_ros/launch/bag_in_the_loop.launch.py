@@ -41,8 +41,10 @@ def _robot_config(name_or_path):
 
 def _setup(context):
     model = LaunchConfiguration("model").perform(context).lower()
-    if model not in {"cnn", "dino", "jepa-lite", "dinowm"}:
-        raise ValueError("model must be 'cnn', 'dino', 'jepa-lite', or 'dinowm'")
+    if model not in {"cnn", "dino", "dinov2", "dinov3", "jepa-lite", "dinowm"}:
+        raise ValueError(
+            "model must be 'cnn', 'dinov2', 'dinov3', 'jepa-lite', or 'dinowm'"
+        )
     config = _robot_config(LaunchConfiguration("robot").perform(context))
     robot_name = config["name"]
     configured_topics = config["topics"]
@@ -71,7 +73,7 @@ def _setup(context):
     if rate <= 0:
         raise ValueError("rate must be positive")
     checkpoint = LaunchConfiguration("checkpoint_path").perform(context)
-    if model in {"jepa-lite", "dinowm"} and not checkpoint:
+    if model in {"dinov3", "jepa-lite", "dinowm"} and not checkpoint:
         raise ValueError(f"{model} requires checkpoint_path")
     if checkpoint and not Path(checkpoint).expanduser().is_file():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
@@ -106,7 +108,9 @@ def _setup(context):
         )
     else:
         is_jepa = model == "jepa-lite"
-        backend = "dinov2" if model == "dino" else "cnn"
+        backend = "dinov2" if model == "dino" else model
+        if is_jepa:
+            backend = "cnn"
         experiment = "jepa_lite" if is_jepa else f"{model}_rssm_c1"
         planner = _planner_node(
             pyenv,
@@ -174,9 +178,9 @@ def generate_launch_description():
         DeclareLaunchArgument("bag", description="Path to an MCAP file with the configured topics"),
         DeclareLaunchArgument("robot", description="Name in configs/robots or path to a robot YAML config"),
         DeclareLaunchArgument("model", default_value="cnn",
-                              description="cnn, dino, jepa-lite, or dinowm"),
+                              description="cnn, dinov2, dinov3, jepa-lite, or dinowm"),
         DeclareLaunchArgument("checkpoint_path", default_value="",
-                              description="Local checkpoint; required for JEPA-lite and DinoWM"),
+                              description="Local checkpoint; required for DINOv3, JEPA-lite, and DinoWM"),
         DeclareLaunchArgument("norm_stats_path", default_value="",
                               description="Optional norm_stats.pt; defaults beside the checkpoint"),
         DeclareLaunchArgument("rate", default_value="0.1",

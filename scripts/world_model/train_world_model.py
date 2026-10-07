@@ -16,7 +16,7 @@ from world_model.data import (
     HFWindowDataset, ParquetWindowDataset, CachedWindowDataset,
     open_window_dataset, collate_for_dataset,
 )
-from world_model.architecture import WorldModel
+from world_model.architecture import WorldModel, default_backbone_name
 from world_model.engine.trainer import TrainConfig, rollout_loss
 from world_model.mpc import compute_action_bounds
 from world_model.utils import seed_everything
@@ -84,6 +84,17 @@ def restore_target_model(target_model, checkpoint: dict) -> bool:
         return False
     target_model.load_state_dict(checkpoint.get("target_model") or checkpoint["model"])
     return checkpoint.get("target_model") is not None
+
+
+@torch.no_grad()
+def update_ema_target(online_model, target_model, tau: float) -> None:
+    """Update trainable online parameters while leaving shared frozen weights intact."""
+    parameter_pairs = zip(
+        online_model.parameters(), target_model.parameters(), strict=True
+    )
+    for online_param, target_param in parameter_pairs:
+        if online_param.requires_grad:
+            target_param.mul_(tau).add_(online_param, alpha=1.0 - tau)
 
 
 @torch.no_grad()
@@ -223,17 +234,26 @@ class Trainer:
             3 if args.rgb_only or args.backbone.lower() != "cnn" else 4
         )
 
+        backbone_kwargs = {"device": args.device}
+        if args.backbone.lower() == "cnn":
+            backbone_kwargs["in_ch"] = self.vision_in_channels
+        else:
+            args.backbone_name = args.backbone_name or default_backbone_name(
+                args.backbone
+            )
+            backbone_kwargs["model_name"] = args.backbone_name
+        if args.backbone_weights:
+            if args.backbone.lower() != "dinov3":
+                raise ValueError("--backbone_weights is currently supported only for DINOv3")
+            backbone_kwargs["weights"] = args.backbone_weights
+
         self.model = WorldModel(
             odom_dim=odom_dim,
             imu_dim=imu_dim,
             act_dim=act_dim,
             state_dim=state_dim,
             backbone=args.backbone,
-            backbone_kwargs={
-                "model_name": args.backbone_name,
-                "device": args.device,
-                "in_ch": self.vision_in_channels,
-            },
+            backbone_kwargs=backbone_kwargs,
             freeze_backbone=args.freeze_backbone,
             dynamics_type="mlp" if args.dynamics_type == "td-jepa" else args.dynamics_type,
             image_size=args.img_size,
@@ -241,7 +261,8 @@ class Trainer:
 
         self.target_model = None
         if args.dynamics_type == "td-jepa" or args.wm_mode == "jepa-lite":
-            self.target_model = copy.deepcopy(self.model)
+            memo = {id(self.model.vision): self.model.vision} if args.freeze_backbone else None
+            self.target_model = copy.deepcopy(self.model, memo)
             for p in self.target_model.parameters():
                 p.requires_grad = False
             self.target_model.eval()
@@ -369,16 +390,9 @@ class Trainer:
                 self.opt.step()
 
                 if self.target_model is not None:
-                    with torch.no_grad():
-                        online_model = (self.model.module if isinstance(self.model, DDP)
-                                        else self.model)
-                        parameter_pairs = zip(
-                            online_model.parameters(),
-                            self.target_model.parameters(),
-                            strict=True,
-                        )
-                        for op, tp in parameter_pairs:
-                            tp.data.mul_(args.ema_tau).add_(op.data, alpha=1.0 - args.ema_tau)
+                    online_model = (self.model.module if isinstance(self.model, DDP)
+                                    else self.model)
+                    update_ema_target(online_model, self.target_model, args.ema_tau)
 
                 epoch_loss += logs['loss']
                 epoch_steps += 1
@@ -553,8 +567,12 @@ def build_parser(parents=None):
     ap.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu')
     ap.add_argument('--seed', type=int, default=0)
     ap.add_argument('--resume', type=str, default=None)
-    ap.add_argument('--backbone', type=str, default='cnn')
-    ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14')
+    ap.add_argument('--backbone', type=str, default='cnn',
+                    choices=['cnn', 'dinov2', 'dinov3', 'vjepa2'])
+    ap.add_argument('--backbone_name', type=str, default=None,
+                    help='Backbone model variant (uses a backend-specific default)')
+    ap.add_argument('--backbone_weights', type=str, default=None,
+                    help='DINOv3 weights path or URL supplied by Meta')
     ap.add_argument('--freeze_backbone', action='store_true')
     ap.add_argument('--rgb_only', action='store_true',
                     help='Train the CNN on RGB only, without a depth channel')

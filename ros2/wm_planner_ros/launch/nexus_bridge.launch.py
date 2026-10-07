@@ -63,7 +63,7 @@ def generate_launch_description():
         DeclareLaunchArgument("name", default_value="warthog1"),
         DeclareLaunchArgument("model",
                               default_value="dinowm",
-                              description="dinowm or standard (CNN/DINO/JEPA)"),
+                              description="dinowm or standard (CNN/DINOv2/DINOv3/JEPA)"),
         DeclareLaunchArgument("checkpoint_path",
                               description="Trained checkpoint matching this backend"),
         DeclareLaunchArgument("device", default_value="cpu"),

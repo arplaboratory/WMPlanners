@@ -4,7 +4,7 @@
 [![Docs](https://github.com/lquan9/wm_planner/actions/workflows/docs.yml/badge.svg)](https://github.com/lquan9/wm_planner/actions/workflows/docs.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-World-model data processing, training, and planning for recorded robot observations. The project includes CNN, DINOv2, V-JEPA2, JEPA-lite, and DinoWM model paths, plus a ROS 2 planner bridge. External libraries and sources live under `external/`.
+World-model data processing, training, and planning for recorded robot observations. The project includes CNN, DINOv2, DINOv3, V-JEPA2, JEPA-lite, and DinoWM model paths, plus a ROS 2 planner bridge. External libraries and sources live under `external/`.
 
 Check out the [project homepage](https://lquan9.github.io/wm_planner/). Documentation lives in [`docs/`](docs/index.md):
 
@@ -54,7 +54,7 @@ bash src/wm_planner/scripts/python_setup.sh
 source "$WM_VENV/bin/activate"
 ```
 
-The setup script creates a Python 3.12 environment with access to Jazzy's system ROS packages, then installs the Python project and its DINOv2 and V-JEPA2 external packages. See [Getting started](docs/getting_started.md) for the local ROS 2 wrapper build, and the other guides above for data preparation and training.
+The setup script creates a Python 3.12 environment with access to Jazzy's system ROS packages, then installs the Python project and its DINOv2, DINOv3, and V-JEPA2 external packages. See [Getting started](docs/getting_started.md) for the local ROS 2 wrapper build, and the other guides above for data preparation and training.
 
 ## License
 

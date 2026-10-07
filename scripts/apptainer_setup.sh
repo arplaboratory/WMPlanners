@@ -112,7 +112,7 @@ uv pip install --python \"\$VENV_PY\" \
     -e "/workspace/run/src/\$WM_REPO_NAME[dev]"
 
 # Install external packages if present
-for ext in dino vjepa2; do
+for ext in dino dinov3 vjepa2; do
     ext_dir="/workspace/run/src/\$WM_REPO_NAME/external/\$ext"
     if [ -d \"\$ext_dir\" ]; then
         echo \"Installing external: \$ext\"
