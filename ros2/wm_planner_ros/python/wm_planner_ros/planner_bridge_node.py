@@ -128,7 +128,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self.declare_parameter("checkpoint_repo_id", "dmody1/nyu-wm-v3")
         self.declare_parameter("checkpoint_experiment", "dino_rssm_c1")
         self.declare_parameter("checkpoint_filename", "latest.pt")
-        self.declare_parameter("device", "gpu")
+        self.declare_parameter("device", "cuda")
 
         self.declare_parameter("rgb_topic", "~/rgb")
         self.declare_parameter("depth_topic", "~/depth")
