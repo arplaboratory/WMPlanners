@@ -2,7 +2,7 @@ from __future__ import annotations
 import argparse
 import torch
 import torch.nn.functional as F
-from world_model.architecture import WorldModel
+from world_model.architecture import WorldModel, checkpoint_backbone_kwargs
 from world_model.toy_env import Toy2DNavEnv
 from world_model.mpc import cem_plan, CEMConfig
 
@@ -38,10 +38,7 @@ def main():
         act_dim=mc['act_dim'],
         state_dim=mc['state_dim'],
         backbone=train_args.get('backbone', 'cnn'),
-        backbone_kwargs={
-            "model_name": train_args.get('backbone_name', 'dinov2_vitb14'),
-            "device": args.device
-        },
+        backbone_kwargs=checkpoint_backbone_kwargs(ckpt, args.device),
         image_size=train_args.get('img_size', 224),
     ).to(args.device)
     model.load_state_dict(ckpt['model'])

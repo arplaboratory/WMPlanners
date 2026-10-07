@@ -14,7 +14,7 @@ from sklearn.metrics import accuracy_score, mean_absolute_error, r2_score, roc_a
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-from world_model.architecture import WorldModel
+from world_model.architecture import WorldModel, checkpoint_backbone_kwargs
 from world_model.data import HFWindowDataset
 from world_model.data.normalization import NormStats
 from world_model.mpc import CEMConfig, cem_plan_with_cost, compute_action_bounds
@@ -45,10 +45,7 @@ def load_model_and_stats(checkpoint_path: str, device: str):
         act_dim=mcfg["act_dim"],
         state_dim=mcfg["state_dim"],
         backbone=args_dict.get("backbone", "cnn"),
-        backbone_kwargs={
-            "model_name": args_dict.get("backbone_name", "dinov2_vitb14"),
-            "device": device,
-        },
+        backbone_kwargs=checkpoint_backbone_kwargs(ckpt, device),
         dynamics_type=dynamics_type,
         image_size=args_dict.get("img_size", 224),
     )

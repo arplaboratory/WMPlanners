@@ -19,7 +19,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from world_model.architecture import WorldModel
+from world_model.architecture import WorldModel, checkpoint_backbone_kwargs
 from world_model.data.factory import collate_for_dataset, is_parquet_dataset, open_window_dataset
 from world_model.data.normalization import NormStats
 
@@ -32,20 +32,12 @@ def load_model(checkpoint_path: Path, device: torch.device):
     dynamics = str(args.get("dynamics_type", "mlp")).lower()
     if dynamics == "td-jepa":
         dynamics = "mlp"
-    backbone_kwargs = {"device": str(device)}
-    if backbone == "cnn":
-        state = checkpoint["model"]
-        projection = state.get("vision.proj.weight")
-        last_conv = state.get("vision.net.4.weight")
-        backbone_kwargs["pool_features"] = (
-            projection is not None and last_conv is not None
-            and projection.shape[1] == last_conv.shape[0]
-        )
-    else:
-        backbone_kwargs["pretrained"] = False
-        backbone_kwargs["model_name"] = args.get("backbone_name", "dinov2_vitb14")
+    backbone_kwargs = checkpoint_backbone_kwargs(checkpoint, str(device))
     model = WorldModel(
-        **config,
+        odom_dim=config["odom_dim"],
+        imu_dim=config["imu_dim"],
+        act_dim=config["act_dim"],
+        state_dim=config["state_dim"],
         backbone=None if backbone == "cnn" else backbone,
         backbone_kwargs=backbone_kwargs,
         dynamics_type=dynamics,

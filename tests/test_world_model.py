@@ -12,7 +12,11 @@ import torch
 
 from world_model.backbones import create_model, ModelBundle
 from world_model.backbones.registry import _BUILDERS
-from world_model.architecture import WorldModel, WMOutput
+from world_model.architecture import (
+    WMOutput,
+    WorldModel,
+    checkpoint_backbone_kwargs,
+)
 from world_model.components import LatentDynamics, Fusion, ProprioEncoder, StateHead, RiskHead
 
 
@@ -74,6 +78,33 @@ class TestWorldModelInstantiation:
         m = WorldModel(odom_dim=6, imu_dim=6, act_dim=6, freeze_backbone=False)
         trainable = sum(p.numel() for p in m.vision.parameters() if p.requires_grad)
         assert trainable > 0
+
+    def test_rgb_only_cnn_ignores_depth(self):
+        model = WorldModel(
+            odom_dim=6,
+            imu_dim=6,
+            act_dim=6,
+            backbone_kwargs={"in_ch": 3},
+            image_size=64,
+        )
+        output = model.encode(
+            torch.randn(2, 3, 64, 64),
+            torch.full((2, 1, 64, 64), float("nan")),
+            torch.randn(2, 6),
+            torch.randn(2, 6),
+        )
+        assert torch.isfinite(output.z).all()
+
+    @pytest.mark.parametrize("channels", [3, 4])
+    def test_checkpoint_cnn_channels_are_inferred_for_legacy_models(self, channels):
+        checkpoint = {
+            "args": {"backbone": "cnn"},
+            "model": {
+                "vision.net.0.weight": torch.empty(32, channels, 5, 5),
+            },
+        }
+        kwargs = checkpoint_backbone_kwargs(checkpoint, "cpu")
+        assert kwargs["in_ch"] == channels
 
 
 # ---------------------------------------------------------------------------

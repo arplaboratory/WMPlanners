@@ -1,9 +1,11 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Dict, Tuple
+
 import random
+from dataclasses import dataclass
+
 import torch
 import torch.nn.functional as F
+
 
 @dataclass
 class TrainConfig:
@@ -17,14 +19,15 @@ class TrainConfig:
     lambda_risk: float = 0.2
     objective: str = "standard"  # "standard" or "jepa-lite"
     jepa_mask_ratio: float = 0.0
-    lambda_var: float = 0.0  # variance-preservation weight (jepa-lite anti-collapse term)
+    lambda_var: float = 0.0  # jepa-lite variance-preservation weight
+
 
 def rollout_loss(
     model,
     batch,
     cfg: TrainConfig,
     target_model=None,
-) -> Tuple[torch.Tensor, Dict[str, float]]:
+) -> tuple[torch.Tensor, dict[str, float]]:
     """Compute multi-step latent dynamics loss.
 
     Rolls out ``cfg.horizon`` steps from the start of each sequence window.
@@ -35,14 +38,20 @@ def rollout_loss(
     """
     device = torch.device(cfg.device)
     rgb = batch.rgb.to(device)       # (B,T,3,H,W)
-    depth = batch.depth.to(device)   # (B,T,1,H,W)
+    depth = torch.nan_to_num(
+        batch.depth.to(device), nan=0.0, posinf=0.0, neginf=0.0
+    )  # (B,T,1,H,W)
     imu = batch.imu.to(device)
     odom = batch.odom.to(device)
     action = batch.action.to(device)
     collision = batch.collision.to(device)  # (B,T,1)
+    for name, value in (("rgb", rgb), ("imu", imu), ("odom", odom), ("action", action)):
+        if not torch.isfinite(value).all().item():
+            raise ValueError(f"Training batch contains nonfinite {name} values")
     collision_valid = (
         batch.collision_valid.to(device)
-        if batch.collision_valid is not None else torch.ones_like(collision, dtype=torch.bool)
+        if batch.collision_valid is not None
+        else torch.ones_like(collision, dtype=torch.bool)
     )
 
     # T = rgb.shape[1]
@@ -71,7 +80,11 @@ def rollout_loss(
     collision_valid = collision_valid[:, t0 : t0 + window]
 
     # forward pass through model (now T == window, starts from 0)
-    target_raw = target_model.module if target_model is not None and hasattr(target_model, "module") else target_model
+    target_raw = (
+        target_model.module
+        if target_model is not None and hasattr(target_model, "module")
+        else target_model
+    )
     pred_start = nh - 1
 
     outputs = model(
@@ -86,7 +99,9 @@ def rollout_loss(
 
     # build gt — targets start from pred_start (last history frame)
     state_targets = torch.stack([odom[:, pred_start + k] for k in range(H + 1)], dim=1)
-    risk_targets = torch.stack([collision[:, pred_start + k] for k in range(H + 1)], dim=1)
+    risk_targets = torch.stack(
+        [collision[:, pred_start + k] for k in range(H + 1)], dim=1
+    )
     risk_valid = torch.stack([
         collision_valid[:, pred_start + k] for k in range(H + 1)
     ], dim=1)
@@ -95,11 +110,14 @@ def rollout_loss(
     z_tgt = z_targets.detach()
 
     if cfg.objective == "jepa-lite" and cfg.jepa_mask_ratio > 0.0:
-        # Mask a random subset of rollout steps, JEPA-style, to avoid supervising every frame.
+        # Mask rollout steps JEPA-style rather than supervising every frame.
         step_mask = (torch.rand(B, H + 1, device=device) < cfg.jepa_mask_ratio).float()
         step_mask[:, 0] = 1.0  # always include anchor step
         per_step_latent_mse = F.mse_loss(z_pred, z_tgt, reduction="none").mean(dim=-1)
-        loss_z = (per_step_latent_mse * step_mask).sum() / step_mask.sum().clamp_min(1.0)
+        loss_z = (
+            (per_step_latent_mse * step_mask).sum()
+            / step_mask.sum().clamp_min(1.0)
+        )
     else:
         loss_z = F.mse_loss(z_pred, z_tgt)
 

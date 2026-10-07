@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any
 
 import torch
 import torch.nn as nn
 
-from .backbones import ModelBundle, create_model as create_backbone
+from .backbones import ModelBundle
+from .backbones import create_model as create_backbone
 from .backbones.cnn import VisionEncoder
-from .components import Fusion, LatentDynamics, RSSMDynamics, ProprioEncoder, StateHead, RiskHead
+from .components import (
+    Fusion,
+    LatentDynamics,
+    ProprioEncoder,
+    RiskHead,
+    RSSMDynamics,
+    StateHead,
+)
 
 
 @dataclass
@@ -20,6 +29,46 @@ class WMOutput:
     z: torch.Tensor
     state: torch.Tensor
     risk: torch.Tensor
+
+
+def checkpoint_backbone_kwargs(
+    checkpoint: Mapping[str, Any], device: str
+) -> dict[str, Any]:
+    """Build backbone arguments from checkpoint metadata with legacy inference."""
+    args = checkpoint.get("args", {})
+    backbone = str(args.get("backbone", "cnn")).lower()
+    if backbone != "cnn":
+        return {
+            "device": device,
+            "model_name": args.get("backbone_name", "dinov2_vitb14"),
+            "pretrained": False,
+        }
+
+    state = checkpoint.get("model", {})
+    first_conv = state.get("vision.net.0.weight")
+    inferred_channels = int(first_conv.shape[1]) if first_conv is not None else 4
+    channels = int(
+        checkpoint.get("model_config", {}).get(
+            "vision_in_channels", inferred_channels
+        )
+    )
+    if channels not in (3, 4):
+        raise ValueError(f"Unsupported CNN vision input channels: {channels}")
+    if first_conv is not None and inferred_channels != channels:
+        raise ValueError(
+            "Checkpoint vision_in_channels metadata does not match CNN weights"
+        )
+    projection = state.get("vision.proj.weight")
+    last_conv = state.get("vision.net.4.weight")
+    return {
+        "device": device,
+        "in_ch": channels,
+        "pool_features": (
+            projection is not None
+            and last_conv is not None
+            and projection.shape[1] == last_conv.shape[0]
+        ),
+    }
 
 
 class WorldModel(nn.Module):
@@ -44,8 +93,8 @@ class WorldModel(nn.Module):
         z_prop_dim: int = 128,
         z_dim: int = 256,
         state_dim: int = 6,
-        backbone: Optional[str] = None,
-        backbone_kwargs: Optional[dict] = None,
+        backbone: str | None = None,
+        backbone_kwargs: dict | None = None,
         freeze_backbone: bool = False,
         dynamics_type: str = "mlp",
         image_size: int = 224,
@@ -131,7 +180,7 @@ class WorldModel(nn.Module):
         imu: torch.Tensor,
         action: torch.Tensor,
         horizon: int,
-        target_model: "WorldModel | None" = None,
+        target_model: WorldModel | None = None,
         num_hist: int = 1,
     ) -> dict[str, torch.Tensor]:
         """Full forward pass: encode targets, rollout dynamics, decode heads.

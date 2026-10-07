@@ -44,9 +44,11 @@ def prune_checkpoints(out_dir: str, keep_last: int = 3):
 
 
 def setup_ddp():
-    dist.init_process_group(backend="nccl")
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
+    dist.init_process_group(
+        backend="nccl", device_id=torch.device("cuda", local_rank)
+    )
     return local_rank
 
 
@@ -215,6 +217,11 @@ class Trainer:
         imu_dim = self.ds.D_imu
         act_dim = self.ds.D_act
         state_dim = args.state_dim if args.state_dim else min(6, odom_dim)
+        if args.rgb_only and args.backbone.lower() != "cnn":
+            raise ValueError("--rgb_only applies only to the CNN backbone")
+        self.vision_in_channels = (
+            3 if args.rgb_only or args.backbone.lower() != "cnn" else 4
+        )
 
         self.model = WorldModel(
             odom_dim=odom_dim,
@@ -222,7 +229,11 @@ class Trainer:
             act_dim=act_dim,
             state_dim=state_dim,
             backbone=args.backbone,
-            backbone_kwargs={"model_name": args.backbone_name, "device": args.device},
+            backbone_kwargs={
+                "model_name": args.backbone_name,
+                "device": args.device,
+                "in_ch": self.vision_in_channels,
+            },
             freeze_backbone=args.freeze_backbone,
             dynamics_type="mlp" if args.dynamics_type == "td-jepa" else args.dynamics_type,
             image_size=args.img_size,
@@ -409,6 +420,7 @@ class Trainer:
                         'imu_dim': self.ds.D_imu,
                         'act_dim': self.ds.D_act,
                         'state_dim': args.state_dim if args.state_dim else min(6, self.ds.D_odom),
+                        'vision_in_channels': self.vision_in_channels,
                     },
                     'dataset_provenance': self.dataset_provenance,
                     'training_contract': self.training_contract,
@@ -544,6 +556,8 @@ def build_parser(parents=None):
     ap.add_argument('--backbone', type=str, default='cnn')
     ap.add_argument('--backbone_name', type=str, default='dinov2_vitb14')
     ap.add_argument('--freeze_backbone', action='store_true')
+    ap.add_argument('--rgb_only', action='store_true',
+                    help='Train the CNN on RGB only, without a depth channel')
     ap.add_argument('--dynamics_type', type=str, default='mlp', choices=['mlp', 'rssm', 'td-jepa'])
     ap.add_argument('--wm_mode', type=str, default='standard', choices=['standard', 'jepa-lite'],
                     help='standard: latent+state+risk losses; jepa-lite: latent JEPA-style objective only')

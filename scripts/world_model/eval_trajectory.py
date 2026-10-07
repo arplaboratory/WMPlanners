@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from world_model.architecture import WorldModel
+from world_model.architecture import WorldModel, checkpoint_backbone_kwargs
 from world_model.data import HFWindowDataset
 from world_model.data.normalization import NormStats
 
@@ -41,10 +41,7 @@ def load_model_and_stats(checkpoint_path: str, device: str):
         act_dim=mcfg["act_dim"],
         state_dim=mcfg["state_dim"],
         backbone=backbone,
-        backbone_kwargs={
-            "model_name": args_dict.get("backbone_name", "dinov2_vitb14"),
-            "device": device,
-        },
+        backbone_kwargs=checkpoint_backbone_kwargs(ckpt, device),
         dynamics_type=dynamics_type,
         image_size=args_dict.get("img_size", 224),
     )

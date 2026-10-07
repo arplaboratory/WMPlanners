@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .architecture import WorldModel
+from .architecture import WorldModel, checkpoint_backbone_kwargs
 from .data import HFWindowDataset
 from .data.normalization import NormStats
 from .mpc import CEMConfig, cem_plan_with_cost, compute_action_bounds
@@ -32,10 +32,7 @@ def load_model_and_stats(checkpoint_path: str, device: str):
         act_dim=model_config["act_dim"],
         state_dim=model_config["state_dim"],
         backbone=train_args.get("backbone", "cnn"),
-        backbone_kwargs={
-            "model_name": train_args.get("backbone_name", "dinov2_vitb14"),
-            "device": device,
-        },
+        backbone_kwargs=checkpoint_backbone_kwargs(checkpoint, device),
         dynamics_type=dynamics_type,
         image_size=train_args.get("img_size", 224),
     )

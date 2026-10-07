@@ -23,7 +23,7 @@ from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 import torch
 
-from world_model.architecture import WorldModel
+from world_model.architecture import WorldModel, checkpoint_backbone_kwargs
 from world_model.data.normalization import NormStats
 from world_model.mpc import (CEMConfig, LatentCEMCostConfig, StateCEMCostConfig,
                              cem_plan, cem_plan_latent_target, cem_plan_with_cost,
@@ -75,6 +75,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._planning_anchor_lock = threading.Lock()
         self._norm_stats: NormStats | None = None
         self._cnn_pool_features = False
+        self._vision_in_channels = 4
         self._warned_invalid_depth = False
         self._goal_obs: GoalObservation | None = None
         self._goal_obs_lock = threading.Lock()
@@ -347,6 +348,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             bkw["model_name"] = self._backbone_name
         if self._backend == "cnn":
             bkw["pool_features"] = self._cnn_pool_features
+            bkw["in_ch"] = self._vision_in_channels
         return WorldModel(
             odom_dim=self._odom_dim,
             imu_dim=self._imu_dim,
@@ -424,13 +426,11 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             self._act_dim = int(model_cfg["act_dim"])
             self._state_dim = int(model_cfg["state_dim"])
             if self._backend == "cnn":
-                state = checkpoint["model"]
-                projection = state.get("vision.proj.weight")
-                last_conv = state.get("vision.net.4.weight")
-                self._cnn_pool_features = (
-                    projection is not None and last_conv is not None
-                    and projection.shape[1] == last_conv.shape[0]
+                backbone_kwargs = checkpoint_backbone_kwargs(
+                    checkpoint, str(self._device)
                 )
+                self._cnn_pool_features = backbone_kwargs["pool_features"]
+                self._vision_in_channels = backbone_kwargs["in_ch"]
             self._cem_cfg.action_dim = self._act_dim
             contract = checkpoint.get("training_contract", {})
             trained_horizon = int(contract.get("trained_horizon", args_dict.get("horizon", 0)))
@@ -485,7 +485,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             self.get_logger().info(
                 f"Loaded training checkpoint {checkpoint_path}: mode={trained_mode}, "
                 f"backbone={self._backend}, dynamics={self._dynamics_type}, "
-                f"image_size={self._img_h}, action_dim={self._act_dim}"
+                f"image_size={self._img_h}, action_dim={self._act_dim}, "
+                f"vision_channels={self._vision_in_channels}"
             )
         else:
             if self._wm_mode == "jepa-lite":
@@ -1143,9 +1144,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             mode="bilinear" if channels == 3 else "nearest",
             **resize_kwargs,
         ).to(self._device)
-        # Pretrained ViT backbones (DINOv2, V-JEPA2) require ImageNet normalization.
-        # The CNN backbone learns its own normalization, so skip for it.
-        if channels == 3 and self._backend in {"dinov2", "vjepa2"}:
+        # DINOv2 normalizes inside its backbone; V-JEPA2 still expects it here.
+        if channels == 3 and self._backend == "vjepa2":
             mean = self._IMAGENET_MEAN.to(self._device)
             std  = self._IMAGENET_STD.to(self._device)
             ten = (ten - mean) / std

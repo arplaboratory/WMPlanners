@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import torch
-from pathlib import Path
 from logging import getLogger
+from pathlib import Path
+
+import torch
 
 from .base import ModelBundle
 from .registry import register
@@ -22,10 +23,6 @@ def default_preprocess(img, size: int = 224):
             transforms.Resize(size),
             transforms.CenterCrop(size),
             transforms.ToTensor(),
-            transforms.Normalize(
-                mean=(0.485, 0.456, 0.406),
-                std=(0.229, 0.224, 0.225),
-            ),
         ]
     )(img)
 
@@ -36,15 +33,30 @@ class DINOv2Encoder(torch.nn.Module):
     Returns patch-level token features of shape ``(B, num_patches, emb_dim)``.
     """
 
-    def __init__(self, model, emb_dim: int, patch_size: int = 14, image_size: int = 224):
+    def __init__(
+        self, model, emb_dim: int, patch_size: int = 14, image_size: int = 224
+    ):
         super().__init__()
         self.model = model
         self.emb_dim = emb_dim
         self.latent_ndim = 2  # output is (num_patches, emb_dim) per frame
         self.num_patches = (image_size // patch_size) ** 2
+        self.register_buffer(
+            "pixel_mean",
+            torch.tensor((0.485, 0.456, 0.406)).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "pixel_std",
+            torch.tensor((0.229, 0.224, 0.225)).view(1, 3, 1, 1),
+            persistent=False,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: (B, 3, H, W)  →  (B, num_patches, emb_dim) patch tokens."""
+        x = (x - self.pixel_mean.to(dtype=x.dtype)) / self.pixel_std.to(
+            dtype=x.dtype
+        )
         features = self.model.get_intermediate_layers(x, n=1)[0]  # (B, num_patches, D)
         return features
 
@@ -88,13 +100,21 @@ def build_dinov2(
         }
         feature_dim = feature_dim_map.get(model_name)
 
-    logger.info("Loaded DINOv2 model: %s, feature dimension: %s", model_name, feature_dim)
+    logger.info(
+        "Loaded DINOv2 model: %s, feature dimension: %s",
+        model_name,
+        feature_dim,
+    )
     patch_size = getattr(model, "patch_size", 14)
-    encoder = DINOv2Encoder(model=model, emb_dim=feature_dim, patch_size=patch_size, image_size=image_size)
+    encoder = DINOv2Encoder(
+        model=model,
+        emb_dim=feature_dim,
+        patch_size=patch_size,
+        image_size=image_size,
+    )
     return ModelBundle(
         model=encoder,
         preprocess=default_preprocess,
         feature_dim=feature_dim,
         modality="image",
     )
-

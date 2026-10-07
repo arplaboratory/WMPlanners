@@ -62,7 +62,10 @@ python scripts/world_model/train_wm.py --method wm \
   --horizon 8 --img_size 224 --out_dir runs/jepa_lite_c1_512
 ```
 
-The same objective accepts the DINOv2 backbone using `--backbone dinov2 --backbone_name dinov2_vitb14 --freeze_backbone`. The state-head trainer supports `--latent_source observed` (decode encoded sensor frames) and `--latent_source rollout` (decode predicted states used by MPC). A two-stage run initializes from observed frames, then fine-tunes on predicted rollouts:
+The same objective accepts the DINOv2 backbone using `--backbone dinov2 --backbone_name dinov2_vitb14 --freeze_backbone`. DINOv2 applies ImageNet RGB normalization inside the backbone so training, evaluation, and runtime preprocessing remain identical. The state-head trainer supports `--latent_source observed` (decode encoded sensor frames) and `--latent_source rollout` (decode predicted states used by MPC). A two-stage run initializes from observed frames, then fine-tunes on predicted rollouts:
+
+For a CNN trained without depth, pass `--rgb_only`. The resulting checkpoint
+records a three-channel vision input and all checkpoint loaders ignore depth.
 
 ```bash
 python scripts/world_model/train_state_head_decoder.py \
