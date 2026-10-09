@@ -61,7 +61,7 @@ fi
 echo "Installing project dependencies (including dev)..."
 cd "$PROJECT_ROOT" || exit 1
 uv pip install -e ".[dev]" || exit 1
-uv pip install --upgrade pyarrow datasets
+uv pip install --upgrade pyarrow datasets huggingface-hub || exit 1
 
 # 3. Install external packages (DINOv2, DINOv3, V-JEPA2)
 if [ "$INSTALL_EXTERNALS" = true ]; then

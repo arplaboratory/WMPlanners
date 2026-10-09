@@ -36,16 +36,19 @@ python scripts/world_model/train_wm.py --method wm \
 ```
 Hub rows may embed images and numbered sensor columns. `hf` accepts a Hub ID.
 
-For DINOv3, obtain an official checkpoint from Meta and pass its local path or
-URL. DINOv3 currently supports the ViT variants because the standard world
-model consumes patch tokens:
+For `dinov3_vitb16`, the trainer automatically downloads the official
+Hugging Face checkpoint, converts it to Meta's native state-dict layout, and
+caches it under `$TORCH_HOME/hub/checkpoints` (or Torch's default cache). The
+Hugging Face model is gated, so accept its license and authenticate with
+`HF_TOKEN` or `huggingface-cli login` on the training server. Other DINOv3 ViT
+variants require an official native checkpoint supplied with
+`--backbone_weights` because the standard world model consumes patch tokens:
 
 ```bash
 torchrun --standalone --nproc_per_node=4 \
   scripts/world_model/train_world_model.py --ddp \
   --data_path /path/to/parquet_dataset --dataset_type hf \
   --backbone dinov3 --backbone_name dinov3_vitb16 \
-  --backbone_weights /path/to/dinov3_vitb16_pretrain_lvd1689m.pth \
   --freeze_backbone --wm_mode jepa-lite --dynamics_type mlp \
   --horizon 36 --img_size 224 --out_dir runs/dinov3_jepa_lite_h36
 ```

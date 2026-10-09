@@ -39,6 +39,7 @@ dependencies = [
   "webdataset",
   "ftfy",
   "datasets",
+  "huggingface-hub>=0.24",
   "pyarrow",
   "accelerate>=0.26.1",
   "hydra-core>=1.2.0",
