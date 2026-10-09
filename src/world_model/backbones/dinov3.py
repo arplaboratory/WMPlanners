@@ -185,6 +185,29 @@ def _load_hf_vitb16(repo_dir: str) -> torch.nn.Module:
             "Converted DINOv3 checkpoint is incompatible with the native model: "
             f"missing={missing}, unexpected={unexpected}"
         )
+
+    # These persistent buffers are absent from the Transformers checkpoint.
+    # Reinitialize them explicitly: an uninitialized attention bias mask is NaN.
+    if "rope_embed.periods" in incompatible.missing_keys:
+        model.rope_embed._init_weights()
+    for name, module in model.named_modules():
+        bias_mask_key = f"{name}.bias_mask"
+        if bias_mask_key not in incompatible.missing_keys:
+            continue
+        output_dim = module.bias_mask.numel()
+        module.bias_mask.fill_(1)
+        module.bias_mask[output_dim // 3 : 2 * output_dim // 3].fill_(0)
+
+    nonfinite = [
+        name
+        for name, value in model.state_dict().items()
+        if not torch.isfinite(value).all().item()
+    ]
+    if nonfinite:
+        raise RuntimeError(
+            "DINOv3 contains non-finite parameters or buffers after loading: "
+            f"{nonfinite}"
+        )
     return model
 
 
@@ -200,6 +223,7 @@ class DINOv3Encoder(torch.nn.Module):
         self.emb_dim = emb_dim
         self.latent_ndim = 2
         self.num_patches = (image_size // patch_size) ** 2
+        self._validate_next_output = True
         self.register_buffer(
             "pixel_mean",
             torch.tensor((0.485, 0.456, 0.406)).view(1, 3, 1, 1),
@@ -215,7 +239,12 @@ class DINOv3Encoder(torch.nn.Module):
         x = (x - self.pixel_mean.to(dtype=x.dtype)) / self.pixel_std.to(
             dtype=x.dtype
         )
-        return self.model.get_intermediate_layers(x, n=1)[0]
+        features = self.model.get_intermediate_layers(x, n=1)[0]
+        if self._validate_next_output:
+            if not torch.isfinite(features).all().item():
+                raise RuntimeError("DINOv3 produced non-finite patch features")
+            self._validate_next_output = False
+        return features
 
 
 @register("dinov3")

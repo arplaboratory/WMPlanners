@@ -142,7 +142,7 @@ def rollout_loss(
     # Penalize per-dimension std of the online rollout falling below 1.
     if cfg.lambda_var > 0.0:
         z_flat = z_pred.reshape(-1, z_pred.shape[-1])
-        std_z = torch.sqrt(z_flat.var(dim=0) + 1e-4)
+        std_z = torch.sqrt(z_flat.var(dim=0, correction=0) + 1e-4)
         loss_var = F.relu(1.0 - std_z).mean()
     else:
         loss_var = torch.zeros((), device=device)

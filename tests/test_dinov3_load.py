@@ -41,6 +41,7 @@ def test_dinov3_forward_pass(dinov3_bundle):
         output = dinov3_bundle.model(torch.zeros(1, 3, 224, 224))
 
     assert output.shape == (1, 196, dinov3_bundle.feature_dim)
+    assert torch.isfinite(output).all()
 
 
 def test_dinov3_encoder_applies_imagenet_normalization():
@@ -58,6 +59,16 @@ def test_dinov3_encoder_applies_imagenet_normalization():
         - torch.tensor((0.485, 0.456, 0.406)).view(1, 3, 1, 1)
     ) / torch.tensor((0.229, 0.224, 0.225)).view(1, 3, 1, 1)
     torch.testing.assert_close(wrapped.image, expected)
+
+
+def test_dinov3_encoder_rejects_nonfinite_features():
+    class NonfiniteModel(torch.nn.Module):
+        def get_intermediate_layers(self, image, n):
+            return [torch.full((image.shape[0], 1, 4), float("nan"))]
+
+    encoder = DINOv3Encoder(NonfiniteModel(), emb_dim=4)
+    with pytest.raises(RuntimeError, match="non-finite patch features"):
+        encoder(torch.zeros(1, 3, 2, 2))
 
 
 def test_dinov3_rejects_non_token_backbone():

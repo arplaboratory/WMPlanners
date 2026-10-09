@@ -45,3 +45,26 @@ def test_rollout_loss_rejects_nonfinite_actions():
             _FiniteModel(), batch,
             TrainConfig(device="cpu", horizon=1, objective="jepa-lite"),
         )
+
+
+def test_jepa_variance_is_finite_for_single_latent():
+    class SingleLatentModel(torch.nn.Module):
+        def forward(self, rgb, depth, odom, imu, action, **kwargs):
+            latent = torch.zeros(rgb.shape[0], 1, 4, device=rgb.device)
+            return {
+                "z_targets": latent,
+                "z_pred": latent,
+                "state_pred": torch.zeros(rgb.shape[0], 1, 1),
+                "risk_pred": torch.full((rgb.shape[0], 1, 1), 0.5),
+            }
+
+    loss, logs = rollout_loss(
+        SingleLatentModel(),
+        _batch(),
+        TrainConfig(
+            device="cpu", horizon=0, objective="jepa-lite", lambda_var=1.0
+        ),
+    )
+
+    assert torch.isfinite(loss)
+    assert logs["loss_var"] == pytest.approx(0.99)
