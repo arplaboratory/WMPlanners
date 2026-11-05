@@ -16,6 +16,7 @@ if(ament_cmake_FOUND)
   install(DIRECTORY resource/ DESTINATION share/${PROJECT_NAME}/resource)
   install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch
     PATTERN "__pycache__" EXCLUDE)
+  install(DIRECTORY configs/ DESTINATION share/${PROJECT_NAME}/configs)
   install(DIRECTORY ../../configs/robots/ DESTINATION share/${PROJECT_NAME}/configs/robots
     FILES_MATCHING PATTERN "*.yaml")
 

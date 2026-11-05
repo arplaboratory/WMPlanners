@@ -45,11 +45,13 @@ def test_configured_parquet_tables_and_sensor_policy(tmp_path: Path):
     assert len(train) == len(val) == 1
     sample = train[0]
     assert sample["rgb"].shape == (2, 4, 4, 3)
+    np.testing.assert_array_equal(sample["odom"][:, 0], [0, 1])
     np.testing.assert_array_equal(sample["imu"], 0)
     np.testing.assert_array_equal(sample["depth"], 0)
     np.testing.assert_array_equal(sample["action"][:, 0], [0, 1])
     dino = ParquetDinoWMDataset(str(tmp_path), img_size=4, sample_k=2,
                                 schema_config=str(schema_path))
     assert dino[0]["rgb"].shape == (2, 3, 4, 4)
+    np.testing.assert_array_equal(dino[0]["odom"][:, 0], [0, 1])
     cached = CachedWindowDataset(train, max_windows=1)
     assert collate_for_dataset(cached)([cached[0]]).rgb.shape == (1, 2, 3, 4, 4)

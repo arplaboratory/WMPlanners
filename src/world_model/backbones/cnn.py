@@ -17,7 +17,8 @@ class VisionEncoder(BaseBackbone):
     heavier pre-trained encoders (DINO, V-JEPA, MAE, …).
     """
 
-    def __init__(self, in_ch: int = 4, z_dim: int = 128, image_size: int = 224):
+    def __init__(self, in_ch: int = 4, z_dim: int = 128, image_size: int = 224,
+                 pool_features: bool = False):
         super().__init__()
         self._z_dim = z_dim
         self.net = nn.Sequential(
@@ -28,14 +29,17 @@ class VisionEncoder(BaseBackbone):
             nn.Conv2d(64, 128, 3, stride=2, padding=1),
             nn.ReLU(inplace=True),
         )
-        with torch.no_grad(): # This is to get the dimension of the output of the network
-            probe = torch.zeros(1, in_ch, image_size, image_size) # BCHW
-            image_proj_dim = self.net(probe).flatten(1).shape[-1] # This is the dimension of the output of the network
+        # Older CNN checkpoints project globally pooled feature maps; newer
+        # checkpoints project the flattened map. Keep the default unchanged.
+        self.pool = nn.AdaptiveAvgPool2d(1) if pool_features else nn.Identity()
+        with torch.no_grad():
+            probe = torch.zeros(1, in_ch, image_size, image_size)
+            image_proj_dim = self.pool(self.net(probe)).flatten(1).shape[-1]
         self.proj = nn.Linear(image_proj_dim, z_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """``x``: ``(B, C, H, W)`` → ``(B, z_dim)``."""
-        h = self.net(x).flatten(1)
+        h = self.pool(self.net(x)).flatten(1)
         z = self.proj(h)
         z = F.layer_norm(z, z.shape[-1:])
         return z
@@ -46,9 +50,11 @@ class VisionEncoder(BaseBackbone):
 
 
 @register("cnn")
-def build_cnn(in_ch: int = 4, z_dim: int = 128, image_size: int = 224, device: str = "cpu", **_kwargs) -> ModelBundle:
+def build_cnn(in_ch: int = 4, z_dim: int = 128, image_size: int = 224,
+              device: str = "cpu", pool_features: bool = False, **_kwargs) -> ModelBundle:
     """Build the default CNN backbone."""
-    model = VisionEncoder(in_ch=in_ch, z_dim=z_dim, image_size=image_size).to(device)
+    model = VisionEncoder(in_ch=in_ch, z_dim=z_dim, image_size=image_size,
+                          pool_features=pool_features).to(device)
     return ModelBundle(
         model=model,
         preprocess=lambda x: x,

@@ -41,7 +41,7 @@ For DINOv2+RSSM, use `model:=dino` and its corresponding checkpoint. For JEPA-li
 ```bash
 ros2 launch wm_planner_ros bag_in_the_loop.launch.py \
   bag:=/path/to/recording.mcap robot:=<robot> \
-  model:=jepa-lite checkpoint_path:=/path/to/latest_with_state_head.pt device:=cuda
+  model:=jepa-lite checkpoint_path:=/path/to/latest_with_rollout_heads.pt device:=cuda
 ```
 
 DinoWM uses the same bag launch with its own checkpoint format and encoder name:
@@ -69,7 +69,52 @@ Pass the MCAP path and choose its robot config with `robot:=NAME`, or use `robot
 
 The launch validates the bag and any supplied checkpoint or normalization file paths. The three standard-WorldModel choices read `args` and `model_config` from training checkpoints to construct the trained backbone, dynamics, image size, and sensor/action dimensions before loading the saved `model` weights. For `cnn` and `dino`, the checkpoint architecture must match the launch choice. The bridge still accepts older plain state dict checkpoints using its configured defaults. If a standard-model checkpoint download fails, the node continues with random weights; provide a trained checkpoint for meaningful plans. Missing normalization statistics also degrade trajectory quality.
 
-JEPA-lite training leaves the state and risk heads unsupervised. Use `latest_with_state_head.pt` produced by `train_state_head_decoder.py` for goal-based planning. The launch sets `risk_weight:=0.0` for JEPA-lite, so its untrained risk head does not affect CEM scoring. The default `norm_stats.pt` lookup is beside the checkpoint; supply `norm_stats_path` if it is elsewhere.
+JEPA-lite training leaves the state and risk heads unsupervised. Use a rollout-trained checkpoint such as `latest_with_rollout_heads.pt` produced by `train_state_head_decoder.py` for goal-based planning. The launch sets `risk_weight:=0.0` for JEPA-lite, so its untrained risk head does not affect CEM scoring. The default `norm_stats.pt` lookup is beside the checkpoint; supply `norm_stats_path` if it is elsewhere.
+
+
+### JEPA-lite latent planning
+
+The original `wm_planner_bridge_node` now supports `planner_mode: latent`.
+Use `ros2/wm_planner_ros/configs/jepa_latent.yaml` with a JEPA-lite training
+checkpoint. This mode compares the rollout latent with an encoded goal
+observation; it does not require a fitted state head. `trajectory_source:
+actions` converts the selected `position_cmd` position dimensions into the
+published path, beginning at the current odometry pose. The path represents
+commanded setpoints, not decoded predicted robot positions.
+
+The planner needs a goal observation before planning. Call the private
+`~/capture_goal` Trigger service while the robot is at the destination, or
+publish a `sensor_msgs/Image` on `~/goal_image` and optionally a
+`geometry_msgs/PoseStamped` on `~/goal`. The image is paired with the latest
+synchronized odometry and IMU; the pose overrides its destination position
+and orientation. `~/clear_goal` removes the stored observation. In latent
+mode, `~/planned_actions` publishes the selected action sequence as a flat
+`Float32MultiArray` and `~/debug_metrics` publishes terminal latent distance,
+mean path latent distance, current latent distance, CEM cost, goal reached
+flag, and trajectory endpoint distance, in that order.
+
+`planner_mode: auto` chooses latent mode for a JEPA-lite checkpoint without a
+fitted state head, and state mode otherwise. `trajectory_source: auto` uses a
+fitted state head when available and action position setpoints otherwise.
+State-head availability is checked from the checkpoint's `head_training`
+metadata, `latest_with_state_head.pt` filename, or a loaded
+`state_head_decoder.pt`. An explicit `planner_mode: state` requires a fitted
+head. Latent mode still requires a stored goal observation; Nexus currently
+supplies only a goal pose in its MRP request, so populate the observation
+through the goal service or image topic before requesting an MRP plan.
+Keep that image paired with the same destination as the Nexus pose; the MRP
+request replaces the stored goal position and orientation, not its image.
+
+For JEPA-lite HF-dataset runs, set `depth_mode: zeros`,
+`imu_layout: dataset`, and `norm_stats_mode: off` as in the supplied YAML.
+Set `action_bounds_path` or place `action_bounds.pt` next to the checkpoint
+for per-dimension CEM sampling; without it, the configured scalar action
+bounds are used. Set `plan_horizon: 0` to use the training horizon. State
+planning remains the default unless `planner_mode` is set explicitly.
+The bridge rejects a planning horizon longer than the dynamics or state-head
+training horizon. `allow_horizon_extrapolation: true` bypasses this check, but
+is intended only for explicit experiments. A checkpoint whose action contract
+uses window-start-relative future poses requires `goal_frame_mode: current_map`.
 
 ## What the launch starts
 
@@ -99,7 +144,7 @@ The launch does not replay a goal topic. With the launch defaults, either bridge
 | `/<robot_name>/<node_name>/planned_trajectory/markers` | `visualization_msgs/MarkerArray` | Visualization markers for the chosen trajectory. |
 | `/<robot_name>/<node_name>/debug_metrics` | `std_msgs/Float32MultiArray` | Standard model: goal distance, mean risk, goal weight, risk weight. DinoWM: goal distance and goal weight. |
 
-The launch leaves `publish_frame` at each node's default (`body`). The standard node also supports `goal_topic`, `goal_xyz`, `use_goal_topic`, `publish_frame`, `queue_size` (8), image size (224×224), model dimensions (`odom_dim`, `imu_dim`, `act_dim`, `state_dim`, `z_vis_dim`, `z_prop_dim`, `z_dim`), and CEM parameters (`plan_horizon` 15, `plan_iters` 5, `plan_population` 128, `plan_elites` 16, action bounds, `cem_alpha`, `goal_weight`, and `risk_weight`). Training checkpoint metadata supplies the checkpoint-sensitive dimensions and image size; plain state dict checkpoints use the node defaults. These are **node parameters**, not additional launch arguments; change them in the launch file or start the executable directly with a ROS parameter file.
+The launch leaves `publish_frame` at each node's default (`body`). The standard node also supports `goal_topic`, `goal_xyz`, `use_goal_topic`, `publish_frame`, `queue_size` (8), image size (224×224), model dimensions (`odom_dim`, `imu_dim`, `act_dim`, `state_dim`, `z_vis_dim`, `z_prop_dim`, `z_dim`), and CEM parameters (`plan_horizon` 15, `plan_iters` 5, `plan_population` 128, `plan_elites` 16, action bounds, `cem_alpha`, `cem_temporal_noise`, `goal_weight`, `path_weight`, `reverse_progress_weight`, `trajectory_smoothness_weight`, `action_smoothness_weight`, and `risk_weight`). The path and smoothness weights default to zero for compatibility. Pose-action smoothness uses position second differences and quaternion geodesic-rate changes rather than direct quaternion subtraction. Training checkpoint metadata supplies the checkpoint-sensitive dimensions, image size, action semantics, and maximum trained horizon; plain state dict checkpoints use the node defaults. These are **node parameters**, not additional launch arguments; change them in the launch file or start the executable directly with a ROS parameter file.
 
 The standard bridge can also expose the optional `~/plan_mrp` action via `enable_mrp_action:=true` when `phx_nav_msgs` is available. The bag launch disables that action. DinoWM loads a different `.pth` checkpoint containing separate encoder and predictor modules, uses `num_hist` frames (which must match training), and transforms its output through TF. Its normalization arrays and CEM settings are node parameters; the shared adapter leaves that model-specific math inside the DinoWM node.
 

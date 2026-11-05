@@ -1,0 +1,49 @@
+# JEPA-lite inference with map-frame waypoint goals translated into a local
+# planning frame. The frame is anchored at the current robot position while
+# retaining map-aligned axes, matching the checkpoint's training windows.
+#
+# Goals published to ~/goal must be PoseStamped messages in the same global
+# frame as ~/odom (normally `map`). Transform goals to that frame upstream.
+# The bridge publishes plans in `body` by default; set publish_frame: map for
+# global-frame output.
+/**:
+  ros__parameters:
+    wm_mode: jepa-lite
+    backend: cnn
+    dynamics_type: mlp
+    depth_topic: sensors/multisense_front/left/depth
+
+    # Required: provide your checkpoint via launch/CLI if this differs.
+    checkpoint_path: /home/long/Code/Org/ARL/phoenix-r2/src/navigation/wm_planner/runs/jepa_lite_phoenix_sim_v2_gpu1_cnn_precomputed/latest_with_rollout_heads_local.pt
+
+    # Model-facing coordinate convention.
+    # map: fixed translation-only frame anchored at the first observation
+    # current_map: translation-only frame anchored at the current observation
+    # initial_body: fixed frame at robot body pose when a new goal arrives
+    # current_body: re-anchor at current body pose on every planning update
+    goal_frame_mode: current_map
+    planning_reset_on_goal: true
+    planning_frame_id: wm_planner_local
+
+    # Use state-head waypoint planning for a checkpoint with rollout heads.
+    planner_mode: state
+    trajectory_source: state_head
+
+    # Adapt these transport settings to the deployment graph.
+    publish_frame: body
+
+    # Use the checkpoint horizon and correlated samples for the high-dimensional
+    # future-pose action sequence.
+    plan_horizon: 0
+    plan_iters: 7
+    plan_population: 256
+    plan_elites: 32
+    cem_temporal_noise: 0.8
+
+    # Balance terminal accuracy with steady progress and smooth trajectories.
+    goal_weight: 1.0
+    path_weight: 0.25
+    reverse_progress_weight: 1.0
+    trajectory_smoothness_weight: 0.1
+    action_smoothness_weight: 0.1
+    risk_weight: 0.0

@@ -1,0 +1,9 @@
+# Parameters for the Python WM bridge when using a JEPA-lite checkpoint.
+/**:
+  ros__parameters:
+    wm_mode: jepa-lite
+      #wm_mode: standard
+      #plan_horizon: 150
+    backend: cnn
+    dynamics_type: mlp
+    depth_topic: sensors/multisense_front/left/depth

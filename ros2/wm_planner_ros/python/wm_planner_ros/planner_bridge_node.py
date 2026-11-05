@@ -3,42 +3,50 @@
 
 from __future__ import annotations
 
+import copy
 import os
 import threading
-import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Callable, Any
 
 import numpy as np
 import rclpy
 import rclpy.parameter
-from builtin_interfaces.msg import Duration as DurationMsg
 from huggingface_hub import hf_hub_download
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.duration import Duration as RclpyDuration
 from rclpy.time import Time
 from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import Float32MultiArray
+from std_srvs.srv import Trigger
 from visualization_msgs.msg import Marker, MarkerArray
 import torch
 
 from world_model.architecture import WorldModel
 from world_model.data.normalization import NormStats
-from world_model.mpc import CEMConfig, cem_plan
+from world_model.mpc import (CEMConfig, LatentCEMCostConfig, StateCEMCostConfig,
+                             cem_plan, cem_plan_latent_target, cem_plan_with_cost,
+                             state_trajectory_cost)
 
 from wm_planner_ros.bridge_adapter import BufferedPlannerBridgeNode, Goal
 from wm_planner_ros.model_adapters import StandardWorldModelAdapter
+from wm_planner_ros.latent_planning import GoalObservation, positions_from_actions
 
 try:
-    from phx_nav_msgs.action import MRPPlan
-    from phx_nav_msgs.msg import PlannerState, Trajectory, TrajectoryArray
+    from phx_nav_msgs.msg import Trajectory, TrajectoryArray
 except ImportError:
-    MRPPlan = None
-    PlannerState = None
     Trajectory = None
     TrajectoryArray = None
+
+
+@dataclass(frozen=True)
+class PlanningAnchor:
+    """Fixed model frame, coincident with body at the start of a route."""
+
+    source_frame: str
+    position: np.ndarray
+    rotation: np.ndarray  # source-frame <- planning-frame
 
 
 @dataclass
@@ -53,6 +61,8 @@ class PlanComputation:
     goal: Goal
     cost: float
     confidence: float
+    actions: np.ndarray | None = None
+    debug: dict[str, float] | None = None
 
 
 class PlannerBridgeNode(BufferedPlannerBridgeNode):
@@ -60,6 +70,16 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
 
     def __init__(self) -> None:
         super().__init__("wm_planner_bridge")
+        self._odom_origin: tuple[float, float, float] | None = None
+        self._planning_anchor: PlanningAnchor | None = None
+        self._planning_anchor_lock = threading.Lock()
+        self._norm_stats: NormStats | None = None
+        self._cnn_pool_features = False
+        self._warned_invalid_depth = False
+        self._goal_obs: GoalObservation | None = None
+        self._goal_obs_lock = threading.Lock()
+        self._head_trained = False
+        self._risk_head_trained = True
 
         self._declare_params()
         self._load_params()
@@ -70,10 +90,14 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._last_plan: PlanComputation | None = None
         self._last_trajectory_array = None
         self._last_plan_lock = threading.Lock()
-        self._mrp_action_server = None
         self.configure_adapter(StandardWorldModelAdapter(self), publish_markers=True)
-        if self._enable_mrp_action:
-            self._setup_mrp_action_server()
+        self._goal_image_sub = self.create_subscription(
+            Image, self._goal_image_topic, self._on_goal_image, 1)
+        self._capture_goal_srv = self.create_service(
+            Trigger, self._capture_goal_service, self._on_capture_goal)
+        self._clear_goal_srv = self.create_service(
+            Trigger, self._clear_goal_service, self._on_clear_goal)
+        self._actions_pub = self.create_publisher(Float32MultiArray, self._actions_topic, 10)
         self._init_timer = self.create_timer(0.0, self._deferred_init)
 
         self.get_logger().info(
@@ -104,25 +128,17 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self.declare_parameter("checkpoint_repo_id", "dmody1/nyu-wm-v3")
         self.declare_parameter("checkpoint_experiment", "dino_rssm_c1")
         self.declare_parameter("checkpoint_filename", "latest.pt")
-        self.declare_parameter("device", "gpu")
+        self.declare_parameter("device", "cuda")
 
         self.declare_parameter("rgb_topic", "~/rgb")
         self.declare_parameter("depth_topic", "~/depth")
         self.declare_parameter("odom_topic", "~/odom")
         self.declare_parameter("imu_topic", "~/imu")
-        self.declare_parameter("use_goal_topic", True)
-        self.declare_parameter("goal_topic", "~/goal")
-        self.declare_parameter("goal_xyz", [0.0, 0.0, 0.0])
-        self.declare_parameter("trajectory_topic", "~/planned_trajectory")
-        self.declare_parameter("debug_topic", "~/debug_metrics")
         self.declare_parameter("publish_frame", "body")
-        self.declare_parameter("plan_on_observation", True)
-        self.declare_parameter("enable_mrp_action", False)
-        self.declare_parameter("mrp_action_name", "~/plan_mrp")
         self.declare_parameter("trajectory_dt", 0.2)
-
-        self.declare_parameter("queue_size", 8)
-        self.declare_parameter("sync_slop", 0.05)
+        self.declare_parameter("goal_frame_mode", "map")
+        self.declare_parameter("planning_reset_on_goal", True)
+        self.declare_parameter("planning_frame_id", "wm_planner_local")
 
         self.declare_parameter("odom_dim", 13)
         self.declare_parameter("imu_dim", 10)
@@ -134,19 +150,41 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
 
         self.declare_parameter("image_height", 224)
         self.declare_parameter("image_width", 224)
+        self.declare_parameter("invalid_depth_fill", 0.0)
 
         self.declare_parameter("norm_stats_path", "")
+        self.declare_parameter("norm_stats_mode", "auto")
+        self.declare_parameter("depth_mode", "sensor")
+        self.declare_parameter("imu_layout", "legacy")
+        self.declare_parameter("planner_mode", "state")
+        self.declare_parameter("trajectory_source", "auto")
+        self.declare_parameter("action_position_dims", [0, 1, 2])
+        self.declare_parameter("state_head_path", "")
+        self.declare_parameter("action_bounds_path", "")
+        self.declare_parameter("latent_terminal_weight", 1.0)
+        self.declare_parameter("latent_path_weight", 0.1)
+        self.declare_parameter("latent_success_threshold", 5.0)
+        self.declare_parameter("goal_image_topic", "~/goal_image")
+        self.declare_parameter("capture_goal_service", "~/capture_goal")
+        self.declare_parameter("clear_goal_service", "~/clear_goal")
+        self.declare_parameter("actions_topic", "~/planned_actions")
 
         self.declare_parameter("plan_horizon", 15)
         self.declare_parameter("plan_iters", 5)
         self.declare_parameter("plan_population", 128)
         self.declare_parameter("plan_elites", 16)
+        self.declare_parameter("allow_horizon_extrapolation", False)
         self.declare_parameter("action_min", -3.0)
         self.declare_parameter("action_max", 3.0)
         self.declare_parameter("action_init_std", 1.0)
         self.declare_parameter("cem_alpha", 0.3)
+        self.declare_parameter("cem_temporal_noise", 0.0)
 
         self.declare_parameter("goal_weight", 1.0)
+        self.declare_parameter("path_weight", 0.0)
+        self.declare_parameter("reverse_progress_weight", 0.0)
+        self.declare_parameter("trajectory_smoothness_weight", 0.0)
+        self.declare_parameter("action_smoothness_weight", 0.0)
         self.declare_parameter("risk_weight", 0.5)
         self.declare_parameter("marker_scale", 0.08)
 
@@ -163,6 +201,16 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._checkpoint_filename = str(self.get_parameter("checkpoint_filename").value)
         self._device_str = str(self.get_parameter("device").value)
         self._publish_frame = str(self.get_parameter("publish_frame").value).lower()
+        self._goal_frame_mode = str(self.get_parameter("goal_frame_mode").value).lower()
+        self._planning_reset_on_goal = bool(self.get_parameter("planning_reset_on_goal").value)
+        self._planning_frame_id = str(self.get_parameter("planning_frame_id").value)
+        valid_goal_frame_modes = {"map", "current_map", "initial_body", "current_body"}
+        if self._goal_frame_mode not in valid_goal_frame_modes:
+            raise ValueError(
+                "goal_frame_mode must be map, current_map, initial_body, or current_body"
+            )
+        if not self._planning_frame_id:
+            raise ValueError("planning_frame_id must not be empty")
 
         # convention: {backbone}_{dynamics}_{run}  e.g. dino_rssm_c1, cnn_mlp_c1
         if self._backend == "auto" or self._dynamics_type == "auto":
@@ -179,8 +227,12 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             )
 
             self.set_parameters([
-                rclpy.parameter.Parameter("backend", rclpy.parameter.Parameter.Type.STRING, self._backend),
-                rclpy.parameter.Parameter("dynamics_type", rclpy.parameter.Parameter.Type.STRING, self._dynamics_type),
+                rclpy.parameter.Parameter("backend",
+                                          rclpy.parameter.Parameter.Type.STRING,
+                                          self._backend),
+                rclpy.parameter.Parameter("dynamics_type",
+                                          rclpy.parameter.Parameter.Type.STRING,
+                                          self._dynamics_type),
             ])
 
         if self._backend not in {"cnn", "dinov2", "vjepa2"}:
@@ -192,23 +244,41 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         self._depth_topic = str(self.get_parameter("depth_topic").value)
         self._odom_topic = str(self.get_parameter("odom_topic").value)
         self._imu_topic = str(self.get_parameter("imu_topic").value)
-        self._use_goal_topic = bool(self.get_parameter("use_goal_topic").value)
-        self._goal_topic = str(self.get_parameter("goal_topic").value)
-        self._trajectory_topic = str(self.get_parameter("trajectory_topic").value)
-        self._debug_topic = str(self.get_parameter("debug_topic").value)
-        self._plan_on_observation = bool(self.get_parameter("plan_on_observation").value)
-        self._enable_mrp_action = bool(self.get_parameter("enable_mrp_action").value)
-        self._mrp_action_name = str(self.get_parameter("mrp_action_name").value)
         self._trajectory_dt = float(self.get_parameter("trajectory_dt").value)
-        self._queue_size = int(self.get_parameter("queue_size").value)
-        self._sync_slop = float(self.get_parameter("sync_slop").value)
 
         self._norm_stats_path = str(self.get_parameter("norm_stats_path").value)
-
-        default_goal = self.get_parameter("goal_xyz").value
-        self._default_goal = Goal(float(default_goal[0]), float(default_goal[1]), float(default_goal[2]))
-        self._odom_origin: tuple[float, float, float] | None = None  # delta baseline
-        self._norm_stats = None  # NormStats loaded in _load_checkpoint
+        self._norm_stats_mode = str(self.get_parameter("norm_stats_mode").value).lower()
+        self._depth_mode = str(self.get_parameter("depth_mode").value).lower()
+        self._imu_layout = str(self.get_parameter("imu_layout").value).lower()
+        self._planner_mode_param = str(self.get_parameter("planner_mode").value).lower()
+        self._planner_mode = self._planner_mode_param
+        self._trajectory_source_param = str(self.get_parameter("trajectory_source").value).lower()
+        self._trajectory_source = self._trajectory_source_param
+        self._action_position_dims = tuple(int(v) for v in self.get_parameter("action_position_dims").value)
+        self._state_head_path = str(self.get_parameter("state_head_path").value)
+        self._action_bounds_path = str(self.get_parameter("action_bounds_path").value)
+        self._latent_terminal_weight = float(self.get_parameter("latent_terminal_weight").value)
+        self._latent_path_weight = float(self.get_parameter("latent_path_weight").value)
+        self._latent_success_threshold = float(self.get_parameter("latent_success_threshold").value)
+        self._goal_image_topic = str(self.get_parameter("goal_image_topic").value)
+        self._capture_goal_service = str(self.get_parameter("capture_goal_service").value)
+        self._clear_goal_service = str(self.get_parameter("clear_goal_service").value)
+        self._actions_topic = str(self.get_parameter("actions_topic").value)
+        for name, value, allowed in (
+            ("norm_stats_mode", self._norm_stats_mode, {"auto", "on", "off"}),
+            ("depth_mode", self._depth_mode, {"sensor", "zeros"}),
+            ("imu_layout", self._imu_layout, {"legacy", "dataset"}),
+            ("planner_mode", self._planner_mode_param, {"auto", "state", "latent"}),
+            ("trajectory_source", self._trajectory_source_param, {"auto", "state_head", "actions"}),
+        ):
+            if value not in allowed:
+                raise ValueError(f"{name} must be one of {sorted(allowed)}; got {value!r}")
+        if len(self._action_position_dims) != 3 or len(set(self._action_position_dims)) != 3:
+            raise ValueError("action_position_dims must contain three distinct dimensions")
+        self._latent_cost_cfg = LatentCEMCostConfig(
+            terminal_weight=self._latent_terminal_weight,
+            path_weight=self._latent_path_weight,
+        )
 
         self._odom_dim = int(self.get_parameter("odom_dim").value)
         self._imu_dim = int(self.get_parameter("imu_dim").value)
@@ -220,10 +290,39 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
 
         self._img_h = int(self.get_parameter("image_height").value)
         self._img_w = int(self.get_parameter("image_width").value)
+        self._invalid_depth_fill = float(self.get_parameter("invalid_depth_fill").value)
+        if not np.isfinite(self._invalid_depth_fill):
+            raise ValueError("invalid_depth_fill must be finite")
 
         self._goal_weight = float(self.get_parameter("goal_weight").value)
+        self._path_weight = float(self.get_parameter("path_weight").value)
+        self._reverse_progress_weight = float(
+            self.get_parameter("reverse_progress_weight").value)
+        self._trajectory_smoothness_weight = float(
+            self.get_parameter("trajectory_smoothness_weight").value)
+        self._action_smoothness_weight = float(
+            self.get_parameter("action_smoothness_weight").value)
         self._risk_weight = float(self.get_parameter("risk_weight").value)
         self._marker_scale = float(self.get_parameter("marker_scale").value)
+        self._allow_horizon_extrapolation = bool(
+            self.get_parameter("allow_horizon_extrapolation").value)
+        for name, value in (
+            ("goal_weight", self._goal_weight),
+            ("path_weight", self._path_weight),
+            ("reverse_progress_weight", self._reverse_progress_weight),
+            ("trajectory_smoothness_weight", self._trajectory_smoothness_weight),
+            ("action_smoothness_weight", self._action_smoothness_weight),
+            ("risk_weight", self._risk_weight),
+        ):
+            if value < 0.0:
+                raise ValueError(f"{name} must be nonnegative")
+        self._state_cost_cfg = StateCEMCostConfig(
+            terminal_weight=self._goal_weight,
+            path_weight=self._path_weight,
+            reverse_progress_weight=self._reverse_progress_weight,
+            trajectory_smoothness_weight=self._trajectory_smoothness_weight,
+            risk_weight=self._risk_weight,
+        )
 
         self._cem_cfg = CEMConfig(
             horizon=int(self.get_parameter("plan_horizon").value),
@@ -235,6 +334,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             action_max=float(self.get_parameter("action_max").value),
             init_std=float(self.get_parameter("action_init_std").value),
             alpha=float(self.get_parameter("cem_alpha").value),
+            temporal_noise=float(self.get_parameter("cem_temporal_noise").value),
+            action_smoothness_weight=self._action_smoothness_weight,
         )
 
     def _build_model(self) -> WorldModel:
@@ -244,6 +345,8 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             bkw["pretrained"] = False
         if self._backend == "dinov2":
             bkw["model_name"] = self._backbone_name
+        if self._backend == "cnn":
+            bkw["pool_features"] = self._cnn_pool_features
         return WorldModel(
             odom_dim=self._odom_dim,
             imu_dim=self._imu_dim,
@@ -261,7 +364,7 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
     def _load_checkpoint(self) -> None:
         checkpoint_path = self._checkpoint_path
         if self._wm_mode == "jepa-lite" and not checkpoint_path:
-            raise ValueError("JEPA-lite requires checkpoint_path with a trained state head")
+            raise ValueError("JEPA-lite requires checkpoint_path")
         if not checkpoint_path:
             try:
                 checkpoint_path = hf_hub_download(
@@ -280,12 +383,22 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                 self._model = self._build_model()
                 return
 
+        if os.path.isdir(checkpoint_path):
+            checkpoint_path = next((os.path.join(checkpoint_path, name) for name in
+                                    ("latest_with_rollout_heads_local.pt", "latest_with_rollout_heads.pt",
+                                     "latest_with_observed_heads.pt",
+                                     "latest_with_state_head.pt", "latest_with_heads.pt", "latest.pt")
+                                    if os.path.isfile(os.path.join(checkpoint_path, name))), None)
+            if checkpoint_path is None:
+                raise FileNotFoundError("No supported checkpoint in run directory")
         checkpoint = torch.load(checkpoint_path, map_location=self._device, weights_only=False)
+        training_metadata = False
         if "model" in checkpoint and isinstance(checkpoint["model"], dict):
             args_dict = checkpoint.get("args", {})
             model_cfg = checkpoint.get("model_config", {})
             if not args_dict or not model_cfg:
                 raise ValueError("Training checkpoint lacks args or model_config metadata")
+            training_metadata = True
             trained_mode = args_dict.get("wm_mode", "standard")
             if trained_mode != self._wm_mode:
                 raise ValueError(
@@ -310,7 +423,53 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             self._imu_dim = int(model_cfg["imu_dim"])
             self._act_dim = int(model_cfg["act_dim"])
             self._state_dim = int(model_cfg["state_dim"])
+            if self._backend == "cnn":
+                state = checkpoint["model"]
+                projection = state.get("vision.proj.weight")
+                last_conv = state.get("vision.net.4.weight")
+                self._cnn_pool_features = (
+                    projection is not None and last_conv is not None
+                    and projection.shape[1] == last_conv.shape[0]
+                )
             self._cem_cfg.action_dim = self._act_dim
+            contract = checkpoint.get("training_contract", {})
+            trained_horizon = int(contract.get("trained_horizon", args_dict.get("horizon", 0)))
+            if trained_horizon < 1:
+                raise ValueError("Training checkpoint has no valid trained horizon")
+            if self._cem_cfg.horizon == 0:
+                self._cem_cfg.horizon = trained_horizon
+            elif (self._cem_cfg.horizon > trained_horizon
+                  and not self._allow_horizon_extrapolation):
+                raise ValueError(
+                    f"plan_horizon={self._cem_cfg.horizon} exceeds checkpoint "
+                    f"trained_horizon={trained_horizon}; retrain at the requested horizon "
+                    "or set allow_horizon_extrapolation=true explicitly"
+                )
+            action_contract = contract.get("action", {})
+            components = action_contract.get("components", [])
+            if action_contract.get("source") == "future_odom_pose":
+                if (action_contract.get("position_origin") == "window_start"
+                        and self._goal_frame_mode != "current_map"):
+                    raise ValueError(
+                        "window-start-relative pose checkpoints require "
+                        "goal_frame_mode=current_map"
+                    )
+                if not components and self._act_dim == 7:
+                    components = ["x", "y", "z", "qx", "qy", "qz", "qw"]
+                required = {"x", "y", "z", "qx", "qy", "qz", "qw"}
+                if not required.issubset(components):
+                    raise ValueError(
+                        "future_odom_pose action contract must identify xyz and quaternion components"
+                    )
+                position_dims = tuple(components.index(name) for name in ("x", "y", "z"))
+                quaternion_dims = tuple(components.index(name) for name in ("qx", "qy", "qz", "qw"))
+                self._cem_cfg.action_position_dims = position_dims
+                self._cem_cfg.action_quaternion_dims = quaternion_dims
+                self._cem_cfg.action_unit_norm_dims = quaternion_dims
+            elif self._act_dim == 7 and self._action_position_dims == (0, 1, 2):
+                self._cem_cfg.action_position_dims = self._action_position_dims
+                self._cem_cfg.action_quaternion_dims = (3, 4, 5, 6)
+                self._cem_cfg.action_unit_norm_dims = (3, 4, 5, 6)
             self.set_parameters([
                 rclpy.parameter.Parameter("backend", value=self._backend),
                 rclpy.parameter.Parameter("dynamics_type", value=self._dynamics_type),
@@ -338,187 +497,326 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
                 f"Loaded checkpoint {checkpoint_path}. missing={len(missing)} unexpected={len(unexpected)}"
             )
 
+        head_training = checkpoint.get("head_training") or {} if isinstance(checkpoint, dict) else {}
+        head_path = self._state_head_path
+        if not head_path and self._wm_mode == "jepa-lite" and not head_training:
+            sibling = os.path.join(os.path.dirname(checkpoint_path), "state_head_decoder.pt")
+            if os.path.isfile(sibling):
+                head_path = sibling
+        if head_path:
+            head_state = torch.load(head_path, map_location=self._device, weights_only=False)
+            self._model.state_head.load_state_dict(head_state)
+        self._head_trained = (self._wm_mode == "standard" or
+                              bool(head_training.get("state_head")) or
+                              bool(head_path) or
+                              "with_state_head" in os.path.basename(checkpoint_path))
+        self._risk_head_trained = self._wm_mode == "standard" or bool(head_training.get("risk_head"))
+        if not self._risk_head_trained:
+            self._risk_weight = 0.0
+        self._planner_mode = ("latent" if self._wm_mode == "jepa-lite" and not self._head_trained
+                              else "state") if self._planner_mode_param == "auto" else self._planner_mode_param
+        if self._planner_mode == "state" and not self._head_trained:
+            raise ValueError("State planning requires a fitted state head; use planner_mode=latent")
+        head_horizon = int(head_training.get("horizon", self._cem_cfg.horizon))
+        if (self._planner_mode == "state" and self._cem_cfg.horizon > head_horizon
+                and not self._allow_horizon_extrapolation):
+            raise ValueError(
+                f"plan_horizon={self._cem_cfg.horizon} exceeds state-head training "
+                f"horizon={head_horizon}"
+            )
+        self._trajectory_source = ("state_head" if self._head_trained else "actions") \
+            if self._trajectory_source_param == "auto" else self._trajectory_source_param
+        if self._trajectory_source == "state_head" and not self._head_trained:
+            raise ValueError("trajectory_source=state_head requires a fitted state head")
+        if self._trajectory_source == "actions" and (
+            self._action_position_dims[0] < 0 or
+            max(self._action_position_dims) >= self._act_dim
+        ):
+            raise ValueError("action_position_dims are invalid for this checkpoint's action dimension")
+        bounds_path = self._action_bounds_path or os.path.join(
+            os.path.dirname(checkpoint_path), "action_bounds.pt")
+        if os.path.isfile(bounds_path):
+            bounds = torch.load(bounds_path, map_location="cpu", weights_only=False)
+            for name, key in (("action_low", "low"), ("action_high", "high"),
+                              ("action_init_mean", "mean"), ("action_init_std", "std")):
+                values = torch.as_tensor(bounds[key], dtype=torch.float32)
+                if values.numel() != self._act_dim:
+                    raise ValueError(f"{bounds_path}: {key} has wrong action dimension")
+                setattr(self._cem_cfg, name, values.clamp_min(1e-3) if key == "std" else values)
+            self.get_logger().info(f"Loaded per-dimension action bounds from {bounds_path}")
+        else:
+            self.get_logger().warning(
+                f"No per-dimension action bounds at {bounds_path}; using scalar CEM bounds")
+        self.get_logger().info(
+            f"planner_mode={self._planner_mode} trajectory_source={self._trajectory_source} "
+            f"state_head_trained={self._head_trained}")
+
         # Load NormStats for correct input normalization and output scaling.
         ns_path = self._norm_stats_path
         if not ns_path:
             ns_path = os.path.join(os.path.dirname(checkpoint_path), "norm_stats.pt")
-        if os.path.exists(ns_path):
+        use_norm_stats = (self._norm_stats_mode == "on" or
+                          (self._norm_stats_mode == "auto" and
+                           (self._wm_mode == "standard" or not training_metadata or
+                            (self._planner_mode == "state" and bool(head_training)))))
+        if use_norm_stats and os.path.exists(ns_path):
             self._norm_stats = NormStats.load(ns_path)
             self.get_logger().info(f"Loaded NormStats from {ns_path}")
-        else:
+        elif use_norm_stats:
             self.get_logger().warning(
                 f"norm_stats.pt not found at {ns_path}. "
                 "Inputs will NOT be normalized — trajectory quality will be poor. "
                 "Set the 'norm_stats_path' parameter or place norm_stats.pt beside the checkpoint."
             )
 
-    def _setup_mrp_action_server(self) -> None:
-        if MRPPlan is None:
-            self.get_logger().error(
-                "enable_mrp_action is true, but phx_nav_msgs.action.MRPPlan "
-                "could not be imported. Build/source phx_nav_msgs with MRPPlan.action."
-            )
-            return
+    def _on_goal(self, msg: PoseStamped) -> None:
+        """Record a global goal and optionally start a new fixed planning frame."""
+        super()._on_goal(msg)
+        if self._planning_reset_on_goal:
+            with self._planning_anchor_lock:
+                self._planning_anchor = None
+            self._odom_origin = None
+            self.get_logger().info("Cleared WM planning-frame anchor for new goal")
 
-        self._mrp_action_server = ActionServer(
-            self,
-            MRPPlan,
-            self._mrp_action_name,
-            execute_callback=self._execute_mrp_plan,
-            goal_callback=self._handle_mrp_goal,
-            cancel_callback=self._handle_mrp_cancel,
-        )
-        self.get_logger().info(f"MRPPlan action server ready on {self._mrp_action_name}")
-
-    def _handle_mrp_goal(self, goal_request: Any) -> GoalResponse:
-        del goal_request
-        return GoalResponse.ACCEPT
-
-    def _handle_mrp_cancel(self, goal_handle: Any) -> CancelResponse:
-        del goal_handle
-        return CancelResponse.ACCEPT
-
-    def _execute_mrp_plan(self, goal_handle: Any) -> Any:
-        start_time = time.monotonic()
-        request = goal_handle.request
-        result = MRPPlan.Result()
-        selected_name = self._resolve_requested_planner(request)
-
-        self._publish_mrp_feedback(goal_handle, PlannerState.PLANNING, selected_name, 0.05, "Planning.")
-
-        if selected_name in {"easl", "hybrid"}:
-            message = (
-                f"Requested planner '{selected_name}' is not connected yet. "
-                "The current wm_planner_ros action path supports world_model only."
-            )
-            self._fill_mrp_failure(result, request, selected_name, message, start_time)
-            goal_handle.abort()
-            return result
-
-        if selected_name not in {"world_model", "auto"}:
-            message = f"Unsupported planner '{selected_name}'."
-            self._fill_mrp_failure(result, request, selected_name, message, start_time)
-            goal_handle.abort()
-            return result
-
-        if not self._model_ready:
-            self._fill_mrp_failure(result, request, selected_name, "World model is not ready.", start_time)
-            goal_handle.abort()
-            return result
-
+    def _on_capture_goal(self, request: Any, response: Any) -> Any:
+        """Store the latest synchronized observation as the latent target."""
         with self._latest_observation_lock:
             latest = self._latest_observation
-
         if latest is None:
-            self._fill_mrp_failure(result, request, selected_name, "No synchronized RGB-D/odom/IMU observation cached.", start_time)
-            goal_handle.abort()
-            return result
+            response.success = False
+            response.message = "No synchronized observation is available"
+            return response
+        rgb, depth, odom, imu = self._adapter.prepare(*latest)
+        with self._goal_obs_lock:
+            self._goal_obs = GoalObservation(rgb, depth, odom, imu)
+        response.success = True
+        response.message = "Captured goal observation"
+        return response
 
-        if goal_handle.is_cancel_requested:
-            self._fill_mrp_failure(result, request, selected_name, "Planning request canceled.", start_time)
-            goal_handle.canceled()
-            return result
+    def _on_goal_image(self, image: Image) -> None:
+        """Pair a goal image with the most recent synchronized proprioception."""
+        with self._latest_observation_lock:
+            latest = self._latest_observation
+        if latest is None:
+            self.get_logger().warning("Ignoring goal image until sensors are synchronized")
+            return
+        _, _, odom, imu = self._adapter.prepare(*latest)
+        goal_odom = copy.deepcopy(odom)
+        goal_odom.twist.twist.linear.x = 0.0
+        goal_odom.twist.twist.linear.y = 0.0
+        goal_odom.twist.twist.linear.z = 0.0
+        goal_odom.twist.twist.angular.x = 0.0
+        goal_odom.twist.twist.angular.y = 0.0
+        goal_odom.twist.twist.angular.z = 0.0
+        with self._goal_obs_lock:
+            self._goal_obs = GoalObservation(image, None, goal_odom, imu)
 
-        goal = self._goal_from_mrp_problem(request.problem)
+    def _on_clear_goal(self, request: Any, response: Any) -> Any:
+        with self._goal_obs_lock:
+            self._goal_obs = None
+        response.success = True
+        response.message = "Cleared goal observation"
+        return response
+
+    def _model_anchor(self, odom: Odometry) -> PlanningAnchor | None:
+        """Return the frame in which this checkpoint's window-relative state lives."""
+        if self._goal_frame_mode == "map":
+            return None
+        position = np.array((odom.pose.pose.position.x, odom.pose.pose.position.y,
+                             odom.pose.pose.position.z), dtype=np.float64)
+        if self._goal_frame_mode == "current_map":
+            return PlanningAnchor(
+                odom.header.frame_id, position, np.eye(3, dtype=np.float64)
+            )
+        q = odom.pose.pose.orientation
+        rotation = self._quat_to_rot(q.x, q.y, q.z, q.w).astype(np.float64)
+        if self._goal_frame_mode == "current_body":
+            return PlanningAnchor(odom.header.frame_id, position, rotation)
+        with self._planning_anchor_lock:
+            if (self._planning_anchor is None or
+                    self._planning_anchor.source_frame != odom.header.frame_id):
+                self._planning_anchor = PlanningAnchor(odom.header.frame_id, position, rotation)
+                self._odom_origin = tuple(position)
+                self.get_logger().info(
+                    f"Anchored {self._planning_frame_id} to {odom.header.frame_id} at route start")
+            return self._planning_anchor
+
+    def _point_to_model_frame(self, point: np.ndarray, odom: Odometry,
+                              anchor: PlanningAnchor | None) -> np.ndarray:
+        if anchor is None:
+            return point
+        return anchor.rotation.T @ (point - anchor.position)
+
+    def _point_from_model_frame(self, point: np.ndarray, anchor: PlanningAnchor | None) -> np.ndarray:
+        if anchor is None:
+            return point
+        return anchor.rotation @ point + anchor.position
+
+    @staticmethod
+    def _rot_to_quat(rotation: np.ndarray) -> tuple[float, float, float, float]:
+        """Convert a proper 3x3 rotation matrix to ROS xyzw quaternion order."""
+        trace = float(np.trace(rotation))
+        if trace > 0.0:
+            scale = 2.0 * np.sqrt(trace + 1.0)
+            return ((rotation[2, 1] - rotation[1, 2]) / scale,
+                    (rotation[0, 2] - rotation[2, 0]) / scale,
+                    (rotation[1, 0] - rotation[0, 1]) / scale, 0.25 * scale)
+        index = int(np.argmax(np.diag(rotation)))
+        if index == 0:
+            scale = 2.0 * np.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2])
+            return (0.25 * scale, (rotation[0, 1] + rotation[1, 0]) / scale,
+                    (rotation[0, 2] + rotation[2, 0]) / scale,
+                    (rotation[2, 1] - rotation[1, 2]) / scale)
+        if index == 1:
+            scale = 2.0 * np.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2])
+            return ((rotation[0, 1] + rotation[1, 0]) / scale, 0.25 * scale,
+                    (rotation[1, 2] + rotation[2, 1]) / scale,
+                    (rotation[0, 2] - rotation[2, 0]) / scale)
+        scale = 2.0 * np.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1])
+        return ((rotation[0, 2] + rotation[2, 0]) / scale,
+                (rotation[1, 2] + rotation[2, 1]) / scale, 0.25 * scale,
+                (rotation[1, 0] - rotation[0, 1]) / scale)
+
+    def _odom_in_model_frame(self, odom: Odometry, anchor: PlanningAnchor | None) -> Odometry:
+        """Express pose, attitude, and velocity in the fixed model frame."""
+        if anchor is None:
+            return odom
+        result = copy.deepcopy(odom)
+        pose = result.pose.pose
+        source_rotation = self._quat_to_rot(pose.orientation.x, pose.orientation.y,
+                                            pose.orientation.z, pose.orientation.w)
+        position = self._point_to_model_frame(
+            np.array((pose.position.x, pose.position.y, pose.position.z), dtype=np.float64),
+            odom, anchor)
+        pose.position.x, pose.position.y, pose.position.z = position
+        pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = self._rot_to_quat(
+            anchor.rotation.T @ source_rotation)
+        linear = anchor.rotation.T @ np.array((result.twist.twist.linear.x,
+                                                result.twist.twist.linear.y,
+                                                result.twist.twist.linear.z))
+        angular = anchor.rotation.T @ np.array((result.twist.twist.angular.x,
+                                                 result.twist.twist.angular.y,
+                                                 result.twist.twist.angular.z))
+        result.twist.twist.linear.x, result.twist.twist.linear.y, result.twist.twist.linear.z = linear
+        result.twist.twist.angular.x, result.twist.twist.angular.y, result.twist.twist.angular.z = angular
+        result.header.frame_id = self._planning_frame_id
+        return result
+
+    def _imu_in_model_frame(self, imu: Imu, anchor: PlanningAnchor | None) -> Imu:
+        if anchor is None:
+            return imu
+        result = copy.deepcopy(imu)
+        q = result.orientation
+        source_rotation = self._quat_to_rot(q.x, q.y, q.z, q.w)
+        q.x, q.y, q.z, q.w = self._rot_to_quat(anchor.rotation.T @ source_rotation)
+        for vector in (result.angular_velocity, result.linear_acceleration):
+            values = anchor.rotation.T @ np.array((vector.x, vector.y, vector.z))
+            vector.x, vector.y, vector.z = values
+        return result
+
+    def _goal_in_odom_frame(self, goal: Goal, odom: Odometry) -> np.ndarray:
+        """Transform a waypoint from its stamped frame into the odometry frame."""
+        source_frame = goal.frame_id or odom.header.frame_id
+        target_frame = odom.header.frame_id
+        if not target_frame:
+            raise ValueError("Observation odometry has no frame")
+        point = np.array((goal.x, goal.y, goal.z), dtype=np.float64)
+        if source_frame == target_frame:
+            return point
         try:
-            rgb, depth, odom, imu = latest
-            plan = self._plan_from_observation(rgb, depth, odom, imu, goal)
-            self._publish_plan(plan)
-
-            result.success = True
-            result.message = "Plan generated."
-            result.selected_planner_mode = int(request.planner_mode)
-            result.selected_planner_name = "world_model"
-            result.trajectories = self._plan_to_trajectory_array(plan)
-            result.confidence = float(plan.confidence)
-            result.selected_cost = float(plan.cost)
-            result.planning_time = self._seconds_to_duration_msg(time.monotonic() - start_time)
-            result.used_cached_result = False
-            result.candidate_planner_names = ["world_model"]
-            result.candidate_success = [True]
-            result.candidate_costs = [float(plan.cost)]
-            result.candidate_confidence = [float(plan.confidence)]
-            result.candidate_messages = ["accepted"]
-
-            self._publish_mrp_feedback(goal_handle, PlannerState.PLANNING, "world_model", 1.0, "Plan generated.")
-            goal_handle.succeed()
-            return result
+            stamp = Time.from_msg(goal.stamp) if goal.stamp is not None else Time()
+            transform = self._tf_buffer.lookup_transform(target_frame, source_frame, stamp)
         except Exception as exc:
-            self._fill_mrp_failure(result, request, selected_name, f"World-model planning failed: {exc}", start_time)
-            goal_handle.abort()
-            return result
+            raise ValueError(
+                f"Unable to transform waypoint from {source_frame!r} to {target_frame!r}: {exc}"
+            ) from exc
+        translation = transform.transform.translation
+        rotation = transform.transform.rotation
+        matrix = self._quat_to_rot(rotation.x, rotation.y, rotation.z, rotation.w)
+        return matrix @ point + np.array((translation.x, translation.y, translation.z))
 
-    def _resolve_requested_planner(self, request: Any) -> str:
-        planner_name = str(request.planner_name).strip().lower()
-        allowed = {str(name).strip().lower() for name in request.allowed_planners if str(name).strip()}
+    def _plan_latent_from_observation(
+            self, rgb: Image, depth: Image | None, odom: Odometry, imu: Imu,
+            goal: Goal | None, *, output_in_odom: bool = False,
+            should_cancel: Callable[[], bool] | None = None,
+        ) -> PlanComputation:
+        with self._goal_obs_lock:
+            goal_obs = self._goal_obs
+        if goal_obs is None:
+            raise ValueError("Latent planning requires ~/capture_goal or ~/goal_image")
+        if not odom.header.frame_id or goal_obs.odom.header.frame_id != odom.header.frame_id:
+            raise ValueError("Goal observation and current odometry must share a frame")
+        anchor = self._model_anchor(odom)
+        current_global = np.array((odom.pose.pose.position.x, odom.pose.pose.position.y,
+                                   odom.pose.pose.position.z), dtype=np.float64)
+        current = self._point_to_model_frame(current_global, odom, anchor)
+        captured = goal_obs.odom.pose.pose.position
+        goal_global = (self._goal_in_odom_frame(goal, odom) if goal is not None else
+                       np.array((captured.x, captured.y, captured.z), dtype=np.float64))
+        goal_xyz = self._point_to_model_frame(goal_global, odom, anchor)
 
-        if not planner_name:
-            if request.planner_mode == MRPPlan.Goal.PLANNER_EASL:
-                planner_name = "easl"
-            elif request.planner_mode == MRPPlan.Goal.PLANNER_WORLD_MODEL:
-                planner_name = "world_model"
-            elif request.planner_mode == MRPPlan.Goal.PLANNER_HYBRID:
-                planner_name = "hybrid"
+        odom_model = self._odom_in_model_frame(odom, anchor)
+        imu_model = self._imu_in_model_frame(imu, anchor)
+        goal_odom_model = self._odom_in_model_frame(goal_obs.odom, anchor)
+        goal_imu_model = self._imu_in_model_frame(goal_obs.imu, anchor)
+        with torch.no_grad():
+            rgb_t = self._image_to_tensor(rgb, 3)
+            depth_t = (self._image_to_tensor(depth, 1) if depth is not None and
+                       self._depth_mode == "sensor" else
+                       torch.zeros(1, 1, self._img_h, self._img_w, device=self._device))
+            odom_t = self._odom_to_tensor(odom_model, origin=np.zeros(3, dtype=np.float64))
+            imu_t = self._imu_to_tensor(imu_model)
+            goal_rgb = self._image_to_tensor(goal_obs.rgb, 3)
+            goal_depth = (self._image_to_tensor(goal_obs.depth, 1) if goal_obs.depth is not None and
+                          self._depth_mode == "sensor" else
+                          torch.zeros_like(depth_t))
+            goal_orientation = goal.orientation if goal is not None else None
+            goal_odom = self._odom_to_tensor(
+                goal_odom_model, origin=np.zeros(3, dtype=np.float64),
+                position_override=goal_xyz, orientation_override=goal_orientation)
+            goal_imu = self._imu_to_tensor(
+                goal_imu_model, orientation_override=goal_orientation)
+            z0 = self._model.encode(rgb_t, depth_t, odom_t, imu_t).z
+            z_goal = self._model.encode(goal_rgb, goal_depth, goal_odom, goal_imu).z
+            _, best_seq, cost = cem_plan_latent_target(
+                self._model, z0, z_goal, self._cem_cfg, self._device,
+                cost_cfg=self._latent_cost_cfg, should_cancel=should_cancel)
+            z_roll = self._model.rollout(z0, best_seq.unsqueeze(0))
+            actions = best_seq.cpu().numpy()
+            if self._trajectory_source == "actions":
+                positions = positions_from_actions(actions, self._action_position_dims, current)
             else:
-                planner_name = "auto"
-
-        if planner_name == "auto":
-            planner_name = "world_model"
-
-        if allowed and planner_name not in allowed:
-            if "world_model" in allowed:
-                return "world_model"
-            return sorted(allowed)[0]
-
-        return planner_name
-
-    def _publish_mrp_feedback(
-            self,
-            goal_handle: Any,
-            state: int,
-            planner_name: str,
-            progress: float,
-            message: str
-        ) -> None:
-        feedback = MRPPlan.Feedback()
-        feedback.state.planner = "wm_planner_ros"
-        feedback.state.state = int(state)
-        feedback.state.verbose_state = message
-        feedback.active_planner_name = planner_name
-        feedback.progress = float(progress)
-        feedback.message = message
-        goal_handle.publish_feedback(feedback)
-
-    def _fill_mrp_failure(
-            self,
-            result: Any,
-            request: Any,
-            selected_name: str,
-            message: str,
-            start_time: float
-        ) -> None:
-        result.success = False
-        result.message = message
-        result.selected_planner_mode = int(request.planner_mode)
-        result.selected_planner_name = selected_name
-        result.trajectories = TrajectoryArray()
-        result.confidence = 0.0
-        result.selected_cost = float("inf")
-        result.planning_time = self._seconds_to_duration_msg(time.monotonic() - start_time)
-        result.used_cached_result = False
-        result.candidate_planner_names = [selected_name]
-        result.candidate_success = [False]
-        result.candidate_costs = [float("inf")]
-        result.candidate_confidence = [0.0]
-        result.candidate_messages = [message]
-
-    def _goal_from_mrp_problem(self, problem: Any) -> Goal:
-        pose = problem.goal.region_center.pose
-        return Goal(
-            x=float(pose.position.x),
-            y=float(pose.position.y),
-            z=float(pose.position.z),
-        )
+                state_t0 = self._model.state_head(z0)[0]
+                decoded = self._model.state_head(z_roll).squeeze(0)
+                positions = (decoded[:, :3] - state_t0[:3]).cpu().numpy()
+                if self._norm_stats is not None:
+                    positions *= self._norm_stats.odom_std[:3].numpy()
+                positions = positions + current[np.newaxis, :]
+            positions_global = np.array([self._point_from_model_frame(p, anchor) for p in positions])
+            risk_roll = (self._model.risk_head(z_roll).squeeze(0).squeeze(-1).cpu().numpy()
+                         if self._risk_head_trained else np.zeros(z_roll.shape[1]))
+            terminal = float(torch.linalg.norm(z_roll[0, -1] - z_goal[0]))
+            path = float(torch.linalg.norm(z_roll[0, 1:] - z_goal, dim=-1).mean())
+            now = float(torch.linalg.norm(z0[0] - z_goal[0]))
+        if not np.isfinite(positions).all():
+            raise ValueError("Nonfinite latent planner trajectory")
+        output = positions.copy()
+        frame = odom.header.frame_id
+        if self._publish_frame == "body" and not output_in_odom:
+            q = odom.pose.pose.orientation
+            rotation = self._quat_to_rot(q.x, q.y, q.z, q.w)
+            output = (rotation.T @ (positions_global - current_global[np.newaxis, :]).T).T
+            frame = "body"
+        if self._publish_frame != "body" or output_in_odom:
+            output = positions_global
+        debug = {"latent_terminal_dist": terminal, "latent_path_dist": path,
+                 "latent_dist_now": now, "best_cost": float(cost),
+                 "goal_reached": float(now <= self._latent_success_threshold),
+                 "traj_end_goal_dist": float(np.linalg.norm(positions[-1] - goal_xyz))}
+        return PlanComputation(frame, odom.header.stamp, output.astype(np.float32),
+                               positions_global.astype(np.float32), risk_roll,
+                               Goal(*goal_global), float(cost),
+                               1.0 / (1.0 + max(terminal, 0.0)), actions, debug)
 
     def _plan_from_observation(
             self,
@@ -526,48 +824,81 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             depth: Image,
             odom: Odometry,
             imu: Imu,
-            goal: Goal
+            goal: Goal | None,
+            *,
+            output_in_odom: bool = False,
+            should_cancel: Callable[[], bool] | None = None,
         ) -> PlanComputation:
+        if self._planner_mode == "latent":
+            return self._plan_latent_from_observation(
+                rgb, depth, odom, imu, goal, output_in_odom=output_in_odom,
+                should_cancel=should_cancel)
+        if goal is None:
+            goal = self._default_goal
+        anchor = self._model_anchor(odom)
+        odom_model = self._odom_in_model_frame(odom, anchor)
+        imu_model = self._imu_in_model_frame(imu, anchor)
+        current_model = np.array((odom_model.pose.pose.position.x, odom_model.pose.pose.position.y,
+                                  odom_model.pose.pose.position.z), dtype=np.float64)
+        goal_model = self._point_to_model_frame(self._goal_in_odom_frame(goal, odom), odom, anchor)
         rgb_t = self._image_to_tensor(rgb, channels=3)
-        depth_t = self._image_to_tensor(depth, channels=1)
-        odom_t = self._odom_to_tensor(odom)
-        imu_t = self._imu_to_tensor(imu)
+        depth_t = (self._image_to_tensor(depth, channels=1) if depth is not None else
+                   torch.zeros(1, 1, self._img_h, self._img_w, device=self._device))
+        odom_t = self._odom_to_tensor(
+            odom_model,
+            origin=np.zeros(3, dtype=np.float64) if anchor is not None else None,
+        )
+        imu_t = self._imu_to_tensor(imu_model)
+        for name, tensor in (("RGB", rgb_t), ("depth", depth_t),
+                             ("odometry", odom_t), ("IMU", imu_t)):
+            if not torch.isfinite(tensor).all().item():
+                raise ValueError(f"Nonfinite {name} observation on the WM bridge")
 
         with torch.no_grad():
             wm_out = self._model.encode(rgb_t, depth_t, odom_t, imu_t)
             z0 = wm_out.z
+            if not torch.isfinite(z0).all().item():
+                raise ValueError("Nonfinite initial world-model latent from finite observations")
 
-            cur_x = float(odom.pose.pose.position.x)
-            cur_y = float(odom.pose.pose.position.y)
-            cur_z = float(odom.pose.pose.position.z)
+            relative_goal = goal_model - current_model
             if self._norm_stats is not None:
                 ns = self._norm_stats
-                gx = (goal.x - cur_x) / float(ns.odom_std[0])
-                gy = (goal.y - cur_y) / float(ns.odom_std[1])
-                gz = (goal.z - cur_z) / float(ns.odom_std[2])
+                gx = relative_goal[0] / float(ns.odom_std[0])
+                gy = relative_goal[1] / float(ns.odom_std[1])
+                gz = relative_goal[2] / float(ns.odom_std[2])
             else:
-                gx, gy, gz = goal.x - cur_x, goal.y - cur_y, goal.z - cur_z
+                gx, gy, gz = relative_goal
             goal_t = torch.tensor([[gx, gy, gz]], dtype=torch.float32, device=self._device)
 
             true_t0_norm = odom_t[0, :self._state_dim]
             decoded_t0 = self._model.state_head(z0)[0]
             anchor_norm = (decoded_t0 - true_t0_norm).cpu()
 
-            _, best_seq = cem_plan(
-                model=self._model,
-                z0=z0,
-                goal=goal_t,
-                cost_fn=self._cost_fn,
-                cfg=self._cem_cfg,
-                device=self._device,
-            )
+            if self._risk_head_trained:
+                _, best_seq = cem_plan(
+                    model=self._model, z0=z0, goal=goal_t,
+                    cost_fn=self._cost_fn, cfg=self._cem_cfg,
+                    device=self._device, should_cancel=should_cancel)
+            else:
+                _, best_seq, _ = cem_plan_with_cost(
+                    model=self._model, z0=z0, goal=goal_t,
+                    cost_fn=self._cost_fn, cfg=self._cem_cfg,
+                    device=self._device, use_risk_head=False,
+                    should_cancel=should_cancel)
             z_roll = self._model.rollout(z0, best_seq.unsqueeze(0))
+            if not torch.isfinite(z_roll).all().item():
+                raise ValueError("Nonfinite world-model latent during planned rollout")
             state_roll = self._model.state_head(z_roll).squeeze(0).cpu().numpy()
             state_roll = state_roll - anchor_norm.numpy()[np.newaxis, :]
-            risk_roll = self._model.risk_head(z_roll).squeeze(0).squeeze(-1).cpu().numpy()
+            if not np.isfinite(state_roll).all():
+                raise ValueError("Nonfinite decoded world-model state during planned rollout")
+            risk_roll = (self._model.risk_head(z_roll).squeeze(0).squeeze(-1).cpu().numpy()
+                         if self._risk_head_trained else np.zeros(z_roll.shape[1]))
 
-        in_frame = (odom.header.frame_id or "map")
-        in_frame_norm = str(in_frame).lower()
+        in_frame = odom.header.frame_id
+        if not in_frame:
+            raise ValueError("Observation odometry has no frame")
+        in_frame_norm = str(in_frame)
 
         if self._norm_stats is not None:
             ns = self._norm_stats
@@ -576,10 +907,20 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             state_roll = state_roll.copy()
             state_roll[:, :3] = state_roll[:, :3] * pos_std + pos_mean
 
+        # State-head positions are in the fixed model frame. Convert them back
+        # to the odometry/map frame only at the ROS boundary. Map mode retains
+        # the legacy translation-only window normalization.
+        state_roll = state_roll.copy()
+        if anchor is None:
+            state_roll[:, :3] += np.asarray(self._odom_origin or (0.0, 0.0, 0.0))
+        else:
+            state_roll[:, :3] = np.array([
+                self._point_from_model_frame(point, anchor) for point in state_roll[:, :3]
+            ])
         state_to_pub = state_roll.copy()
         out_frame = in_frame_norm
 
-        if self._publish_frame == "body":
+        if self._publish_frame == "body" and not output_in_odom:
             out_frame = self._publish_frame
             qx = odom.pose.pose.orientation.x
             qy = odom.pose.pose.orientation.y
@@ -588,15 +929,15 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             rotation = self._quat_to_rot(qx, qy, qz, qw)
 
             cur_pos = np.array([
-                odom.pose.pose.position.x - (self._odom_origin[0] if self._odom_origin else 0.0),
-                odom.pose.pose.position.y - (self._odom_origin[1] if self._odom_origin else 0.0),
-                odom.pose.pose.position.z - (self._odom_origin[2] if self._odom_origin else 0.0),
+                odom.pose.pose.position.x,
+                odom.pose.pose.position.y,
+                odom.pose.pose.position.z,
             ], dtype=np.float32)
             state_to_pub = state_roll.copy()
             state_to_pub[:, :3] = (rotation.T @ (state_roll[:, :3] - cur_pos[np.newaxis, :]).T).T
 
         final_xyz = state_roll[-1, :3]
-        goal_xyz = np.array([goal.x, goal.y, goal.z], dtype=np.float32)
+        goal_xyz = self._goal_in_odom_frame(goal, odom).astype(np.float32)
         goal_distance = float(np.linalg.norm(final_xyz - goal_xyz))
         risk_mean = float(np.mean(risk_roll))
         cost = self._goal_weight * goal_distance + self._risk_weight * risk_mean
@@ -634,7 +975,18 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
     def _publish_plan(self, plan: PlanComputation) -> None:
         self._publish_path(plan.frame_id, plan.stamp, plan.trajectory_states)
         self._publish_markers(plan.frame_id, plan.stamp, plan.trajectory_states, plan.risk_roll)
-        self._publish_debug(plan.goal, plan.debug_states, plan.risk_roll)
+        if plan.debug is None:
+            self._publish_debug(plan.goal, plan.debug_states, plan.risk_roll)
+        else:
+            metrics = Float32MultiArray()
+            metrics.data = [float(plan.debug[key]) for key in (
+                "latent_terminal_dist", "latent_path_dist", "latent_dist_now",
+                "best_cost", "goal_reached", "traj_end_goal_dist")]
+            self._debug_pub.publish(metrics)
+        if plan.actions is not None:
+            actions_msg = Float32MultiArray()
+            actions_msg.data = plan.actions.reshape(-1).astype(float).tolist()
+            self._actions_pub.publish(actions_msg)
 
         if TrajectoryArray is not None:
             trajectory_array = self._plan_to_trajectory_array(plan)
@@ -668,26 +1020,12 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
         trajectory_array.trajectories.append(trajectory)
         return trajectory_array
 
-    @staticmethod
-    def _seconds_to_duration_msg(seconds: float) -> DurationMsg:
-        seconds = max(float(seconds), 0.0)
-        sec = int(seconds)
-        nanosec = int((seconds - sec) * 1e9)
-        return DurationMsg(sec=sec, nanosec=nanosec)
-
     def _cost_fn(self,
                  state_seq: torch.Tensor,
                  risk_seq: torch.Tensor,
                  goal: torch.Tensor
         ) -> torch.Tensor:
-        # delta state cost: minimize ‖(state_T - state_0)1 desired_change‖.
-        # Taking the difference cancels any constant decoder bias so CEM plans
-        # to the right relative position regardless of state_head offset.
-        # state_seq: (N, H+1, state_dim)
-        change    = state_seq[:, -1, :3] - state_seq[:, 0, :3]   # (N, 3)
-        goal_dist = torch.linalg.norm(change - goal[:, :3], dim=1)
-        risk_cost = risk_seq.mean(dim=1)
-        return self._goal_weight * goal_dist + self._risk_weight * risk_cost
+        return state_trajectory_cost(state_seq, risk_seq, goal, self._state_cost_cfg)
 
     def _publish_path(self, frame_id: str, stamp: Any, state_roll: np.ndarray) -> None:
         msg = Path()
@@ -778,16 +1116,32 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             arr = arr[:, :, :channels]
         if channels == 1:
             arr = arr.astype(np.float32)
-            if arr.max() > 100.0:
+            # ROS integer depth images use millimeters; 32FC1 uses meters.
+            if encoding in {"16uc1", "mono16"}:
                 arr = arr / 1000.0
+            invalid = ~np.isfinite(arr)
+            if invalid.any():
+                if not self._warned_invalid_depth:
+                    self.get_logger().warning(
+                        f"Depth image contains {int(invalid.sum())}/{arr.size} "
+                        f"({100.0 * invalid.mean():.1f}%) nonfinite pixels; "
+                        f"replacing them with invalid_depth_fill={self._invalid_depth_fill}"
+                    )
+                    self._warned_invalid_depth = True
+                arr[invalid] = self._invalid_depth_fill
         else:
             arr = arr.astype(np.float32) / 255.0
         arr = np.transpose(arr, (2, 0, 1))
         ten = torch.from_numpy(arr).unsqueeze(0)
+        resize_kwargs = (
+            {"align_corners": False, "antialias": True}
+            if channels == 3 and self._planner_mode == "latent" else {}
+        )
         ten = torch.nn.functional.interpolate(
             ten,
             size=(self._img_h, self._img_w),
             mode="bilinear" if channels == 3 else "nearest",
+            **resize_kwargs,
         ).to(self._device)
         # Pretrained ViT backbones (DINOv2, V-JEPA2) require ImageNet normalization.
         # The CNN backbone learns its own normalization, so skip for it.
@@ -797,21 +1151,30 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             ten = (ten - mean) / std
         return ten
 
-    def _odom_to_tensor(self, msg: Odometry) -> torch.Tensor:
+    def _odom_to_tensor(self, msg: Odometry, *, origin: np.ndarray | None = None,
+                        position_override: np.ndarray | None = None,
+                        orientation_override: tuple[float, float, float, float] | None = None
+                        ) -> torch.Tensor:
         px = msg.pose.pose.position.x
         py = msg.pose.pose.position.y
         pz = msg.pose.pose.position.z
-        if self._odom_origin is None:
-            self._odom_origin = (px, py, pz)
-        ox, oy, oz = self._odom_origin
+        if not np.isfinite((px, py, pz)).all():
+            raise ValueError("Nonfinite odometry position on the WM bridge")
+        if origin is None:
+            if self._odom_origin is None:
+                self._odom_origin = (px, py, pz)
+            origin = np.asarray(self._odom_origin, dtype=np.float64)
+        if position_override is not None:
+            px, py, pz = position_override
+        ox, oy, oz = origin
+        q = orientation_override or (
+            msg.pose.pose.orientation.x, msg.pose.pose.orientation.y,
+            msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
         vals = [
             px - ox,
             py - oy,
             pz - oz,
-            msg.pose.pose.orientation.x,
-            msg.pose.pose.orientation.y,
-            msg.pose.pose.orientation.z,
-            msg.pose.pose.orientation.w,
+            *q,
             msg.twist.twist.linear.x,
             msg.twist.twist.linear.y,
             msg.twist.twist.linear.z,
@@ -825,19 +1188,19 @@ class PlannerBridgeNode(BufferedPlannerBridgeNode):
             t = self._norm_stats.normalize_odom(t)
         return t
 
-    def _imu_to_tensor(self, msg: Imu) -> torch.Tensor:
-        vals = [
-            msg.angular_velocity.x,
-            msg.angular_velocity.y,
-            msg.angular_velocity.z,
-            msg.linear_acceleration.x,
-            msg.linear_acceleration.y,
-            msg.linear_acceleration.z,
-            msg.orientation.x,
-            msg.orientation.y,
-            msg.orientation.z,
-            msg.orientation.w,
-        ]
+    def _imu_to_tensor(self, msg: Imu, *,
+                       orientation_override: tuple[float, float, float, float] | None = None
+                       ) -> torch.Tensor:
+        q = msg.orientation
+        orientation = orientation_override or (q.x, q.y, q.z, q.w)
+        angular = msg.angular_velocity
+        linear = msg.linear_acceleration
+        if self._imu_layout == "dataset":
+            vals = [*orientation, angular.x, angular.y, angular.z,
+                    linear.x, linear.y, linear.z]
+        else:
+            vals = [angular.x, angular.y, angular.z, linear.x, linear.y,
+                    linear.z, *orientation]
         vals = vals[: self._imu_dim]
         t = torch.tensor([vals], dtype=torch.float32, device=self._device)
         if self._norm_stats is not None:
@@ -849,9 +1212,12 @@ def main(args: list[str] | None = None) -> None:
     """ROS 2 node entry point."""
     rclpy.init(args=args)
     node = PlannerBridgeNode()
+    executor = rclpy.executors.MultiThreadedExecutor(num_threads=3)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 

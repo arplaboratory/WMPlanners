@@ -62,21 +62,37 @@ python scripts/world_model/train_wm.py --method wm \
   --horizon 8 --img_size 224 --out_dir runs/jepa_lite_c1_512
 ```
 
-The same objective accepts the DINOv2 backbone using `--backbone dinov2 --backbone_name dinov2_vitb14 --freeze_backbone`. A trained JEPA-lite checkpoint can be given to the state-decoder and replay MPC scripts:
+The same objective accepts the DINOv2 backbone using `--backbone dinov2 --backbone_name dinov2_vitb14 --freeze_backbone`. The state-head trainer supports `--latent_source observed` (decode encoded sensor frames) and `--latent_source rollout` (decode predicted states used by MPC). A two-stage run initializes from observed frames, then fine-tunes on predicted rollouts:
 
 ```bash
 python scripts/world_model/train_state_head_decoder.py \
   --checkpoint runs/jepa_lite_c1_512/latest.pt \
-  --dataset lquan9/collect1 --epochs 5 --batch_size 16 --lr 1e-3
+  --dataset /path/to/matching/dataset --dataset_type hf \
+  --heads state --latent_source observed --epochs 5 --batch_size 8
 
-python scripts/world_model/eval_mpc_replay.py \
-  --checkpoint runs/jepa_lite_c1_512/latest_with_state_head.pt \
-  --dataset lquan9/collect1_unfiltered --horizon 16 --num_episodes 50
-
-python scripts/world_model/eval_mpc_recovery_replay.py \
-  --checkpoint runs/jepa_lite_c1_512/latest_with_state_head.pt \
-  --dataset lquan9/collect1_unfiltered --horizon 16 --num_episodes 10
+python scripts/world_model/train_state_head_decoder.py \
+  --checkpoint runs/jepa_lite_c1_512/latest_with_observed_heads.pt \
+  --dataset /path/to/matching/dataset --dataset_type hf \
+  --heads state --latent_source rollout --epochs 10 --batch_size 8
 ```
+
+Each stage reports both observed and rollout validation position RMSE; select a planner checkpoint by held-out rollout error and planning performance. You can run `rollout` directly from `latest.pt` if you do not need the observed-latent probe. The dataset must match the checkpoint's odometry, IMU, action dimensions and action convention. The trainer loads `norm_stats.pt` beside the input checkpoint when present, or accepts `--norm_stats_path`; it does not create new statistics. For a state-only head, set the ROS planner's `risk_weight` to zero. Use `--heads both` only with valid collision and non-collision labels.
+
+For long rollouts, train the dynamics at the deployment horizon before fitting
+the rollout head. A staged curriculum can resume the same run at increasing
+`--horizon` values. `--epochs` is the cumulative final epoch, not the number of
+additional epochs, so a four-stage run can use horizons `8, 16, 24, 36` with
+epoch limits `10, 20, 30, 45`. Checkpoints include and restore the frozen EMA
+target model; legacy checkpoints without it initialize the target from the
+online model and print a warning. Do not fit a head beyond the checkpoint's
+`trained_horizon`; the head trainer rejects that mismatch.
+
+Standard training writes `action_bounds.pt` from the transformed training
+samples by default. Disable this only when bounds are supplied separately with
+`--no-save_action_bounds`. The model checkpoint records a `training_contract`
+containing the trained rollout horizon, history length, and dataset action
+semantics. Head training verifies this action contract against its dataset and
+preserves it in the output checkpoint.
 
 ---
 
@@ -126,6 +142,8 @@ python scripts/world_model/eval_mpc.py --ckpt runs/cnn/latest.pt --episodes 20
 | `--epochs` | Training epochs | `20` for standard training |
 | `--out_dir` | Checkpoint and run directory | `runs` |
 | `--save_every` | Standard numbered checkpoint interval | `10` |
+| `--save_action_bounds` | Write transformed per-dimension action statistics for CEM. | on |
+| `--resume` | Restore model, optimizer, epoch, and EMA target state. | automatic `out_dir/latest.pt` |
 | `--save_every_x_epoch` | DinoWM checkpoint interval | `1` |
 
 **Read next**

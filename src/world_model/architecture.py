@@ -56,7 +56,10 @@ class WorldModel(nn.Module):
         bkw = backbone_kwargs or {}
         if backbone is None or backbone == "cnn":
             in_ch = bkw.get("in_ch", 4)
-            self.vision: nn.Module = VisionEncoder(in_ch=in_ch, z_dim=z_vis_dim, image_size=image_size)
+            self.vision: nn.Module = VisionEncoder(
+                in_ch=in_ch, z_dim=z_vis_dim, image_size=image_size,
+                pool_features=bkw.get("pool_features", False),
+            )
             self._vis_dim = z_vis_dim
             self._vis_in_ch = in_ch
         else:

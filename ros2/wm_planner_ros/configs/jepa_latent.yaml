@@ -1,0 +1,20 @@
+# Latent MPC for a JEPA-lite checkpoint trained on HFWindowDataset position_cmd data.
+# Supply checkpoint_path and sensor topics through the launch file or ROS overrides.
+/**:
+  ros__parameters:
+    wm_mode: jepa-lite
+    planner_mode: latent
+    trajectory_source: actions
+    action_position_dims: [0, 1, 2]
+    depth_mode: zeros
+    imu_layout: dataset
+    norm_stats_mode: "off"
+    plan_horizon: 0             # use the checkpoint's training horizon
+    plan_iters: 5
+    plan_population: 128
+    plan_elites: 16
+    cem_alpha: 0.25
+    latent_terminal_weight: 1.0
+    latent_path_weight: 0.1
+    latent_success_threshold: 5.0
+    risk_weight: 0.0

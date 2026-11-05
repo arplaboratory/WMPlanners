@@ -1,0 +1,16 @@
+version: 1
+name: warthog1
+
+topics:
+  color: /warthog1/sensors/multisense_front/aux/image_rect_color
+  imu: /warthog1/sensors/ouster/imu
+  odom: /warthog1/odometry/local
+
+sensors:
+  color_encoding: compressed
+  imu_dim: 10
+  odom_dim: 13
+
+action:
+  source: odom
+  dim: 13
