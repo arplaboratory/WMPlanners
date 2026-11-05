@@ -56,6 +56,39 @@ def validate_schema(value: Any, schema: dict | None = None, path: str = "config"
         raise ConfigError(f"{path} must be at least {schema['minimum']}")
 
 
+def render_table(section: dict[str, Any]) -> str:
+    table = required(section, "table", "sections[]")
+    groups = []
+    for group in table.get("groups", []):
+        span = int(group.get("span", 1))
+        attrs = f' colspan="{span}"' if span > 1 else ""
+        groups.append(f"<th{attrs}>{esc(group['label'])}</th>")
+    columns = "".join(f"<th>{esc(label)}</th>" for label in table.get("columns", []))
+    body_rows = []
+    for row in table.get("rows", []):
+        cells = []
+        for cell in row:
+            text = esc(cell.get("text", ""))
+            if cell.get("best"):
+                text = f"<strong>{text}</strong>"
+            cells.append(f"<td>{text}</td>")
+        body_rows.append(f"<tr>{''.join(cells)}</tr>")
+    caption = table.get("caption", "")
+    caption_html = f"<figcaption>{esc(caption)}</figcaption>" if caption else ""
+    note = table.get("note", "")
+    note_html = f'<p class="table-note">{esc(note)}</p>' if note else ""
+    prose = "".join(f"<p>{esc(paragraph)}</p>" for paragraph in section.get("paragraphs", []))
+    body = (
+        f'<div class="content">{prose}'
+        '<figure class="results-table">'
+        f"{caption_html}"
+        '<div class="table-scroll"><table>'
+        f"<thead><tr>{''.join(groups)}</tr><tr>{columns}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        f"</table></div>{note_html}</figure></div>"
+    )
+    return section_shell(section, body)
+
 def expand_variables(config: dict[str, Any]) -> dict[str, Any]:
     """Expand {{site.field}} references, detecting typos and reference cycles."""
     pattern = re.compile(r"\{\{site\.([a-z_]+)\}\}")
@@ -154,20 +187,24 @@ def placeholder(label: str) -> str:
     )
 
 
-def render_media(media: dict[str, Any], *, eager: bool = False) -> str:
+def render_media(media: dict[str, Any], *, eager: bool = False, synced: bool = False) -> str:
     kind = media.get("type", "image")
     src = media.get("src", "")
     if not src:
         return placeholder(f"{kind.title()} asset coming soon")
     if kind == "image":
-        loading = "eager" if eager else "lazy"
+        loading = "eager" if eager or synced else "lazy"
         return f'<img src="{esc(src)}" alt="{esc(media.get("alt", ""))}" loading="{loading}">'
     if kind == "video":
-        controls = " controls" if media.get("controls", False) else ""
+        controls = " controls" if media.get("controls", synced) else ""
         poster = f' poster="{esc(media["poster"])}"' if media.get("poster") else ""
         mime = {".webm": "video/webm", ".ogv": "video/ogg"}.get(Path(urlsplit(src).path).suffix, "video/mp4")
+        # Synced clips share one timeline in the page script. Native loop would
+        # restart a shorter clip while the others are still playing.
+        loop = "" if synced else " loop"
+        preload = ' preload="auto"' if synced else ""
         return (
-            f'<video autoplay muted loop playsinline{controls}{poster} '
+            f'<video autoplay muted playsinline{loop}{preload}{controls}{poster} '
             f'aria-label="{esc(media.get("alt", "Video"))}">'
             f'<source src="{esc(src)}" type="{esc(media.get("mime", mime))}">'
             "Your browser does not support HTML video.</video>"
@@ -206,19 +243,52 @@ def render_teaser(section: dict[str, Any]) -> str:
 </section>"""
 
 
+def relative_href(url: str, context: str) -> str:
+    """Keep documentation links relative so GitHub Pages resolves them from the site root."""
+    parts = urlsplit(url)
+    if not url or parts.scheme or parts.netloc or url.startswith(("/", "\\")):
+        raise ConfigError(f"{context} must be a relative path, not an absolute URL")
+    return esc(url)
+
+
+def render_steps(steps: list[dict[str, Any]]) -> str:
+    items: list[str] = []
+    for index, step in enumerate(steps):
+        title = esc(required(step, "title", f"steps[{index}]"))
+        link = step.get("link") or {}
+        if link.get("url"):
+            href = relative_href(link["url"], f"steps[{index}].link.url")
+            title = f'<a href="{href}">{title}</a>'
+        text = step.get("text", "")
+        text_html = f"<p>{esc(text)}</p>" if text else ""
+        items.append(f"<li><h3>{title}</h3>{text_html}</li>")
+    return f'<ol class="workflow-steps">{"".join(items)}</ol>'
+
+
 def render_content(section: dict[str, Any]) -> str:
     align = "has-text-justified" if section.get("align") == "justified" else ""
-    body = "".join(f"<p>{esc(paragraph)}</p>" for paragraph in section.get("paragraphs", []))
-    return section_shell(section, f'<div class="content {align}">{body or placeholder("Content coming soon")}</div>')
+    paragraphs = "".join(f"<p>{esc(paragraph)}</p>" for paragraph in section.get("paragraphs", []))
+    prose = f'<div class="content {align}">{paragraphs}</div>' if paragraphs else ""
+    steps = render_steps(section["steps"]) if section.get("steps") else ""
+    return section_shell(section, f"{prose}{steps}" or placeholder("Content coming soon"))
 
 
 def render_media_section(section: dict[str, Any]) -> str:
+    layout = section.get("layout", "default")
+    synced = layout == "synced-stack"
     cards: list[str] = []
     for item in section.get("items", []):
         caption = item.get("caption", "")
         caption_html = f"<figcaption>{esc(caption)}</figcaption>" if caption else ""
-        cards.append(f'<figure class="media-card">{render_media(item)}{caption_html}</figure>')
-    body = f'<div class="media-grid">{"".join(cards)}</div>' if cards else placeholder("Media coming soon")
+        cards.append(
+            f'<figure class="media-card">{render_media(item, synced=synced)}{caption_html}</figure>'
+        )
+    body = (
+        f'<div class="media-grid media-grid--{esc(layout)}"'
+        f'{" data-sync-gifs" if synced else ""}>{"".join(cards)}</div>'
+        if cards
+        else placeholder("Media coming soon")
+    )
     return section_shell(section, body)
 
 
@@ -251,6 +321,59 @@ def render_interactive(section: dict[str, Any]) -> str:
     return section_shell(section, body, "interactive-section")
 
 
+def render_table(section: dict[str, Any]) -> str:
+    """Render a table whose headers may span several subcolumns."""
+    table = required(section, "table", "sections[]")
+    headers = table.get("headers", [])
+    if not headers:
+        raise ConfigError("sections[].table.headers is required")
+    group_cells: list[str] = []
+    sub_cells: list[str] = []
+    column_count = 0
+    grouped = any(header.get("columns") for header in headers)
+    for index, header in enumerate(headers):
+        label = required(header, "label", f"table.headers[{index}]")
+        children = header.get("columns") or []
+        if children:
+            column_count += len(children)
+            group_cells.append(f'<th colspan="{len(children)}">{esc(label)}</th>')
+            sub_cells.extend(f"<th>{esc(child)}</th>" for child in children)
+        else:
+            column_count += 1
+            span = ' rowspan="2"' if grouped else ""
+            group_cells.append(f"<th{span}>{esc(label)}</th>")
+    body_rows: list[str] = []
+    for row_index, row in enumerate(table.get("rows", [])):
+        if len(row) != column_count:
+            raise ConfigError(
+                f"table.rows[{row_index}] has {len(row)} cells; header defines {column_count} columns"
+            )
+        cells: list[str] = []
+        for cell in row:
+            text = esc(cell.get("text", ""))
+            if cell.get("best"):
+                text = f"<strong>{text}</strong>"
+            cells.append(f"<td>{text}</td>")
+        body_rows.append(f"<tr>{''.join(cells)}</tr>")
+    sub_row = f"<tr>{''.join(sub_cells)}</tr>" if sub_cells else ""
+    caption = table.get("caption", "")
+    caption_html = f"<figcaption>{esc(caption)}</figcaption>" if caption else ""
+    note = table.get("note", "")
+    note_html = f'<p class="table-note">{esc(note)}</p>' if note else ""
+    prose = "".join(f"<p>{esc(paragraph)}</p>" for paragraph in section.get("paragraphs", []))
+    body = (
+        f'<div class="content">{prose}'
+        '<figure class="results-table">'
+        f"{caption_html}"
+        '<div class="table-scroll"><table>'
+        f"<thead><tr>{''.join(group_cells)}</tr>{sub_row}</thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table></div>"
+        f"{note_html}</figure></div>"
+    )
+    return section_shell(section, body)
+
+
 def render_bibtex(section: dict[str, Any]) -> str:
     citation = section.get("citation", "")
     body = f"<pre><code>{esc(citation)}</code></pre>" if citation else placeholder("Citation coming soon")
@@ -264,6 +387,7 @@ SECTION_RENDERERS: dict[str, Callable[[dict[str, Any]], str]] = {
     "embed": render_embed,
     "interactive": render_interactive,
     "bibtex": render_bibtex,
+    "table": render_table,
 }
 
 
@@ -273,15 +397,21 @@ def render_links(links: list[dict[str, Any]]) -> str:
         if not link.get("enabled", True):
             continue
         url = link.get("url", "")
+        icon = f'<span class="icon"><i class="{esc(link.get("icon", "fas fa-link"))}" aria-hidden="true"></i></span>'
+        label = f'<span>{esc(link.get("label", "Link"))}</span>'
         if not url:
+            buttons.append(
+                '<span class="link-block">'
+                '<span class="button is-normal is-rounded is-dark placeholder-link" aria-disabled="true">'
+                f'{icon}{label}</span></span>'
+            )
             continue
         external = url.startswith(("http://", "https://"))
         target = ' target="_blank" rel="noopener noreferrer"' if external else ""
         buttons.append(
             '<span class="link-block">'
             f'<a href="{esc(url)}" class="external-link button is-normal is-rounded is-dark"{target}>'
-            f'<span class="icon"><i class="{esc(link.get("icon", "fas fa-link"))}" aria-hidden="true"></i></span>'
-            f'<span>{esc(link.get("label", "Link"))}</span></a></span>'
+            f'{icon}{label}</a></span>'
         )
     return "".join(buttons)
 

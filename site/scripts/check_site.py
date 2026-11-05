@@ -35,6 +35,10 @@ def main(root: Path) -> int:
         target = (root / unquote(parts.path)).resolve()
         if not target.is_relative_to(root) or not target.is_file():
             raise SystemExit(f"Broken local landing-page link: {url}")
+        if target.suffix.lower() in {".gif", ".jpg", ".jpeg", ".png", ".webp", ".mp4", ".webm"}:
+            with target.open("rb") as stream:
+                if stream.read(80).startswith(b"version https://git-lfs.github.com/spec/v1"):
+                    raise SystemExit(f"Git LFS pointer published instead of the file: {url}")
 
     docs_links = Links()
     docs_links.feed(docs.read_text(encoding="utf-8"))
