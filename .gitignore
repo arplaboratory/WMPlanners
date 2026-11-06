@@ -91,6 +91,7 @@ data/*
 **/venv
 
 .jepa_config.json
+**/imgui.ini
 
 # Vi files
 **/*.swp

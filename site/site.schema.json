@@ -221,7 +221,8 @@
             "media",
             "embed",
             "interactive",
-            "bibtex"
+            "bibtex",
+            "table"
           ]
         },
         "id": {
@@ -236,6 +237,14 @@
         },
         "description": {
           "type": "string"
+        },
+        "layout": {
+          "enum": [
+            "stacked",
+            "paired",
+            "planner-matrix",
+            "synced-stack"
+          ]
         },
         "media": {
           "$ref": "#/$defs/media"
@@ -254,6 +263,79 @@
           "items": {
             "type": "string"
           }
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "text": {
+                "type": "string"
+              },
+              "link": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "url"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "table": {
+          "type": "object",
+          "properties": {
+            "caption": { "type": "string" },
+            "note": { "type": "string" },
+            "headers": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "label": { "type": "string", "minLength": 1 },
+                  "columns": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "minLength": 1 }
+                  }
+                },
+                "required": ["label"],
+                "additionalProperties": false
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "text": { "type": "string" },
+                    "best": { "type": "boolean" }
+                  },
+                  "required": ["text"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "required": ["headers", "rows"],
+          "additionalProperties": false
         },
         "items": {
           "type": "array",

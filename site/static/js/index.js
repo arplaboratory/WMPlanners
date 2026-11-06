@@ -37,5 +37,32 @@ async function mountInteractiveApp(container) {
   }
 }
 
+function startSyncedGifs(container) {
+  const images = [...container.querySelectorAll('img')];
+  if (images.length < 2) return;
+  const sources = images.map((image) => image.getAttribute('src'));
+  // Keep the authored relative paths. An absolute or root path would miss
+  // the project prefix on GitHub Pages.
+  if (sources.some((src) => !src || /^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(src))) return;
+
+  let pending = images.length;
+  let failed = false;
+  const finished = (ok) => {
+    if (!ok) failed = true;
+    pending -= 1;
+    if (pending > 0 || failed) return;
+    images.forEach((image) => image.setAttribute('src', ''));
+    images.forEach((image, index) => image.setAttribute('src', sources[index]));
+  };
+  images.forEach((image) => {
+    if (image.complete && image.naturalWidth > 0) finished(true);
+    else {
+      image.addEventListener('load', () => finished(true), { once: true });
+      image.addEventListener('error', () => finished(false), { once: true });
+    }
+  });
+}
+
 honorReducedMotion();
+document.querySelectorAll('[data-sync-gifs]').forEach(startSyncedGifs);
 document.querySelectorAll('.interactive-app').forEach(mountInteractiveApp);
