@@ -161,19 +161,19 @@
       "items": [
         {
           "type": "image",
-          "src": "./static/images/WM-trimmed.gif",
+          "src": "./static/images/WM-trimmed.webp",
           "alt": "Landscape recording of the world-model planner.",
           "caption": "World model planner"
         },
         {
           "type": "image",
-          "src": "./static/images/A-star-trimmed.gif",
+          "src": "./static/images/A-star-trimmed.webp",
           "alt": "Landscape recording of the A* planner.",
           "caption": "A star planner"
         },
         {
           "type": "image",
-          "src": "./static/images/Null-trimmed.gif",
+          "src": "./static/images/Null-trimmed.webp",
           "alt": "Landscape recording of the Null planner.",
           "caption": "Null planner"
         }
