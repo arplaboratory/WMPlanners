@@ -38,6 +38,7 @@ docker/.container.cfg
 **/output/*
 **/outputs/*
 **/videos/*
+!/site/static/videos/RoboticsWorldModel.mp4
 **/wandb/*
 **/.neptune/*
 docker/artifacts/

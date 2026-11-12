@@ -16,12 +16,26 @@
     "twitter_card": "summary"
   },
   "authors": [
-    {"name": "Authors removed for anonymous submission."}
+    {"name": "Long Quang", "affiliations": [1, 2]},
+    {"name": "Akash Guna R.T", "affiliations": [2]},
+    {"name": "Athul Radhakrishnan", "affiliations": [2]},
+    {"name": "Deepanshu Mody", "affiliations": [2]},
+    {"name": "Kiana Bronder", "affiliations": [3]},
+    {"name": "Benjamin Dossett", "affiliations": [3]},
+    {"name": "Bradley Woosley", "affiliations": [1]},
+    {"name": "Carlos Nieto-Granda", "affiliations": [1]},
+    {"name": "Giuseppe Loianno", "affiliations": [4]}
+  ],
+  "affiliations": [
+    {"id": 1, "name": "DEVCOM Army Research Laboratory"},
+    {"id": 2, "name": "New York University"},
+    {"id": 3, "name": "Parsons Corporation"},
+    {"id": 4, "name": "University of California – Berkeley"}
   ],
   "links": [
     {"label": "Documentation", "url": "./docs/index.html", "icon": "fas fa-book"},
     {"label": "arXiv Paper (coming soon)", "url": "", "icon": "fas fa-file-alt"},
-    {"label": "Source code (coming soon)", "url": "", "icon": "fab fa-github"}
+    {"label": "Source code", "url": "https://github.com/arplaboratory/WMPlanners/tree/main", "icon": "fab fa-github"}
   ],
   "sections": [
     {
@@ -49,6 +63,20 @@
       "title": "Abstract",
       "paragraphs": [
         "Robot learning in simulation has enabled successful transfer to the real world. Yet \"real\" often means deployment in a controlled environment, whereas \"field\" deployment exposes a larger reality gap as sites and operating conditions change. We study this distinction in long-horizon navigation using a digital twin of a controlled physical site, simulation-trained predictive representations, and zero-shot physical deployment. Our action-conditioned World Model evaluates candidate trajectories through latent imagination within a shared hierarchical navigation stack. Preliminary trials show lower reference trajectory error for the World Model in the controlled setting, but no corresponding field advantage and substantially lower success rate for path generation than A*."
+      ]
+    },
+    {
+      "type": "media",
+      "id": "world-model-animation",
+      "layout": "stacked",
+      "items": [
+        {
+          "type": "video",
+          "src": "./static/videos/RoboticsWorldModel.mp4",
+          "alt": "Animated explanation of hierarchical robot planning with a world model.",
+          "controls": true,
+          "caption": "A conceptual walkthrough of hierarchical robot planning, latent world-model rollouts, and local trajectory planning."
+        }
       ]
     },
     {

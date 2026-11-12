@@ -32,6 +32,15 @@ body {
   margin: 0 0.35rem 0.35rem;
 }
 
+.affiliation-logo {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  object-fit: contain;
+  vertical-align: middle;
+  margin-right: 0.25em;
+}
+
 .publication-venue {
   color: var(--project-text-muted);
   font-weight: 700;
@@ -135,6 +144,11 @@ body {
 }
 
 .media-grid--stacked { grid-template-columns: minmax(0, 1fr); }
+
+#world-model-animation .media-grid {
+  width: 75%;
+  margin-inline: auto;
+}
 
 .media-grid--synced-stack {
   box-sizing: border-box;
