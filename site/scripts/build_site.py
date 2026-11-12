@@ -429,7 +429,11 @@ def render_hero(config: dict[str, Any]) -> str:
     affiliations: list[str] = []
     for affiliation in config.get("affiliations", []):
         marker = f'<sup>{esc(affiliation["id"])}</sup>' if affiliation.get("id") is not None else ""
-        affiliations.append(f'<span class="author-block">{marker}{esc(affiliation.get("name", ""))}</span>')
+        logo = (
+            f'<img class="affiliation-logo" src="{esc(affiliation["image"])}" width="20" height="20" alt="">'
+            if affiliation.get("image") else ""
+        )
+        affiliations.append(f'<span class="author-block">{logo}{marker}{esc(affiliation.get("name", ""))}</span>')
     venue = config.get("venue", "")
     venue_html = f'<div class="publication-venue">{esc(venue)}</div>' if venue else ""
     return f"""<section class="hero publication-header">
@@ -518,7 +522,7 @@ def render_page(config: dict[str, Any]) -> str:
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Google+Sans|Noto+Sans|Castoro">
   <link rel="stylesheet" href="./static/css/bulma.min.css">
-  <link rel="stylesheet" href="./static/css/index.css">
+  <link rel="stylesheet" href="./static/css/index.css?v=affiliation-icons">
 </head>
 <body>
 {body}

@@ -16,12 +16,26 @@
     "twitter_card": "summary"
   },
   "authors": [
-    {"name": "Authors removed for anonymous submission."}
+    {"name": "Long Quang", "affiliations": [1, 2]},
+    {"name": "Akash Guna R.T", "affiliations": [2]},
+    {"name": "Athul Radhakrishnan", "affiliations": [2]},
+    {"name": "Deepanshu Mody", "affiliations": [2]},
+    {"name": "Kiana Bronder", "affiliations": [3]},
+    {"name": "Benjamin Dossett", "affiliations": [3]},
+    {"name": "Bradley Woosley", "affiliations": [1]},
+    {"name": "Carlos Nieto-Granda", "affiliations": [1]},
+    {"name": "Giuseppe Loianno", "affiliations": [4]}
+  ],
+  "affiliations": [
+    {"id": 1, "name": "DEVCOM Army Research Laboratory"},
+    {"id": 2, "name": "New York University"},
+    {"id": 3, "name": "Parsons Corporation"},
+    {"id": 4, "name": "University of California – Berkeley"}
   ],
   "links": [
     {"label": "Documentation", "url": "./docs/index.html", "icon": "fas fa-book"},
     {"label": "arXiv Paper (coming soon)", "url": "", "icon": "fas fa-file-alt"},
-    {"label": "Source code (coming soon)", "url": "", "icon": "fab fa-github"}
+    {"label": "Source code", "url": "https://github.com/arplaboratory/WMPlanners/tree/main", "icon": "fab fa-github"}
   ],
   "sections": [
     {

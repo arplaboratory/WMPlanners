@@ -32,6 +32,15 @@ body {
   margin: 0 0.35rem 0.35rem;
 }
 
+.affiliation-logo {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  object-fit: contain;
+  vertical-align: middle;
+  margin-right: 0.25em;
+}
+
 .publication-venue {
   color: var(--project-text-muted);
   font-weight: 700;

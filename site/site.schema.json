@@ -103,6 +103,9 @@
             "type": "integer",
             "minimum": 1
           },
+          "image": {
+            "type": "string"
+          },
           "name": {
             "type": "string",
             "minLength": 1
