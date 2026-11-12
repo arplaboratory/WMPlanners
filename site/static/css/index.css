@@ -136,6 +136,11 @@ body {
 
 .media-grid--stacked { grid-template-columns: minmax(0, 1fr); }
 
+#world-model-animation .media-grid {
+  width: 60%;
+  margin-inline: auto;
+}
+
 .media-grid--synced-stack {
   box-sizing: border-box;
   gap: 0.75rem;

@@ -18,6 +18,15 @@ Open `http://localhost:8000/` for the landing page or `/docs/` for the guides.
 The deployed project URL is set in `site.config.json` for social previews; update
 it if the repository owner or Pages domain changes.
 
+The world-model animation is served from `static/videos/RoboticsWorldModel.mp4`.
+Its Manim Community source is `scripts/manim.py`. With Manim installed, render
+it from the repository root and copy the result into the static assets:
+
+```bash
+python -m manim -qm site/scripts/manim.py RoboticsWorldModel
+cp media/videos/manim/720p30/RoboticsWorldModel.mp4 site/static/videos/RoboticsWorldModel.mp4
+```
+
 The adapted template files and landing-page content are covered by
 [the template license](LICENSE), CC BY-SA 4.0. Changes here include project
 content, reduced assets, a project favicon, and the combined Sphinx deployment.

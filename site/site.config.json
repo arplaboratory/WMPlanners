@@ -52,6 +52,20 @@
       ]
     },
     {
+      "type": "media",
+      "id": "world-model-animation",
+      "layout": "stacked",
+      "items": [
+        {
+          "type": "video",
+          "src": "./static/videos/RoboticsWorldModel.mp4",
+          "alt": "Animated explanation of hierarchical robot planning with a world model.",
+          "controls": true,
+          "caption": "A conceptual walkthrough of hierarchical robot planning, latent world-model rollouts, and local trajectory planning."
+        }
+      ]
+    },
+    {
       "type": "content",
       "id": "workflow",
       "title": "Project workflow",
