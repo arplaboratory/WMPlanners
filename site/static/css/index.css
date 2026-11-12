@@ -137,7 +137,7 @@ body {
 .media-grid--stacked { grid-template-columns: minmax(0, 1fr); }
 
 #world-model-animation .media-grid {
-  width: 60%;
+  width: 75%;
   margin-inline: auto;
 }
 
