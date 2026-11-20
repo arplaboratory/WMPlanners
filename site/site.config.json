@@ -34,7 +34,7 @@
   ],
   "links": [
     {"label": "Documentation", "url": "./docs/index.html", "icon": "fas fa-book"},
-    {"label": "arXiv Paper (coming soon)", "url": "", "icon": "fas fa-file-alt"},
+    {"label": "arXiv Paper", "url": "https://www.alphaxiv.org/abs/2611.world-models-robot-navigation", "icon": "fas fa-file-alt"},
     {"label": "Source code", "url": "https://github.com/arplaboratory/WMPlanners/tree/main", "icon": "fab fa-github"}
   ],
   "sections": [
